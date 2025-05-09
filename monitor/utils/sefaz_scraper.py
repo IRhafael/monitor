@@ -11,31 +11,44 @@ class SEFAZScraper:
         self.max_normas = max_normas
         logger.info("Inicializando SEFAZScraper")
 
-    def iniciar_coleta(self):
-        """Método principal para iniciar a coleta"""
-        logger.info("Iniciando coleta de normas")
-        try:
-            normas = self.coletar_normas()  # Chama o método existente
-            
-            LogExecucao.objects.create(
-                tipo_execucao='SEFAZ',
-                status='SUCESSO',
-                normas_coletadas=len(normas),
-                data_fim=timezone.now(),
-                mensagem=f"Coletadas {len(normas)} normas"
+def iniciar_coleta(self):
+    """Método principal para iniciar a coleta"""
+    from monitor.models import Norma  # Adicione no topo do arquivo
+    
+    logger.info("Iniciando coleta de normas")
+    try:
+        normas_coletadas = self.coletar_normas()
+        normas_salvas = 0
+        
+        for norma in normas_coletadas:
+            _, created = Norma.objects.get_or_create(
+                tipo=norma['tipo'],
+                numero=norma['numero'],
+                defaults={'data': norma['data']}
             )
-            
-            return normas
-            
-        except Exception as e:
-            logger.error(f"Erro na coleta: {str(e)}")
-            LogExecucao.objects.create(
-                tipo_execucao='SEFAZ',
-                status='ERRO',
-                data_fim=timezone.now(),
-                erro_detalhado=str(e)
-            )
-            return []
+            if created:
+                normas_salvas += 1
+        
+        LogExecucao.objects.create(
+            tipo_execucao='SEFAZ',
+            status='SUCESSO',
+            normas_coletadas=len(normas_coletadas),
+            normas_salvas=normas_salvas,  # Adicione este campo ao modelo se necessário
+            data_fim=timezone.now(),
+            mensagem=f"Coletadas {len(normas_coletadas)} normas, {normas_salvas} novas"
+        )
+        
+        return normas_coletadas
+        
+    except Exception as e:
+        logger.error(f"Erro na coleta: {str(e)}")
+        LogExecucao.objects.create(
+            tipo_execucao='SEFAZ',
+            status='ERRO',
+            data_fim=timezone.now(),
+            erro_detalhado=str(e)
+        )
+        return []
 
     def coletar_normas(self):
         """Método existente que implementa a lógica real"""
