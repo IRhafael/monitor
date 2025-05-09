@@ -1,5 +1,5 @@
 # monitor/tasks.py
-import logging
+from django.utils import timezone
 from datetime import datetime, timedelta
 from django.utils import timezone
 from django.core.mail import send_mail
@@ -8,87 +8,43 @@ from django.conf import settings
 from monitor.models import ConfiguracaoColeta, LogExecucao, Documento, NormaVigente
 from monitor.utils.diario_scraper import DiarioOficialScraper
 from monitor.utils.pdf_processor import PDFProcessor
-from monitor.utils.sefaz_scraper import SEFAZScraper
+from monitor.utils.sefaz_scraper import SEFAZScraper 
+from celery import shared_task
+import logging 
 
 logger = logging.getLogger(__name__)
 
+from django.utils import timezone
+
 def executar_coleta_completa():
-    """
-    Executa o processo completo de coleta, processamento e geração de relatórios
-    """
-    logger.info("Iniciando execução do fluxo completo de coleta")
-    
-    # Verificar configuração
     try:
-        config = ConfiguracaoColeta.objects.first()
-        if not config:
-            logger.warning("Configuração de coleta não encontrada. Criando configuração padrão.")
-            config = ConfiguracaoColeta.objects.create()
-    except Exception as e:
-        logger.error(f"Erro ao obter configuração: {str(e)}")
-        return False
-    
-    # Verificar se a coleta está ativa
-    if not config.ativa:
-        logger.info("Coleta desativada nas configurações")
-        return False
-    
-    # Criar registro de log
-    log_execucao = LogExecucao.objects.create(
-        tipo_execucao='COMPLETO',
-        status='SUCESSO',
-        mensagem="Iniciando fluxo completo de coleta"
-    )
-    
-    try:
-        # 1. Coletar documentos do Diário Oficial
-        logger.info("Iniciando coleta de documentos")
-        scraper_diario = DiarioOficialScraper(max_docs=config.max_documentos)
-        documentos_coletados = scraper_diario.iniciar_coleta()
+        logger.info("Iniciando coleta completa")
         
-        # 2. Processar documentos coletados
-        logger.info("Iniciando processamento de documentos")
-        processor = PDFProcessor()
-        documentos_processados = processor.processar_todos_documentos()
+        # Coleta Diário Oficial
+        scraper_diario = DiarioOficialScraper()
+        docs = scraper_diario.iniciar_coleta()
         
-        # 3. Coletar normas da SEFAZ
-        logger.info("Iniciando coleta de normas da SEFAZ")
+        # Coleta SEFAZ
         scraper_sefaz = SEFAZScraper()
-        normas_coletadas = scraper_sefaz.iniciar_coleta()
+        normas = scraper_sefaz.iniciar_coleta()
         
-        # Atualizar log de execução
-        log_execucao.documentos_coletados = len(documentos_coletados)
-        log_execucao.normas_coletadas = len(normas_coletadas)
-        log_execucao.data_fim = timezone.now()
-        log_execucao.mensagem = f"Coleta concluída com sucesso. {len(documentos_coletados)} documentos e {len(normas_coletadas)} normas coletadas."
-        log_execucao.save()
+        # Processa PDFs
+        processor = PDFProcessor()
+        processados = processor.processar_todos_documentos()
         
-        # Atualizar configuração
-        config.ultima_execucao = timezone.now()
-        config.proxima_execucao = timezone.now() + timedelta(hours=config.intervalo_horas)
-        config.save()
+        return {
+            'status': 'success',
+            'documentos': len(docs),
+            'normas': len(normas),
+            'processados': processados
+        }
         
-        # Enviar e-mail de notificação, se configurado
-        if config.email_notificacao:
-            enviar_email_notificacao(config.email_notificacao, log_execucao)
-        
-        return True
-    
     except Exception as e:
-        logger.error(f"Erro durante a execução do fluxo completo: {str(e)}")
-        
-        # Atualizar log de execução
-        log_execucao.status = 'ERRO'
-        log_execucao.data_fim = timezone.now()
-        log_execucao.mensagem = "Erro durante o fluxo de coleta"
-        log_execucao.erro_detalhado = str(e)
-        log_execucao.save()
-        
-        # Enviar e-mail de notificação de erro, se configurado
-        if config.email_notificacao and config.notificar_erros:
-            enviar_email_erro(config.email_notificacao, log_execucao)
-        
-        return False
+        logger.error(f"Erro fatal: {str(e)}", exc_info=True)
+        return {
+            'status': 'error',
+            'message': str(e)
+        }
 
 def verificar_coletas_programadas():
     """
@@ -137,7 +93,7 @@ def gerar_relatorio_excel():
         os.makedirs(relatorios_dir, exist_ok=True)
         
         # Data para o nome do arquivo
-        data_atual = datetime.now().strftime("%Y%m%d_%H%M%S")
+        data_atual = timezone.now().strftime("%Y%m%d_%H%M%S")
         
         # 1. Gerar relatório de documentos do Diário Oficial
         wb_docs = Workbook()
@@ -300,3 +256,22 @@ def enviar_email_erro(email, log_execucao):
         
     except Exception as e:
         logger.error(f"Erro ao enviar e-mail de notificação de erro: {str(e)}")
+
+
+
+@shared_task
+def verificar_normas_sefaz():
+    """
+    Tarefa para verificar normas não verificadas na SEFAZ
+    """
+    integrador = IntegradorSEFAZ()
+    resultados = integrador.verificar_documentos_nao_verificados()
+    
+    # Gerar relatório
+    relatorio = {
+        'total_documentos': len(resultados),
+        'documentos_com_normas': sum(1 for r in resultados if r['status'] == 'sucesso' and r['normas_encontradas'] > 0),
+        'erros': sum(1 for r in resultados if r['status'] == 'erro'),
+    }
+    
+    return relatorio

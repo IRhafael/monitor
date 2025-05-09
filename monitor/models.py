@@ -15,6 +15,9 @@ class Documento(models.Model):
     texto_completo = models.TextField(verbose_name="Texto Completo", blank=True)
     data_coleta = models.DateTimeField(default=timezone.now, verbose_name="Data da Coleta")
     processado = models.BooleanField(default=False, verbose_name="Processado")
+    normas_relacionadas = models.ManyToManyField('NormaVigente', blank=True)
+    verificado_sefaz = models.BooleanField(default=False, verbose_name="Verificado na SEFAZ")
+
 
     class Meta:
         verbose_name = "Documento"
@@ -122,3 +125,11 @@ class LogExecucao(models.Model):
     
     def __str__(self):
         return f"{self.get_tipo_execucao_display()} - {self.data_inicio.strftime('%d/%m/%Y %H:%M')} - {self.get_status_display()}"
+
+
+    data_fim = models.DateTimeField(null=True, blank=True)
+    
+    def save(self, *args, **kwargs):
+        if not self.data_fim:
+            self.data_fim = timezone.now()
+        super().save(*args, **kwargs)

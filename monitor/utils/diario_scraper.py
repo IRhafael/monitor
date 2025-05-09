@@ -23,50 +23,26 @@ class DiarioOficialScraper:
         self.pdfs_encontrados = []
     
     def iniciar_coleta(self):
-        """
-        Inicia o processo de coleta de documentos do Diário Oficial
-        """
-        logger.info("Iniciando coleta de documentos do Diário Oficial")
-        
+        """Versão com mais logs para debug"""
+        logger.info("Iniciando coleta do Diário Oficial")
         try:
-            # Criar log de execução
-            log_execucao = LogExecucao.objects.create(
-                tipo_execucao='DIARIO',
-                status='SUCESSO',
-                mensagem="Iniciando coleta de documentos"
-            )
-            
-            # Buscar links dos PDFs na página principal
             self.buscar_links_pdfs()
             
-            # Se não encontrou PDFs, buscar em páginas secundárias
             if not self.pdfs_encontrados:
+                logger.warning("Nenhum PDF encontrado na página principal")
                 self.buscar_links_pdfs_secundarios()
             
-            # Baixar os PDFs encontrados
-            documentos_coletados = self.baixar_pdfs()
-            
-            # Atualizar log de execução
-            log_execucao.documentos_coletados = len(documentos_coletados)
-            log_execucao.data_fim = datetime.now()
-            log_execucao.mensagem = f"Coleta concluída com sucesso. {len(documentos_coletados)} documentos baixados."
-            log_execucao.save()
-            
-            return documentos_coletados
+            if not self.pdfs_encontrados:
+                logger.error("Nenhum PDF encontrado em nenhuma página")
+                return []
+                
+            logger.info(f"Encontrados {len(self.pdfs_encontrados)} PDFs")
+            return self.baixar_pdfs()
             
         except Exception as e:
-            logger.error(f"Erro durante a coleta de documentos: {str(e)}")
-            
-            # Atualizar log de execução com erro
-            if 'log_execucao' in locals():
-                log_execucao.status = 'ERRO'
-                log_execucao.data_fim = datetime.now()
-                log_execucao.mensagem = "Erro durante a coleta de documentos"
-                log_execucao.erro_detalhado = str(e)
-                log_execucao.save()
-            
+            logger.error(f"Falha na coleta: {str(e)}", exc_info=True)
             return []
-    
+        
     def buscar_links_pdfs(self):
         """
         Busca links para PDFs na página principal do Diário Oficial

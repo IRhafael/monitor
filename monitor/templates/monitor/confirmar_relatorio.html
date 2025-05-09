@@ -1,0 +1,10 @@
+{% extends "monitor/base.html" %}
+
+{% block content %}
+<h1>Gerar Relatório</h1>
+<p>Tem certeza que deseja gerar um novo relatório?</p>
+<form method="post">
+    {% csrf_token %}
+    <button type="submit">Gerar Relatório</button>
+</form>
+{% endblock %}

@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'monitor.apps.MonitorConfig', 
 ]
 
 MIDDLEWARE = [
@@ -112,7 +113,8 @@ TIME_ZONE = 'UTC'
 
 USE_I18N = True
 
-USE_TZ = True
+USE_TZ = True  # Já deve estar True
+TIME_ZONE = 'America/Fortaleza'
 
 
 # Static files (CSS, JavaScript, Images)
@@ -124,3 +126,8 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+LOGIN_URL = '/admin/login/'  # Usando o admin como login temporário
+
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'

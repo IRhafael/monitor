@@ -1,0 +1,20 @@
+{% extends "monitor/base.html" %}
+
+{% block content %}
+<h1>Documentos Coletados</h1>
+
+<table>
+    <tr>
+        <th>Título</th>
+        <th>Data Publicação</th>
+        <th>Resumo</th>
+    </tr>
+    {% for doc in documentos %}
+    <tr>
+        <td>{{ doc.titulo }}</td>
+        <td>{{ doc.data_publicacao|date:"d/m/Y" }}</td>
+        <td>{{ doc.resumo|truncatechars:100 }}</td>
+    </tr>
+    {% endfor %}
+</table>
+{% endblock %}
