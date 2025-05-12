@@ -94,3 +94,37 @@ class IntegradorSEFAZ:
                 })
         
         return resultados
+    
+
+    def comparar_mudancas(self):
+        """
+        Compara as normas do Diário Oficial com as da SEFAZ e identifica mudanças
+        Retorna um relatório das mudanças encontradas
+        """
+        # 1. Obter todas as normas vigentes na SEFAZ
+        normas_sefaz = NormaVigente.objects.all()
+        
+        # 2. Obter todas as normas mencionadas em documentos contábeis
+        normas_diario = set()
+        for doc in Documento.objects.filter(relevante_contabil=True):
+            normas = self.extrair_normas_do_texto(doc.texto_completo)
+            normas_diario.update(normas)
+        
+        # 3. Identificar diferenças
+        relatorio = {
+            'novas_normas': [],
+            'normas_alteradas': [],
+            'normas_revogadas': []
+        }
+        
+        # Verificar normas no diário que não estão na SEFAZ (novas)
+        for tipo, numero in normas_diario:
+            if not NormaVigente.objects.filter(tipo__iexact=tipo, numero__iexact=numero).exists():
+                relatorio['novas_normas'].append(f"{tipo} {numero}")
+        
+        # Verificar normas na SEFAZ que não estão no diário (potencialmente revogadas)
+        for norma in normas_sefaz:
+            if (norma.tipo.upper(), norma.numero) not in normas_diario:
+                relatorio['normas_revogadas'].append(str(norma))
+        
+        return relatorio

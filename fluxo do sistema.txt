@@ -1,0 +1,25 @@
+Fluxo Completo do Sistema
+
+1-Coleta Automática (diariamente ou conforme agendamento)
+Baixa os PDFs do Diário Oficial
+
+Baixa as normas da SEFAZ
+
+2-Processamento:
+*Extrai texto dos PDFs
+
+*Identifica documentos relevantes para contabilidade
+
+*Gera resumos dos documentos relevantes
+
+3-Integração:
+*Compara normas mencionadas no Diário com as da SEFAZ
+
+*Identifica novas normas, alterações e revogações
+
+4-Geração de Relatórios:
+*Relatório de documentos contábeis relevantes
+
+*Relatório de mudanças na legislação
+
+*Disponibiliza para download

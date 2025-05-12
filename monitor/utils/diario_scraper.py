@@ -1,6 +1,14 @@
-from bs4 import BeautifulSoup
+# diario_scraper.py
+import os
+import time
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from bs4 import BeautifulSoup
 import logging
 from django.core.files.base import ContentFile
 from monitor.models import Documento
@@ -9,108 +17,118 @@ logger = logging.getLogger(__name__)
 
 class DiarioOficialScraper:
     def __init__(self, max_docs=5):
-        self.url_base = "https://www.diario.pi.gov.br/doe/"
+        self.BASE_URL = "https://www.diario.pi.gov.br/doe/"
         self.max_docs = max_docs
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         })
 
-    def iniciar_coleta(self):
+    def configurar_navegador(self):
+        """Configura e retorna uma instância do navegador Chrome em modo headless"""
+        chrome_options = Options()
+        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--window-size=1920,1080")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        
+        return webdriver.Chrome(options=chrome_options)
+
+    def iniciar_coleta(self, data_inicio=None, data_fim=None):
         logger.info("Iniciando coleta do Diário Oficial")
-        try:
-            pdfs_encontrados = self.buscar_links_pdfs()
+        
+        if data_inicio is None:
+            data_inicio = datetime.now() - timedelta(days=5)
+        if data_fim is None:
+            data_fim = datetime.now()
             
-            if not pdfs_encontrados:
-                logger.warning("Nenhum PDF encontrado")
-                return []
+        try:
+            driver = self.configurar_navegador()
+            datas = self.gerar_datas_no_intervalo(data_inicio, data_fim)
+            documentos = []
+            
+            for data in datas:
+                logger.info(f"Processando diário de {data.strftime('%d/%m/%Y')}")
+                url = self.construir_url_por_data(data)
+                pdf_links = self.extrair_links_pdf(driver, url)
                 
-            logger.info(f"Encontrados {len(pdfs_encontrados)} PDFs")
-            return self.baixar_pdfs(pdfs_encontrados)
+                if not pdf_links:
+                    logger.warning(f"Nenhum PDF encontrado para {data.strftime('%d/%m/%Y')}")
+                    continue
+                    
+                for link in pdf_links[:self.max_docs]:
+                    pdf_url = link if link.startswith('http') else self.BASE_URL + link.lstrip('/')
+                    documento = self.baixar_e_salvar_pdf(pdf_url, data)
+                    if documento:
+                        documentos.append(documento)
+                
+                # Intervalo entre requisições para evitar sobrecarga
+                time.sleep(2)
+                
+            return documentos
             
         except Exception as e:
             logger.error(f"Falha na coleta: {str(e)}", exc_info=True)
             return []
+        finally:
+            if 'driver' in locals():
+                driver.quit()
 
-    def buscar_links_pdfs(self):
-        logger.info("Buscando links de PDFs na página principal")
-        
+    def gerar_datas_no_intervalo(self, data_inicio, data_fim):
+        """Gera todas as datas no intervalo especificado"""
+        delta = data_fim - data_inicio
+        return [data_inicio + timedelta(days=i) for i in range(delta.days + 1)]
+
+    def construir_url_por_data(self, data):
+        """Constrói a URL completa para uma data específica"""
+        data_formatada = data.strftime("%Y-%m-%d")
+        return f"{self.BASE_URL}?data={data_formatada}"
+
+    def extrair_links_pdf(self, driver, url):
+        """Extrai todos os links de PDFs de uma página específica"""
         try:
-            response = self.session.get(self.url_base, timeout=10)
-            response.raise_for_status()
+            driver.get(url)
+            WebDriverWait(driver, 15).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "a[href*='.pdf']"))
+            )
             
-            soup = BeautifulSoup(response.text, 'html.parser')
-            pdf_links = []
-            
-            # Busca os links para os PDFs diretamente na página
-            containers = soup.find_all('div', class_='item-edicao')  # Ajuste conforme a estrutura do site
-            
-            for container in containers:
-                date_element = container.find('span', class_='edicao-data')  # Ajuste conforme o site
-                link_element = container.find('a', href=True)
-                
-                if not link_element:
-                    continue
-                
-                href = link_element['href']
-                if not href.lower().endswith('.pdf'):
-                    continue
-                
-                # Extrai a data da edição
-                data_edicao = datetime.now().date()  # Padrão caso não encontre a data
-                if date_element:
-                    try:
-                        data_texto = date_element.get_text().strip()
-                        data_edicao = datetime.strptime(data_texto, '%d/%m/%Y').date()
-                    except ValueError:
-                        pass
-                
-                # Constrói a URL completa
-                pdf_url = href if href.startswith('http') else self.url_base + href.lstrip('/')
-
-                # Extrai o título
-                titulo = f"Diário Oficial - {data_edicao.strftime('%d/%m/%Y')}"
-                if link_element.get_text().strip():
-                    titulo = link_element.get_text().strip()
-                
-                pdf_links.append({
-                    'url': pdf_url,
-                    'titulo': titulo,
-                    'data': data_edicao
-                })
-            
-            return pdf_links[:self.max_docs]
-            
+            soup = BeautifulSoup(driver.page_source, 'html.parser')
+            return [a['href'] for a in soup.find_all('a', href=lambda href: href and '.pdf' in href)]
         except Exception as e:
-            logger.error(f"Erro ao buscar PDFs: {str(e)}")
+            logger.error(f"Erro ao extrair links de {url}: {str(e)}")
             return []
 
-    def baixar_pdfs(self, pdfs_encontrados):
-        documentos_baixados = []
+    def baixar_e_salvar_pdf(self, pdf_url, data_referencia):
+        """Baixa um arquivo PDF e salva no banco de dados"""
+        try:
+            response = self.session.get(pdf_url, stream=True, timeout=30)
+            response.raise_for_status()
+            
+            # Gerar nome do arquivo
+            nome_arquivo = pdf_url.split('/')[-1].split('?')[0]
+            if not nome_arquivo.lower().endswith('.pdf'):
+                nome_arquivo += '.pdf'
+                
+            # Adicionar data ao nome do arquivo se não estiver presente
+            data_str = data_referencia.strftime("%Y-%m-%d")
+            if data_str not in nome_arquivo:
+                nome_arquivo = f"{data_str}_{nome_arquivo}"
+            
+            # Criar documento no banco de dados
+            titulo = f"Diário Oficial - {data_referencia.strftime('%d/%m/%Y')}"
+            
+            documento = Documento(
+                titulo=titulo,
+                data_publicacao=data_referencia,
+                url_original=pdf_url,
+                data_coleta=datetime.now()
+            )
 
-        for i, pdf in enumerate(pdfs_encontrados):
-            try:
-                logger.info(f"Baixando PDF {i+1}/{len(pdfs_encontrados)}: {pdf['url']}")
-                response = self.session.get(pdf['url'], stream=True, timeout=30)
-
-                if response.status_code != 200:
-                    logger.warning(f"Falha ao baixar PDF: {pdf['url']} - Status: {response.status_code}")
-                    continue
-
-                filename = f"doe_{pdf['data'].strftime('%Y%m%d')}_{i}.pdf"
-
-                documento = Documento(
-                    titulo=pdf['titulo'],
-                    data_publicacao=pdf['data'],
-                    url_original=pdf['url'],
-                    data_coleta=datetime.now()
-                )
-
-                documento.arquivo_pdf.save(filename, ContentFile(response.content), save=True)
-                documentos_baixados.append(documento)
-                logger.info(f"PDF baixado com sucesso: {filename}")
-
-            except Exception as e:
-                logger.error(f"Erro ao baixar PDF {pdf['url']}: {str(e)}")
-
-        return documentos_baixados
+            documento.arquivo_pdf.save(nome_arquivo, ContentFile(response.content), save=True)
+            logger.info(f"PDF baixado com sucesso: {nome_arquivo}")
+            return documento
+            
+        except Exception as e:
+            logger.error(f"Falha ao baixar {pdf_url}: {str(e)}")
+            return None

@@ -9,21 +9,37 @@ from datetime import datetime
 from django.conf import settings
 from monitor.models import Documento
 
-# Baixar recursos do NLTK necessários
-try:
-    nltk.data.find('tokenizers/punkt')
-except LookupError:
-    nltk.download('punkt')
-
-logger = logging.getLogger(__name__)
-
+# pdf_processor.py
 class PDFProcessor:
-    """
-    Classe responsável por processar PDFs, extrair texto e gerar resumos
-    """
-    
     def __init__(self):
-        # Padrões relevantes para identificar no texto
+        # Padrões relevantes para contabilidade
+        self.padroes_contabeis = [
+            r'tribut[aá]r[ií]a',
+            r'imposto',
+            r'icms',
+            r'ipi',
+            r'iss',
+            r'receita federal',
+            r'declaração',
+            r'fiscal',
+            r'cont[aá]bil',
+            r'escrituração',
+            r'lucro real',
+            r'lucro presumido',
+            r'simples nacional',
+            r'mei',
+            r'darf',
+            r'efd',
+            r'sped',
+            r'certidão negativa',
+            r'dívida ativa',
+            r'crédito tributário',
+            r'compensação',
+            r'parcelamento',
+            r'auto de infração',
+            r'debito fiscal'
+        ]
+        
         self.padroes_relevantes = [
             r'decreto n[º°]?\s*\.?\s*(\d+[\.\d]*\/?\d*)',
             r'lei n[º°]?\s*\.?\s*(\d+[\.\d]*\/?\d*)',
@@ -35,30 +51,20 @@ class PDFProcessor:
             r'concurso',
             r'edital',
         ]
-    
-    def processar_todos_documentos(self):
-        """
-        Processa todos os documentos não processados no banco de dados
-        """
-        logger.info("Iniciando processamento de documentos não processados")
-        
-        # Obter documentos não processados
-        documentos = Documento.objects.filter(processado=False)
-        
-        logger.info(f"Encontrados {documentos.count()} documentos para processar")
-        
-        for documento in documentos:
-            try:
-                self.processar_documento(documento)
-            except Exception as e:
-                logger.error(f"Erro ao processar documento {documento.id}: {str(e)}")
-        
-        return documentos.count()
-    
+
+    def is_contabil(self, texto):
+        """Verifica se o documento é relevante para contabilidade"""
+        if not texto:
+            return False
+            
+        texto = texto.lower()
+        for padrao in self.padroes_contabeis:
+            if re.search(padrao, texto, re.IGNORECASE):
+                return True
+        return False
+
     def processar_documento(self, documento):
-        """
-        Processa um documento específico
-        """
+        """Processa um documento específico com foco em contabilidade"""
         logger.info(f"Processando documento: {documento.titulo}")
         
         try:
@@ -70,12 +76,18 @@ class PDFProcessor:
             # Extrair texto do PDF
             texto_completo = self.extrair_texto_pdf(documento.arquivo_pdf.path)
             
+            # Verificar relevância contábil
+            documento.relevante_contabil = self.is_contabil(texto_completo)
+            
             # Salvar o texto completo no documento
             documento.texto_completo = texto_completo
             
-            # Gerar resumo
-            resumo = self.gerar_resumo(texto_completo)
-            documento.resumo = resumo
+            # Gerar resumo apenas se for relevante
+            if documento.relevante_contabil:
+                resumo = self.gerar_resumo_contabil(texto_completo)
+                documento.resumo = resumo
+            else:
+                documento.resumo = "Documento não relevante para contabilidade"
             
             # Marcar como processado
             documento.processado = True
@@ -87,33 +99,9 @@ class PDFProcessor:
         except Exception as e:
             logger.error(f"Erro durante o processamento do documento {documento.id}: {str(e)}")
             return False
-    
-    def extrair_texto_pdf(self, caminho_pdf):
-        """
-        Extrai o texto de um arquivo PDF
-        """
-        texto_completo = ""
-        
-        try:
-            with open(caminho_pdf, 'rb') as arquivo:
-                leitor_pdf = PyPDF2.PdfReader(arquivo)
-                
-                # Processar cada página do PDF
-                for pagina in leitor_pdf.pages:
-                    texto_pagina = pagina.extract_text()
-                    if texto_pagina:
-                        texto_completo += texto_pagina + "\n\n"
-            
-            return texto_completo
-            
-        except Exception as e:
-            logger.error(f"Erro ao extrair texto do PDF {caminho_pdf}: {str(e)}")
-            raise
-    
-    def gerar_resumo(self, texto):
-        """
-        Gera um resumo do texto usando técnicas simples de NLP
-        """
+
+    def gerar_resumo_contabil(self, texto):
+        """Gera um resumo focado em informações contábeis"""
         if not texto or len(texto.strip()) < 50:
             return "Documento sem conteúdo textual relevante."
         
