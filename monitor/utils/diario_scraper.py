@@ -3,6 +3,7 @@ import os
 import time
 import requests
 from datetime import datetime, timedelta
+from django.utils import timezone
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -12,6 +13,7 @@ from bs4 import BeautifulSoup
 import logging
 from django.core.files.base import ContentFile
 from monitor.models import Documento
+from selenium.webdriver.chrome.options import Options
 
 logger = logging.getLogger(__name__)
 
@@ -24,16 +26,19 @@ class DiarioOficialScraper:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         })
 
+    # diario_scraper.py
+    from selenium.webdriver.chrome.options import Options
+
     def configurar_navegador(self):
-        """Configura e retorna uma instância do navegador Chrome em modo headless"""
         chrome_options = Options()
         chrome_options.add_argument("--headless")
         chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--ignore-certificate-errors")
+        chrome_options.add_argument("--ignore-ssl-errors")
         chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--window-size=1920,1080")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        
         return webdriver.Chrome(options=chrome_options)
+        
+
 
     def iniciar_coleta(self, data_inicio=None, data_fim=None):
         logger.info("Iniciando coleta do Diário Oficial")
@@ -100,33 +105,29 @@ class DiarioOficialScraper:
             return []
 
     def baixar_e_salvar_pdf(self, pdf_url, data_referencia):
-        """Baixa um arquivo PDF e salva no banco de dados"""
         try:
             response = self.session.get(pdf_url, stream=True, timeout=30)
             response.raise_for_status()
             
-            # Gerar nome do arquivo
             nome_arquivo = pdf_url.split('/')[-1].split('?')[0]
             if not nome_arquivo.lower().endswith('.pdf'):
                 nome_arquivo += '.pdf'
                 
-            # Adicionar data ao nome do arquivo se não estiver presente
             data_str = data_referencia.strftime("%Y-%m-%d")
             if data_str not in nome_arquivo:
                 nome_arquivo = f"{data_str}_{nome_arquivo}"
             
-            # Criar documento no banco de dados
             titulo = f"Diário Oficial - {data_referencia.strftime('%d/%m/%Y')}"
             
             documento = Documento(
                 titulo=titulo,
                 data_publicacao=data_referencia,
                 url_original=pdf_url,
-                data_coleta=datetime.now()
+                data_coleta=timezone.now()  # Usando timezone agora
             )
 
             documento.arquivo_pdf.save(nome_arquivo, ContentFile(response.content), save=True)
-            logger.info(f"PDF baixado com sucesso: {nome_arquivo}")
+            logger.info(f"PDF baixado e salvo: {nome_arquivo}")
             return documento
             
         except Exception as e:

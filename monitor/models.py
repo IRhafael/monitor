@@ -7,6 +7,7 @@ class Documento(models.Model):
     """
     Modelo para armazenar informações sobre documentos do Diário Oficial
     """
+    
     titulo = models.CharField(max_length=255, verbose_name="Título")
     data_publicacao = models.DateField(verbose_name="Data de Publicação")
     url_original = models.URLField(verbose_name="URL Original")
@@ -17,7 +18,7 @@ class Documento(models.Model):
     processado = models.BooleanField(default=False, verbose_name="Processado")
     normas_relacionadas = models.ManyToManyField('NormaVigente', blank=True)
     verificado_sefaz = models.BooleanField(default=False, verbose_name="Verificado na SEFAZ")
-
+    relevante_contabil = models.BooleanField(default=False)
 
     class Meta:
         verbose_name = "Documento"

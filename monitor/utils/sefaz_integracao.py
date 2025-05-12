@@ -1,6 +1,7 @@
 # monitor/utils/sefaz_integracao.py
 import re
 from datetime import datetime
+from venv import logger
 from .diario_scraper import DiarioOficialScraper
 from .sefaz_scraper import SEFAZScraper
 from ..models import Documento, NormaVigente
@@ -72,27 +73,28 @@ class IntegradorSEFAZ:
         return normas_vigentes
 
     def verificar_documentos_nao_verificados(self):
-        """
-        Verifica todos os documentos que ainda não foram verificados na SEFAZ
-        """
         documentos = Documento.objects.filter(verificado_sefaz=False)
-        resultados = []
+        logger.info(f"Verificando {documentos.count()} documentos na SEFAZ")
         
-        for documento in documentos:
+        resultados = []
+        for doc in documentos:
             try:
-                normas = self.verificar_vigencia_normas(documento.id)
+                logger.info(f"Verificando documento ID {doc.id} - {doc.titulo}")
+                normas = self.verificar_vigencia_normas(doc.id)
                 resultados.append({
-                    'documento': documento,
+                    'documento': doc,
                     'normas_encontradas': len(normas),
                     'status': 'sucesso'
                 })
             except Exception as e:
+                logger.error(f"Erro ao verificar documento ID {doc.id}: {str(e)}")
                 resultados.append({
-                    'documento': documento,
+                    'documento': doc,
                     'erro': str(e),
                     'status': 'erro'
                 })
         
+        logger.info(f"Verificação na SEFAZ concluída. {len(resultados)} documentos processados")
         return resultados
     
 

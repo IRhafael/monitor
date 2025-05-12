@@ -1,9 +1,16 @@
-# diario_oficial/celery.py
+# monitor/celery.py
 import os
 from celery import Celery
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'diario_oficial.settings')
+# Defina a variável de ambiente DJANGO_SETTINGS_MODULE com o seu módulo de configurações
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'monitor.settings')
 
-app = Celery('diario_oficial')
+# Crie a instância do Celery
+app = Celery('monitor')
+
+# Carregue as configurações do Django
 app.config_from_object('django.conf:settings', namespace='CELERY')
+
+# Descubra as tasks automaticamente
 app.autodiscover_tasks()
+
