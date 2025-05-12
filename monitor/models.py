@@ -117,6 +117,7 @@ class LogExecucao(models.Model):
     normas_coletadas = models.IntegerField(default=0, verbose_name="Normas Coletadas")
     mensagem = models.TextField(blank=True, verbose_name="Mensagem")
     erro_detalhado = models.TextField(blank=True, verbose_name="Erro Detalhado")
+    normas_salvas = models.IntegerField(null=True, blank=True)
     
     class Meta:
         verbose_name = "Log de Execução"
@@ -134,9 +135,6 @@ class LogExecucao(models.Model):
             self.data_fim = timezone.now()
         super().save(*args, **kwargs)
 
-
-# monitor/models.py
-from django.db import models
 
 class Norma(models.Model):
     TIPOS_NORMA = [

@@ -1,8 +1,7 @@
-# monitor/utils/sefaz_scraper.py
+from datetime import date, datetime
 import logging
 from django.utils import timezone
-from monitor.models import LogExecucao, Norma 
-from datetime import date, datetime
+from monitor.models import LogExecucao, Norma  
 
 logger = logging.getLogger(__name__)
 
@@ -14,16 +13,21 @@ class SEFAZScraper:
 
     def iniciar_coleta(self):
         """Método principal para iniciar a coleta"""
-        from monitor.models import Norma, LogExecucao
-        
         logger.info("Iniciando coleta de normas")
+        
         try:
             normas_coletadas = self.coletar_normas()
             normas_salvas = 0
             
             for norma in normas_coletadas:
-                # Converte a string de data para objeto date se necessário
-                data_norma = norma['data'] if isinstance(norma['data'], date) else datetime.strptime(norma['data'], '%Y-%m-%d').date()
+                # Garanta que a data está no formato correto
+                if isinstance(norma['data'], str):
+                    try:
+                        data_norma = datetime.strptime(norma['data'], '%Y-%m-%d').date()
+                    except ValueError:
+                        data_norma = datetime.now().date()
+                else:
+                    data_norma = norma['data']
                 
                 _, created = Norma.objects.get_or_create(
                     tipo=norma['tipo'],
@@ -50,7 +54,7 @@ class SEFAZScraper:
                 'normas_coletadas': len(normas_coletadas),
                 'normas_novas': normas_salvas
             }
-            
+                
         except Exception as e:
             logger.error(f"Erro na coleta: {str(e)}", exc_info=True)
             LogExecucao.objects.create(
@@ -63,12 +67,32 @@ class SEFAZScraper:
                 'status': 'error',
                 'message': str(e)
             }
-
+        
     def coletar_normas(self):
-        """Método existente que implementa a lógica real"""
-        # Mantenha sua implementação atual aqui
-        return [
-            {"tipo": "LEI", "numero": "1234", "data": "2023-01-01"},
-            {"tipo": "PORTARIA", "numero": "567", "data": "2023-02-01"}
-        ]
-    
+        """Implementação real da coleta de normas da SEFAZ"""
+        try:
+            import requests
+            from bs4 import BeautifulSoup
+            
+            response = requests.get(f"{self.url_base}/legislacao", timeout=10)
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            normas = []
+            # Adapte este seletor conforme a estrutura real da página
+            for item in soup.select('.item-norma'):
+                tipo = item.select_one('.tipo-norma').text.strip()
+                numero = item.select_one('.numero-norma').text.strip()
+                data_texto = item.select_one('.data-norma').text.strip()
+                
+                normas.append({
+                    'tipo': tipo,
+                    'numero': numero,
+                    'data': datetime.strptime(data_texto, '%d/%m/%Y').strftime('%Y-%m-%d'),
+                    'conteudo': item.select_one('.resumo-norma').text.strip() if item.select_one('.resumo-norma') else ''
+                })
+                
+            return normas[:self.max_normas]
+            
+        except Exception as e:
+            logger.error(f"Erro ao coletar normas: {str(e)}")
+            return []

@@ -34,16 +34,39 @@ def normas_list(request):
 @login_required
 def executar_coleta_view(request):
     if request.method == 'POST':
-        resultado = executar_coleta_completa()  # Esta é a chamada importante
+        from monitor.utils.diario_scraper import DiarioOficialScraper
+        from monitor.utils.sefaz_scraper import SEFAZScraper
+        from monitor.utils.pdf_processor import PDFProcessor
+        from monitor.utils.sefaz_integracao import IntegradorSEFAZ
         
-        if resultado['status'] == 'success':
-            messages.success(request, f"Coleta concluída! Documentos: {resultado['documentos']}, Normas: {resultado['normas']}")
-        else:
-            messages.error(request, f"Erro: {resultado['message']}")
+        try:
+            # 1. Coleta do Diário Oficial
+            diario_scraper = DiarioOficialScraper()
+            documentos = diario_scraper.iniciar_coleta()
+            
+            # 2. Processamento dos PDFs
+            processor = PDFProcessor()
+            processor.processar_todos_documentos()
+            
+            # 3. Coleta da SEFAZ
+            sefaz_scraper = SEFAZScraper()
+            normas = sefaz_scraper.iniciar_coleta()
+            
+            # 4. Integração SEFAZ-Diário
+            integrador = IntegradorSEFAZ()
+            integrador.verificar_documentos_nao_verificados()
+            
+            messages.success(request, 
+                f"Coleta concluída! Documentos: {len(documentos)}, Normas: {normas['normas_coletadas']}"
+            )
+            
+        except Exception as e:
+            messages.error(request, f"Erro na coleta: {str(e)}")
         
         return redirect('dashboard')
     
     return render(request, 'monitor/confirmar_coleta.html')
+
 
 @login_required
 def gerar_relatorio(request):
