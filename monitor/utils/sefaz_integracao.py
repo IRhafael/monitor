@@ -31,8 +31,8 @@ class IntegradorSEFAZ:
         Extrai referências a normas do texto do documento
         """
         padroes = [
-            r'(Lei|Decreto|Portaria|Instrução Normativa|Resolução)\s+(n?[º°]?\s*\.?\s*\d+[\.\-\d]*)',
-            r'(LEI|DECRETO|PORTARIA|INSTRUÇÃO NORMATIVA|RESOLUÇÃO)\s+(N?[º°]?\s*\.?\s*\d+[\.\-\d]*)'
+            r'(Lei|Decreto|Portaria|Instrução Normativa|Resolução)\s+(n?[º°]?\s*[.-]?\s*\d+[/-]?\d*)',
+            r'(LEI|DECRETO|PORTARIA|INSTRUÇÃO NORMATIVA|RESOLUÇÃO)\s+(N?[º°]?\s*[.-]?\s*\d+[/-]?\d*)'
         ]
         
         normas = []

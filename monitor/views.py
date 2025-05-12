@@ -1,5 +1,4 @@
-from django.shortcuts import render
-from django.http import HttpResponse, FileResponse, JsonResponse
+from django.http import Http404, HttpResponse, FileResponse, JsonResponse
 from django.contrib.auth.decorators import login_required
 import os
 from django.conf import settings
@@ -9,6 +8,13 @@ from django.shortcuts import render, redirect
 from django.contrib import messages
 from django.utils import timezone
 import logging
+import os
+from django.contrib.auth.decorators import login_required
+from django.http import HttpResponse, Http404
+from .utils.relatorio import RelatorioGenerator
+
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -86,25 +92,46 @@ def executar_coleta_view(request):
     return render(request, 'monitor/confirmar_coleta.html')
 
 
-@login_required
+
+
+
+
 def gerar_relatorio(request):
     if request.method == 'POST':
-        resultado = gerar_relatorio_excel.delay()
-        return render(request, 'monitor/relatorio_sucesso.html')
+        try:
+            caminho = RelatorioGenerator.gerar_relatorio_contabil()
+            if caminho:
+                return render(request, 'relatorio_sucesso.html', {'caminho': caminho})
+            else:
+                return render(request, 'monitor/relatorio_sucesso.html')
+        except Exception as e:
+            print(f"Erro ao gerar relatório: {e}")
+            return render(request, 'monitor/confirmar_relatorio.html')
+    
     return render(request, 'monitor/confirmar_relatorio.html')
+
 
 @login_required
 def download_relatorio(request):
     relatorios_dir = os.path.join(settings.MEDIA_ROOT, 'relatorios')
+
+    if not os.path.exists(relatorios_dir):
+        return HttpResponse("Diretório de relatórios não encontrado.", status=404)
+
     arquivos = sorted(
         [f for f in os.listdir(relatorios_dir) if f.endswith('.xlsx')],
         key=lambda x: os.path.getmtime(os.path.join(relatorios_dir, x)),
         reverse=True
     )
-    
+
     if arquivos:
         latest = arquivos[0]
         file_path = os.path.join(relatorios_dir, latest)
-        return FileResponse(open(file_path, 'rb'), as_attachment=True)
-    
-    return HttpResponse("Nenhum relatório disponível")
+
+        try:
+            return FileResponse(open(file_path, 'rb'), as_attachment=True, filename=latest)
+        except FileNotFoundError:
+            raise Http404("Arquivo não encontrado.")
+
+    return HttpResponse("Nenhum relatório disponível.", status=404)
+

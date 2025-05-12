@@ -8,6 +8,7 @@ from django.conf import settings
 from monitor.models import ConfiguracaoColeta, LogExecucao, Documento, NormaVigente
 from monitor.utils.diario_scraper import DiarioOficialScraper
 from monitor.utils.pdf_processor import PDFProcessor
+from monitor.utils.sefaz_integracao import IntegradorSEFAZ
 from monitor.utils.sefaz_scraper import SEFAZScraper 
 from celery import shared_task
 import logging 
@@ -77,6 +78,7 @@ def verificar_coletas_programadas():
         logger.error(f"Erro ao verificar coletas programadas: {str(e)}")
         return False
 
+@shared_task
 def gerar_relatorio_excel():
     """
     Gera relatórios Excel com os dados coletados
