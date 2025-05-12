@@ -7,9 +7,23 @@ from .sefaz_scraper import SEFAZScraper
 from ..models import Documento, NormaVigente
 
 class IntegradorSEFAZ:
+    
     """
     Classe para integrar dados entre Diário Oficial e SEFAZ
     """
+    def __init__(self):
+        self.cache = {}  # Simples cache em memória
+        self.max_retries = 3
+
+    def buscar_norma_com_cache(self, tipo, numero):
+        cache_key = f"{tipo}_{numero}"
+        if cache_key in self.cache:
+            return self.cache[cache_key]
+            
+        norma = self.buscar_norma_especifica(tipo, numero)
+        if norma:
+            self.cache[cache_key] = norma
+        return norma
     
     @staticmethod
     def extrair_normas_do_texto(texto):
