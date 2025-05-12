@@ -133,3 +133,27 @@ class LogExecucao(models.Model):
         if not self.data_fim:
             self.data_fim = timezone.now()
         super().save(*args, **kwargs)
+
+
+# monitor/models.py
+from django.db import models
+
+class Norma(models.Model):
+    TIPOS_NORMA = [
+        ('LEI', 'Lei'),
+        ('PORTARIA', 'Portaria'),
+        ('DECRETO', 'Decreto'),
+    ]
+    
+    tipo = models.CharField(max_length=20, choices=TIPOS_NORMA)
+    numero = models.CharField(max_length=50)
+    data = models.DateField()
+    conteudo = models.TextField(blank=True, null=True)
+    arquivo = models.FileField(upload_to='normas/', blank=True, null=True)
+    data_cadastro = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ['tipo', 'numero']  # Evita duplicatas
+
+    def __str__(self):
+        return f"{self.tipo} {self.numero}"
