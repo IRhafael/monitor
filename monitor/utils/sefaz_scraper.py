@@ -2,6 +2,8 @@ from datetime import date, datetime
 import logging
 from django.utils import timezone
 from monitor.models import LogExecucao, Norma  
+import requests
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
@@ -96,3 +98,31 @@ class SEFAZScraper:
         except Exception as e:
             logger.error(f"Erro ao coletar normas: {str(e)}")
             return []
+        
+
+    def verificar_vigencia_norma(self, tipo, numero):
+        """Verifica se uma norma específica está vigente no site da SEFAZ"""
+        try:
+            # Implemente a lógica real de busca no site da SEFAZ aqui
+            params = {
+                'tipo': tipo.upper(),
+                'numero': self._formatar_numero_busca(numero)
+            }
+            
+            response = requests.get(f"{self.url_base}/consulta_norma", params=params, timeout=10)
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Verifica se a norma está marcada como vigente
+            status_element = soup.find('div', class_='norma-status')
+            if status_element and 'vigente' in status_element.text.lower():
+                return True
+                
+            return False
+            
+        except Exception as e:
+            logger.error(f"Erro ao verificar vigência da norma {tipo} {numero}: {str(e)}")
+            return False
+
+    def _formatar_numero_busca(self, numero):
+        """Formata o número para a busca na SEFAZ"""
+        return numero.replace('/', '%2F').replace(' ', '+')

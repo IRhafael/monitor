@@ -46,38 +46,51 @@ class IntegradorSEFAZ:
         return list(set(normas))  # Remove duplicatas
 
     def verificar_vigencia_normas(self, documento_id):
-        """
-        Verifica se as normas mencionadas em um documento estão vigentes na SEFAZ
-        """
         documento = Documento.objects.get(pk=documento_id)
-        normas_do_documento = self.extrair_normas_do_texto(documento.texto_completo)
         
+        # Extrai normas do texto do documento
+        normas_do_documento = self.extrair_normas_do_texto(documento.texto_completo)
         normas_vigentes = []
         
         for tipo, numero in normas_do_documento:
-            # Verifica se a norma já existe no banco de dados
+            # Padroniza o formato do número (remove espaços, caracteres especiais)
+            numero = self._padronizar_numero_norma(numero)
+            
+            # Verifica no cache/local primeiro
             norma = NormaVigente.objects.filter(
-                tipo__iexact=tipo,
+                tipo__iexact=tipo.upper(),
                 numero__iexact=numero
             ).first()
             
             if norma:
                 normas_vigentes.append(norma)
-            else:
-                # Se não encontrou, verifica no site da SEFAZ
-                scraper = SEFAZScraper()
-                norma_sefaz = scraper.buscar_norma_especifica(tipo, numero)
+                continue
                 
-                if norma_sefaz:
-                    # Cria novo registro de norma vigente
-                    nova_norma = NormaVigente.objects.create(
-                        tipo=tipo.upper(),
-                        numero=numero,
-                        data=datetime.now().date(),
-                        situacao="VIGENTE",
-                        descricao=f"Norma mencionada no documento {documento.titulo}"
-                    )
-                    normas_vigentes.append(nova_norma)
+            # Se não encontrou local, verifica na SEFAZ
+            scraper = SEFAZScraper()
+            vigente = scraper.verificar_vigencia_norma(tipo, numero)
+            
+            if vigente:
+                # Cria novo registro de norma vigente
+                nova_norma = NormaVigente.objects.create(
+                    tipo=tipo.upper(),
+                    numero=numero,
+                    data=datetime.now().date(),
+                    situacao="VIGENTE",
+                    descricao=f"Norma mencionada em {documento.titulo}",
+                    fonte="SEFAZ"
+                )
+                normas_vigentes.append(nova_norma)
+            else:
+                # Marca como não vigente se necessário
+                nova_norma = NormaVigente.objects.create(
+                    tipo=tipo.upper(),
+                    numero=numero,
+                    situacao="NAO_ENCONTRADA",
+                    descricao=f"Norma mencionada mas não encontrada na SEFAZ",
+                    fonte="DIARIO_OFICIAL"
+                )
+                normas_vigentes.append(nova_norma)
         
         # Atualiza o documento com as normas relacionadas
         documento.normas_relacionadas.set(normas_vigentes)
@@ -85,6 +98,14 @@ class IntegradorSEFAZ:
         documento.save()
         
         return normas_vigentes
+    
+
+    def _padronizar_numero_norma(self, numero):
+        """Padroniza o formato do número da norma"""
+        numero = numero.upper()
+        # Remove caracteres especiais e espaços extras
+        numero = re.sub(r'[^\d/]', '', numero)
+        return numero.strip()
 
     def verificar_documentos_nao_verificados(self):
         documentos = Documento.objects.filter(verificado_sefaz=False)
@@ -112,35 +133,55 @@ class IntegradorSEFAZ:
         return resultados
     
 
-    def comparar_mudancas(self):
+    def comparar_mudancas(self, dias_retroativos=30):
+        from datetime import datetime, timedelta
         """
         Compara as normas do Diário Oficial com as da SEFAZ e identifica mudanças
-        Retorna um relatório das mudanças encontradas
+        Args:
+            dias_retroativos: número de dias para analisar (padrão: 30)
         """
-        # 1. Obter todas as normas vigentes na SEFAZ
-        normas_sefaz = NormaVigente.objects.all()
+        data_corte = datetime.now() - timedelta(days=dias_retroativos)
         
-        # 2. Obter todas as normas mencionadas em documentos contábeis
+        # Normas vigentes na SEFAZ
+        normas_sefaz = NormaVigente.objects.filter(fonte="SEFAZ", situacao="VIGENTE")
+        
+        # Normas mencionadas em documentos recentes
         normas_diario = set()
-        for doc in Documento.objects.filter(relevante_contabil=True):
+        documentos_recentes = Documento.objects.filter(
+            data_publicacao__gte=data_corte,
+            relevante_contabil=True
+        )
+        
+        for doc in documentos_recentes:
             normas = self.extrair_normas_do_texto(doc.texto_completo)
             normas_diario.update(normas)
         
-        # 3. Identificar diferenças
         relatorio = {
             'novas_normas': [],
-            'normas_alteradas': [],
-            'normas_revogadas': []
+            'normas_revogadas': [],
+            'normas_desatualizadas': []
         }
         
-        # Verificar normas no diário que não estão na SEFAZ (novas)
+        # 1. Novas normas (no diário mas não na SEFAZ)
         for tipo, numero in normas_diario:
-            if not NormaVigente.objects.filter(tipo__iexact=tipo, numero__iexact=numero).exists():
+            if not normas_sefaz.filter(tipo__iexact=tipo, numero__iexact=numero).exists():
                 relatorio['novas_normas'].append(f"{tipo} {numero}")
         
-        # Verificar normas na SEFAZ que não estão no diário (potencialmente revogadas)
+        # 2. Normas revogadas (na SEFAZ mas não mencionadas recentemente)
         for norma in normas_sefaz:
             if (norma.tipo.upper(), norma.numero) not in normas_diario:
-                relatorio['normas_revogadas'].append(str(norma))
+                relatorio['normas_revogadas'].append({
+                    'norma': str(norma),
+                    'ultima_menção': self._obter_ultima_menção(norma)
+                })
         
         return relatorio
+
+    def _obter_ultima_menção(self, norma):
+        """Obtém a última data em que a norma foi mencionada"""
+        documentos = Documento.objects.filter(
+            texto_completo__icontains=norma.numero,
+            normas_relacionadas=norma
+        ).order_by('-data_publicacao').first()
+        
+        return documentos.data_publicacao if documentos else "Nunca mencionada"
