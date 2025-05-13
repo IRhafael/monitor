@@ -1,0 +1,60 @@
+# Importações necessárias
+from monitor.models import Documento, NormaVigente
+from monitor.utils.diario_scraper import DiarioOficialScraper
+from monitor.utils.pdf_processor import PDFProcessor
+from monitor.utils.sefaz_integracao import IntegradorSEFAZ
+from datetime import datetime, timedelta
+
+# 1. Teste de coleta do Diário Oficial (limitado a 1 dia)
+scraper = DiarioOficialScraper(max_docs=2)
+hoje = datetime.now()
+ontem = hoje - timedelta(days=1)
+documentos = scraper.iniciar_coleta(data_inicio=ontem, data_fim=ontem)
+print(f"Documentos coletados: {len(documentos)}")
+
+# 2. Teste de processamento de PDFs
+processor = PDFProcessor()
+doc_nao_processado = Documento.objects.filter(processado=False).first()
+if doc_nao_processado:
+    resultado = processor.processar_documento(doc_nao_processado)
+    print(f"Documento {doc_nao_processado.id} processado? {resultado}")
+    print(f"É relevante para contabilidade? {doc_nao_processado.relevante_contabil}")
+    if doc_nao_processado.relevante_contabil:
+        print(f"Resumo: {doc_nao_processado.resumo[:200]}...")
+
+# 3. Teste de integração com SEFAZ
+integrador = IntegradorSEFAZ()
+doc_nao_verificado = Documento.objects.filter(verificado_sefaz=False).first()
+if doc_nao_verificado:
+    normas = integrador.verificar_vigencia_normas(doc_nao_verificado.id)
+    print(f"Normas relacionadas encontradas: {len(normas)}")
+    for norma in normas:
+        print(f"- {norma.tipo} {norma.numero} ({norma.situacao})")
+
+# 4. Teste de extração de normas de um texto
+texto_exemplo = "Conforme a Lei nº 1234/56 e o Decreto 789/10, fica estabelecido..."
+normas = integrador.extrair_normas_do_texto(texto_exemplo)
+print("\nNormas extraídas do texto exemplo:")
+for tipo, numero in normas:
+    print(f"- {tipo}: {numero}")
+
+# 5. Teste de geração de relatório
+from monitor.utils.relatorio import RelatorioGenerator
+caminho_relatorio = RelatorioGenerator.gerar_relatorio_contabil()
+print(f"\nRelatório gerado em: {caminho_relatorio}")
+
+
+
+
+
+
+
+
+
+
+#teste sefaz
+from monitor.utils.sefaz_scraper import SEFAZScraper
+scraper = SEFAZScraper()
+# Teste com uma norma que você sabe que existe
+vigente = scraper.verificar_vigencia_norma('LEI', '1234/56')
+print(f"Norma está vigente? {vigente}")
