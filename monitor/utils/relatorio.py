@@ -271,3 +271,80 @@ class RelatorioGenerator:
         
         for col, value in dimensoes.items():
             worksheet.column_dimensions[col].width = value
+
+
+
+    @staticmethod
+    def gerar_relatorio_mudancas(dias_retroativos=30):
+        """Gera um relatório de mudanças nas normas"""
+        try:
+            from monitor.utils.sefaz_integracao import IntegradorSEFAZ
+            integrador = IntegradorSEFAZ()
+            mudancas = integrador.comparar_mudancas(dias_retroativos)
+            
+            # Cria workbook
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Mudanças nas Normas"
+            
+            # Estilos
+            header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+            header_font = Font(color="FFFFFF", bold=True)
+            zebra_fill = PatternFill(start_color="EEF1F5", end_color="EEF1F5", fill_type="solid")
+            
+            # Seção de Novas Normas
+            ws.append(["Novas Normas Identificadas"])
+            ws['A1'].font = Font(size=14, bold=True)
+            ws.merge_cells('A1:B1')
+            
+            ws.append(["Norma", "Detalhes"])
+            for cell in ws[2]:
+                cell.fill = header_fill
+                cell.font = header_font
+            
+            row_num = 3
+            for norma in mudancas['novas_normas']:
+                ws.append([norma, "Nova norma identificada no Diário Oficial"])
+                if row_num % 2 == 0:
+                    for cell in ws[row_num]:
+                        cell.fill = zebra_fill
+                row_num += 1
+            
+            # Seção de Normas Revogadas
+            ws.append([])
+            ws.append(["Normas Potencialmente Revogadas"])
+            ws[f'A{row_num}'].font = Font(size=14, bold=True)
+            ws.merge_cells(f'A{row_num}:B{row_num}')
+            row_num += 1
+            
+            ws.append(["Norma", "Última Menção"])
+            for cell in ws[row_num]:
+                cell.fill = header_fill
+                cell.font = header_font
+            row_num += 1
+            
+            for item in mudancas['normas_revogadas']:
+                ws.append([item['norma'], item['ultima_menção']])
+                if row_num % 2 == 0:
+                    for cell in ws[row_num]:
+                        cell.fill = zebra_fill
+                row_num += 1
+            
+            # Ajusta colunas
+            ws.column_dimensions['A'].width = 40
+            ws.column_dimensions['B'].width = 40
+            
+            # Salva arquivo
+            relatorios_dir = os.path.join(settings.MEDIA_ROOT, 'relatorios')
+            os.makedirs(relatorios_dir, exist_ok=True)
+            
+            nome_arquivo = f"relatorio_mudancas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            caminho_completo = os.path.join(relatorios_dir, nome_arquivo)
+            wb.save(caminho_completo)
+            
+            logger.info(f"Relatório de mudanças gerado: {nome_arquivo}")
+            return f"/media/relatorios/{nome_arquivo}"
+            
+        except Exception as e:
+            logger.error(f"Erro ao gerar relatório de mudanças: {e}", exc_info=True)
+            return None

@@ -19,16 +19,7 @@
         <a href="{% url 'gerar_relatorio' %}">Gerar Relatório</a> |
         <a href="{% url 'download_relatorio' %}">Download Relatório</a>
     </nav>
-    <!-- Adicionar ao base.html -->
-    <form method="get" action="{% url 'documentos_list' %}">
-        <input type="text" name="q" placeholder="Buscar documentos...">
-        <select name="tipo">
-            <option value="">Todos</option>
-            <option value="LEI">Leis</option>
-            <!-- Outras opções -->
-        </select>
-        <button type="submit">Buscar</button>
-    </form>
+
     {% if messages %}
         <div class="messages">
             {% for message in messages %}
