@@ -1,55 +1,60 @@
-# relatorio.py
-import openpyxl
+import os
 from datetime import datetime
 from django.conf import settings
-import os
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment
 
 class RelatorioGenerator:
     @staticmethod
     def gerar_relatorio_contabil():
         try:
-            logger.info("Iniciando geração de relatório contábil")
-            documentos = Documento.objects.filter(relevante_contabil=True).order_by('-data_publicacao')
+            # Configura caminhos
+            relatorios_dir = os.path.join(settings.MEDIA_ROOT, 'relatorios')
+            os.makedirs(relatorios_dir, exist_ok=True)
             
-            if not documentos.exists():
-                logger.warning("Nenhum documento contábil relevante encontrado")
-                return None
+            # Cria workbook
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Documentos Contábeis"
+            
+            # Cabeçalho
+            cabecalho = ["ID", "Título", "Data Publicação", "Assunto", "Resumo", "Normas Relacionadas"]
+            ws.append(cabecalho)
+            
+            # Formata cabeçalho
+            for cell in ws[1]:
+                cell.font = Font(bold=True)
+                cell.alignment = Alignment(horizontal='center')
+            
+            # Preenche dados
+            from monitor.models import Documento
+            documentos = Documento.objects.filter(relevante_contabil=True).select_related().prefetch_related('normas_relacionadas')
+            
+            for doc in documentos:
+                # Extrai informações das normas
+                normas = ", ".join([f"{n.tipo} {n.numero}" for n in doc.normas_relacionadas.all()])
                 
-            # Restante do código de geração do relatório...
-            logger.info(f"Relatório contábil gerado com {documentos.count()} documentos")
-            return caminho_completo
+                # Adiciona linha
+                ws.append([
+                    doc.id,
+                    doc.titulo,
+                    doc.data_publicacao.strftime("%d/%m/%Y"),
+                    doc.assunto or "Não especificado",
+                    doc.resumo or "Sem resumo",
+                    normas or "Nenhuma norma relacionada"
+                ])
+            
+            # Ajusta largura das colunas
+            for col in ['A', 'B', 'C', 'D', 'E', 'F']:
+                ws.column_dimensions[col].width = 20
+            
+            # Salva arquivo
+            nome_arquivo = f"relatorio_completo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            caminho_completo = os.path.join(relatorios_dir, nome_arquivo)
+            wb.save(caminho_completo)
+            
+            return f"/media/relatorios/{nome_arquivo}"
             
         except Exception as e:
-            logger.error(f"Erro ao gerar relatório contábil: {str(e)}")
+            print(f"Erro ao gerar relatório: {e}")
             return None
-
-    @staticmethod
-    def gerar_relatorio_mudancas():
-        """Gera relatório Excel com mudanças na legislação"""
-        integrador = IntegradorSEFAZ()
-        mudancas = integrador.comparar_mudancas()
-        
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Mudanças Legislativas"
-        
-        # Nova aba para novas normas
-        ws.append(["Novas Normas"])
-        for norma in mudancas['novas_normas']:
-            ws.append([norma])
-        
-        # Nova aba para normas revogadas
-        ws_revogadas = wb.create_sheet("Normas Revogadas")
-        ws_revogadas.append(["Normas Revogadas"])
-        for norma in mudancas['normas_revogadas']:
-            ws_revogadas.append([norma])
-        
-        # Salvar arquivo
-        relatorios_dir = os.path.join(settings.MEDIA_ROOT, 'relatorios')
-        os.makedirs(relatorios_dir, exist_ok=True)
-        
-        nome_arquivo = f"relatorio_mudancas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-        caminho_completo = os.path.join(relatorios_dir, nome_arquivo)
-        
-        wb.save(caminho_completo)
-        return caminho_completo

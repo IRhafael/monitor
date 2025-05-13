@@ -7,6 +7,7 @@ from .sefaz_scraper import SEFAZScraper
 from ..models import Documento, NormaVigente
 
 class IntegradorSEFAZ:
+    BASE_URL = "https://www.sefaz.pi.gov.br"
     
     """
     Classe para integrar dados entre Diário Oficial e SEFAZ

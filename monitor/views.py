@@ -111,27 +111,18 @@ def gerar_relatorio(request):
     return render(request, 'monitor/confirmar_relatorio.html')
 
 
-@login_required
 def download_relatorio(request):
+    # Obtém o caminho do último relatório gerado (simplificado)
     relatorios_dir = os.path.join(settings.MEDIA_ROOT, 'relatorios')
-
-    if not os.path.exists(relatorios_dir):
-        return HttpResponse("Diretório de relatórios não encontrado.", status=404)
-
-    arquivos = sorted(
-        [f for f in os.listdir(relatorios_dir) if f.endswith('.xlsx')],
-        key=lambda x: os.path.getmtime(os.path.join(relatorios_dir, x)),
-        reverse=True
-    )
-
+    arquivos = sorted(os.listdir(relatorios_dir), reverse=True)
+    
     if arquivos:
-        latest = arquivos[0]
-        file_path = os.path.join(relatorios_dir, latest)
-
-        try:
-            return FileResponse(open(file_path, 'rb'), as_attachment=True, filename=latest)
-        except FileNotFoundError:
-            raise Http404("Arquivo não encontrado.")
-
-    return HttpResponse("Nenhum relatório disponível.", status=404)
+        caminho = os.path.join(relatorios_dir, arquivos[0])
+        if os.path.exists(caminho):
+            response = FileResponse(open(caminho, 'rb'))
+            response['Content-Disposition'] = f'attachment; filename="{arquivos[0]}"'
+            return response
+    
+    from django.http import Http404
+    raise Http404("Relatório não encontrado")
 

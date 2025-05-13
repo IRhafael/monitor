@@ -71,15 +71,22 @@ class PDFProcessor:
 
         
     def is_contabil(self, texto):
-        """Verifica se o documento é relevante para contabilidade"""
-        if not texto:
-            return False
-            
+        termos_contabeis = {
+            'tributário': ['imposto', 'icms', 'iss', 'ipi', 'darf', 'simples nacional'],
+            'fiscal': ['declaração', 'sped', 'efd', 'livros fiscais'],
+            'contábil': ['balanço', 'dre', 'lalur', 'lucro real']
+        }
+        
         texto = texto.lower()
-        for padrao in self.padroes_contabeis:
-            if re.search(padrao, texto, re.IGNORECASE):
-                return True
-        return False
+        relevancia = 0
+        
+        for categoria, palavras in termos_contabeis.items():
+            for palavra in palavras:
+                if palavra in texto:
+                    relevancia += 1
+                    break
+                    
+        return relevancia >= 2
 
     def processar_documento(self, documento):
         """
@@ -248,6 +255,16 @@ class PDFProcessor:
         return documentos.count()
     
     def extrair_normas_do_texto(self, texto):
-        # Busca por padrões como: Lei nº 5.377/2004 ou Decreto nº 15.299
-        padrao = r'(Lei|Decreto|Portaria|Instrução Normativa)[^\n,.]{0,80}?n[º°]?\s?\d{1,6}[^\n,.]{0,30}'
-        return re.findall(padrao, texto, re.IGNORECASE)
+        padroes = [
+            r'(Lei|Lei Complementar|Decreto|Portaria|Instrução Normativa)\s+(nº?\.?\s*\d+[-/.]\d+)',
+            r'(Resolução)\s+(CNJ|CNMP|CGU)\s*(nº?\.?\s*\d+[/.]\d+)'
+        ]
+        
+        normas = []
+        for padrao in padroes:
+            for match in re.finditer(padrao, texto, re.IGNORECASE):
+                tipo = match.group(1).upper()
+                numero = re.sub(r'\s', '', match.group(2))
+                normas.append((tipo, numero))
+        
+        return list(set(normas))  # Remove duplicatas

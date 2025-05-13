@@ -19,8 +19,10 @@ class Documento(models.Model):
     normas_relacionadas = models.ManyToManyField('NormaVigente', blank=True)
     verificado_sefaz = models.BooleanField(default=False, verbose_name="Verificado na SEFAZ")
     relevante_contabil = models.BooleanField(default=False)
-    
+    assunto = models.CharField(max_length=100, blank=True, null=True)
+    normas_relacionadas = models.ManyToManyField('NormaVigente', blank=True)
 
+    
     class Meta:
         verbose_name = "Documento"
         verbose_name_plural = "Documentos"

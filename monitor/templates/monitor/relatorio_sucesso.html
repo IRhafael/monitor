@@ -1,7 +1,21 @@
-{% extends "monitor/base.html" %}
+{% extends "base.html" %}
 
 {% block content %}
-<h1>Relatório em Processamento</h1>
-<p>O relatório está sendo gerado. Você pode fazer o download quando estiver pronto.</p>
-<a href="{% url 'dashboard' %}">Voltar ao Dashboard</a>
+<div class="container mt-4">
+    <h2>Relatório Gerado com Sucesso</h2>
+    <div class="alert alert-success">
+        <p>Relatório contábil completo gerado com:</p>
+        <ul>
+            <li>ID dos documentos</li>
+            <li>Títulos completos</li>
+            <li>Datas de publicação</li>
+            <li>Assuntos categorizados</li>
+            <li>Resumos automáticos</li>
+            <li>Normas relacionadas</li>
+        </ul>
+    </div>
+    <a href="{% url 'download_relatorio' %}" class="btn btn-primary" download>
+        <i class="fas fa-file-excel"></i> Baixar Relatório Completo
+    </a>
+</div>
 {% endblock %}
