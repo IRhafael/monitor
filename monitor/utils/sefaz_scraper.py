@@ -1,49 +1,181 @@
 import re
-from datetime import date, datetime
 import logging
+import time
+import urllib.parse
+from datetime import datetime
 from django.utils import timezone
-from monitor.models import LogExecucao, Norma  
-import requests
-from bs4 import BeautifulSoup
-from random import uniform
-import time
-import time
+from monitor.models import LogExecucao, Norma
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.options import Options
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 logger = logging.getLogger(__name__)
 
 class SEFAZScraper:
-    def __init__(self):
+    def __init__(self, max_normas=20):
         self.base_url = "https://portaldalegislacao.sefaz.pi.gov.br"
-        self.consulta_url = f"{self.base_url}/content/consulta"
+        self.search_url = f"{self.base_url}/search-results"
+        self.max_normas = max_normas
         self.driver = None
+        self.timeout = 15  # segundos
 
-    def iniciar_navegador(self):
-        """Configura o navegador Selenium"""
-        options = webdriver.ChromeOptions()
-        options.add_argument('--headless')
-        options.add_argument('--disable-gpu')
-        options.add_argument('--no-sandbox')
-        self.driver = webdriver.Chrome(options=options)
+    def _iniciar_navegador(self):
+        """Configura o navegador Selenium com opções otimizadas"""
+        chrome_options = Options()
+        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--window-size=1920,1080")
+        
+        # Configurações para evitar detecção como bot
+        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        chrome_options.add_experimental_option("useAutomationExtension", False)
+        
+        self.driver = webdriver.Chrome(options=chrome_options)
+        self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
-    def fazer_requisicao(self, url):
-        """Método seguro para fazer requisições"""
+    def _fechar_navegador(self):
+        """Fecha o navegador se estiver aberto"""
+        if self.driver:
+            self.driver.quit()
+            self.driver = None
+
+    def verificar_vigencia_norma(self, tipo, numero):
+        """Verifica se uma norma específica está vigente"""
         try:
-            time.sleep(uniform(*self.delay))  # Delay aleatório
-            response = requests.get(url, headers=self.headers, timeout=15)
+            self._iniciar_navegador()
             
-            if response.status_code == 403:
-                logger.error("Acesso proibido (403) - Verifique headers e cookies")
-                return None
-                
-            return response
+            # Acessa a página de pesquisa
+            self.driver.get(self.search_url)
+            time.sleep(2)  # Espera inicial
+            
+            # Localiza e preenche o campo de busca
+            search_input = WebDriverWait(self.driver, self.timeout).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='search']"))
+            )
+            
+            search_input.clear()
+            search_input.send_keys(f"{tipo} {numero}")
+            
+            # Clica no botão de pesquisa
+            search_button = self.driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
+            search_button.click()
+            
+            # Aguarda os resultados
+            WebDriverWait(self.driver, self.timeout).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, ".search-results-container"))
+            )
+            
+            # Analisa os resultados
+            resultados = self.driver.find_elements(By.CSS_SELECTOR, ".result-item")
+            
+            for resultado in resultados:
+                texto = resultado.text.lower()
+                if str(numero).lower() in texto and tipo.lower() in texto:
+                    return "revogado" not in texto
+                    
+            return False
+            
+        except TimeoutException:
+            logger.error("Timeout ao aguardar elementos da página")
+            return False
+        except NoSuchElementException:
+            logger.error("Elemento não encontrado na página")
+            return False
+        except Exception as e:
+            logger.error(f"Erro inesperado: {str(e)}")
+            return False
+        finally:
+            self._fechar_navegador()
+
+    def coletar_normas(self):
+        """Coleta as últimas normas publicadas"""
+        try:
+            self._iniciar_navegador()
+            self.driver.get(self.search_url)
+            
+            # Pesquisa genérica para trazer as últimas normas
+            search_input = WebDriverWait(self.driver, self.timeout).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='search']"))
+            )
+            search_input.send_keys("norma")
+            self.driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
+            
+            # Aguarda resultados
+            WebDriverWait(self.driver, self.timeout).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, ".result-item"))
+            )
+            
+            # Processa os resultados
+            normas = []
+            resultados = self.driver.find_elements(By.CSS_SELECTOR, ".result-item")[:self.max_normas]
+            
+            for item in resultados:
+                try:
+                    texto = item.text
+                    tipo = self._extrair_tipo(texto)
+                    numero = self._extrair_numero(texto)
+                    data = self._extrair_data(texto)
+                    
+                    if tipo and numero:
+                        normas.append({
+                            'tipo': tipo,
+                            'numero': numero,
+                            'data': data or datetime.now().date(),
+                            'conteudo': texto[:500]  # Limita o conteúdo
+                        })
+                except Exception as e:
+                    logger.warning(f"Erro ao processar item: {str(e)}")
+                    continue
+                    
+            return normas
             
         except Exception as e:
-            logger.error(f"Erro na requisição: {str(e)}")
-            return None
+            logger.error(f"Erro na coleta de normas: {str(e)}")
+            return []
+        finally:
+            self._fechar_navegador()
+
+    def _extrair_tipo(self, texto):
+        """Extrai o tipo da norma do texto"""
+        padroes = [
+            r'(Lei|Decreto|Portaria|Instrução Normativa|Resolução|Deliberação)',
+            r'(LEI|DECRETO|PORTARIA|INSTRUÇÃO NORMATIVA|RESOLUÇÃO|DELIBERAÇÃO)'
+        ]
+        
+        for padrao in padroes:
+            match = re.search(padrao, texto, re.IGNORECASE)
+            if match:
+                return match.group(1).upper()
+        return None
+
+    def _extrair_numero(self, texto):
+        """Extrai o número da norma do texto"""
+        padroes = [
+            r'n[º°]?\s*[:\.]?\s*([\d\/\.-]+)',
+            r'numero?\s*[:\.]?\s*([\d\/\.-]+)'
+        ]
+        
+        for padrao in padroes:
+            match = re.search(padrao, texto, re.IGNORECASE)
+            if match:
+                return re.sub(r'[^\d\/]', '', match.group(1))
+        return None
+
+    def _extrair_data(self, texto):
+        """Extrai a data da norma do texto"""
+        match = re.search(r'(\d{2}\/\d{2}\/\d{4})', texto)
+        if match:
+            try:
+                return datetime.strptime(match.group(1), '%d/%m/%Y').date()
+            except ValueError:
+                return None
+        return None
 
     def iniciar_coleta(self):
         """Método principal para iniciar a coleta"""
@@ -54,20 +186,11 @@ class SEFAZScraper:
             normas_salvas = 0
             
             for norma in normas_coletadas:
-                # Garanta que a data está no formato correto
-                if isinstance(norma['data'], str):
-                    try:
-                        data_norma = datetime.strptime(norma['data'], '%Y-%m-%d').date()
-                    except ValueError:
-                        data_norma = datetime.now().date()
-                else:
-                    data_norma = norma['data']
-                
                 _, created = Norma.objects.get_or_create(
                     tipo=norma['tipo'],
                     numero=norma['numero'],
                     defaults={
-                        'data': data_norma,
+                        'data': norma['data'],
                         'conteudo': norma.get('conteudo', '')
                     }
                 )
@@ -101,85 +224,3 @@ class SEFAZScraper:
                 'status': 'error',
                 'message': str(e)
             }
-        
-    def coletar_normas(self):
-        """Implementação real da coleta de normas da SEFAZ"""
-        try:
-            import requests
-            from bs4 import BeautifulSoup
-            
-            response = requests.get(f"{self.url_base}/legislacao", timeout=10)
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            normas = []
-            # Adapte este seletor conforme a estrutura real da página
-            for item in soup.select('.item-norma'):
-                tipo = item.select_one('.tipo-norma').text.strip()
-                numero = item.select_one('.numero-norma').text.strip()
-                data_texto = item.select_one('.data-norma').text.strip()
-                
-                normas.append({
-                    'tipo': tipo,
-                    'numero': numero,
-                    'data': datetime.strptime(data_texto, '%d/%m/%Y').strftime('%Y-%m-%d'),
-                    'conteudo': item.select_one('.resumo-norma').text.strip() if item.select_one('.resumo-norma') else ''
-                })
-                
-            return normas[:self.max_normas]
-            
-        except Exception as e:
-            logger.error(f"Erro ao coletar normas: {str(e)}")
-            return []
-        
-
-    def verificar_vigencia_norma(self, tipo, numero):
-        """Verifica vigência usando Selenium"""
-        try:
-            if not self.driver:
-                self.iniciar_navegador()
-                
-            # Acessa página de consulta
-            self.driver.get(self.consulta_url)
-            time.sleep(2)
-            
-            # Preenche formulário
-            self.driver.find_element(By.NAME, "tipoNorma").send_keys(tipo.upper())
-            self.driver.find_element(By.NAME, "numeroNorma").send_keys(numero)
-            self.driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
-            
-            # Aguarda resultados
-            WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, ".resultado-consulta"))
-            )
-            
-            # Analisa resultado
-            resultado = self.driver.find_element(By.CSS_SELECTOR, ".resultado-consulta").text
-            return "vigente" in resultado.lower()
-            
-        except Exception as e:
-            print(f"Erro na consulta: {str(e)}")
-            return False
-        finally:
-            if self.driver:
-                self.driver.quit()
-                self.driver = None
-        
-    def _analisar_resposta(self, html, tipo, numero):
-        """Analisa o HTML retornado"""
-        soup = BeautifulSoup(html, 'html.parser')
-        
-        # Verifica mensagens de erro
-        if "não encontrada" in soup.text.lower():
-            return False
-            
-        # Procura pela norma na tabela de resultados
-        resultados = soup.find_all('tr', class_='resultado-norma')
-        for resultado in resultados:
-            if numero in resultado.text and tipo.upper() in resultado.text:
-                return "Revogada" not in resultado.text
-                
-        return False
-
-    def _formatar_numero_busca(self, numero):
-        """Formata o número para a busca na SEFAZ"""
-        return numero.replace('/', '%2F').replace(' ', '+')

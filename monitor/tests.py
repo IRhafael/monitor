@@ -1,34 +1,41 @@
 from monitor.utils.sefaz_scraper import SEFAZScraper
-from bs4 import BeautifulSoup
 import time
 
 def testar_scraper():
-    print("=== TESTE DO SCRAPER SEFAZ ===")
-
-    # 1. Testar conexão
+    print("=== TESTE COMPLETO DO SEFAZ SCRAPER ===")
+    
     scraper = SEFAZScraper()
-    print("\n1. Testando conexão básica...")
-    response = scraper.fazer_requisicao(scraper.base_url)
-    if not response:
-        print("Falha na conexão básica")
-        return
 
-    print(f"Status: {response.status_code}")
-    print(f"Título: {BeautifulSoup(response.text, 'html.parser').title.text}")
-
-    # 2. Testar com norma conhecida
-    print("\n2. Testando norma específica...")
+    print("\n1. Verificação de vigência:")
     testes = [
-        ("LEI", "6683/2022"),
         ("PORTARIA", "5/2025"),
-        ("DECRETO", "456/23.741/2025")
+        ("LEI", "6683/2022"),
+        ("DECRETO", "123/2021")
     ]
 
     for tipo, numero in testes:
         print(f"\nConsultando {tipo} {numero}...")
-        vigente = scraper.verificar_vigencia_norma(tipo, numero)
-        print(f"Resultado: {'VIGENTE' if vigente else 'NÃO ENCONTRADA'}")
+        try:
+            vigente = scraper.verificar_vigencia_norma(tipo, numero)
+            print(f"Resultado: {'VIGENTE' if vigente else 'NÃO ENCONTRADA'}")
+        except Exception as e:
+            print(f"Erro: {e}")
         time.sleep(2)
 
-# Chamada da função
-testar_scraper()
+    print("\n2. Coletando últimas normas...")
+    normas = scraper.coletar_normas()
+    print(f"Total de normas coletadas: {len(normas)}")
+
+    if normas:
+        print("\nPrimeiras 3 normas:")
+        for norma in normas[:3]:
+            print(f"- {norma['tipo']} {norma['numero']} ({norma['data']})")
+
+    print("\n3. Executando coleta completa...")
+    resultado = scraper.iniciar_coleta()
+    print(f"Resultado: {resultado['status']}")
+    print(f"Normas novas: {resultado.get('normas_novas', 0)}")
+
+# Rodar diretamente
+if __name__ == "__main__":
+    testar_scraper()
