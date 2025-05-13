@@ -14,36 +14,31 @@ nltk.download('punkt_tab')
 
 logger = logging.getLogger(__name__)
 
-# pdf_processor.py
 class PDFProcessor:
     def __init__(self):
         self._baixar_recursos_nltk()
-        # Padrões relevantes para contabilidade
+        # Padrões relevantes para contabilidade - Expandidos e ponderados
         self.padroes_contabeis = [
-            r'tribut[aá]r[ií]a',
-            r'imposto',
-            r'icms',
-            r'ipi',
-            r'iss',
-            r'receita federal',
-            r'declaração',
-            r'fiscal',
-            r'cont[aá]bil',
-            r'escrituração',
-            r'lucro real',
-            r'lucro presumido',
-            r'simples nacional',
-            r'mei',
-            r'darf',
-            r'efd',
-            r'sped',
-            r'certidão negativa',
-            r'dívida ativa',
-            r'crédito tributário',
-            r'compensação',
-            r'parcelamento',
-            r'auto de infração',
-            r'debito fiscal'
+            # Termos com alto peso (3 pontos)
+            (r'icms|ipi|iss|pis|cofins|csll|irpj|itr|iptu|itbi|itcd', 3),  # Impostos específicos
+            (r'sped|efd|dctf|dirf|gia|dmed', 3),  # Obrigações fiscais específicas
+            (r'nf-e|nfc-e|cte|mdfe|efd-reinf|esocial', 3),  # Documentos fiscais eletrônicos
+            
+            # Termos com peso médio (2 pontos)
+            (r'tribut[aá]r[ií][ao]|fiscal[ií]za[cç][aã]o', 2),
+            (r'receita federal|sefaz|secretaria d[ae] fazenda', 2),
+            (r'cont[aá]bil|escritura[cç][aã]o|balancete|balan[cç]o patrimonial', 2),
+            (r'simples nacional|lucro real|lucro presumido|mei', 2),
+            (r'darf|gnre|guia|recolhimento|d[eé]bito autom[aá]tico', 2),
+            
+            # Termos com peso normal (1 ponto)
+            (r'imposto|contribui[cç][aã]o|taxa', 1),
+            (r'declara[cç][aã]o|fiscal', 1),
+            (r'certid[aã]o negativa|d[ií]vida ativa', 1),
+            (r'cr[eé]dito tribut[aá]rio|compensa[cç][aã]o', 1),
+            (r'parcelamento|auto de infra[cç][aã]o', 1),
+            (r'multa|juro|atualiza[cç][aã]o monet[aá]ria', 1),
+            (r'audit[oó]ria|demonstra[cç][oõ]es financeiras', 1),
         ]
         
         self.padroes_relevantes = [
@@ -51,12 +46,12 @@ class PDFProcessor:
             r'lei n[º°]?\s*\.?\s*(\d+[\.\d]*\/?\d*)',
             r'portaria n[º°]?\s*\.?\s*(\d+[\.\d]*\/?\d*)',
             r'resolução n[º°]?\s*\.?\s*(\d+[\.\d]*\/?\d*)',
-            r'nomeação',
-            r'exoneração',
-            r'licitação',
-            r'concurso',
-            r'edital',
+            r'instrução normativa',
+            r'medida provisória',
         ]
+        
+        # Limite mínimo de relevância para manter o documento
+        self.limite_relevancia = 4
 
     def _baixar_recursos_nltk(self):
         """Garante que todos os recursos do NLTK estão disponíveis"""
@@ -69,59 +64,132 @@ class PDFProcessor:
             # Para português, pode ser necessário baixar recursos adicionais
             nltk.download('stopwords')
 
-        
-    def is_contabil(self, texto):
-        termos_contabeis = {
-            'tributário': ['imposto', 'icms', 'iss', 'ipi', 'darf', 'simples nacional'],
-            'fiscal': ['declaração', 'sped', 'efd', 'livros fiscais'],
-            'contábil': ['balanço', 'dre', 'lalur', 'lucro real']
-        }
-        
+    def avaliar_relevancia_contabil(self, texto):
+        """
+        Avalia a relevância contábil do texto com base em critérios ponderados
+        Retorna: pontuação de relevância e dicionário com termos encontrados
+        """
         texto = texto.lower()
-        relevancia = 0
+        pontuacao = 0
+        termos_encontrados = {}
         
-        for categoria, palavras in termos_contabeis.items():
-            for palavra in palavras:
-                if palavra in texto:
-                    relevancia += 1
-                    break
-                    
-        return relevancia >= 2
+        # Verifica padrões contábeis com seus respectivos pesos
+        for padrao, peso in self.padroes_contabeis:
+            matches = re.findall(padrao, texto, re.IGNORECASE)
+            if matches:
+                termo_chave = matches[0] if isinstance(matches[0], str) else matches[0][0]
+                pontuacao += peso * len(matches)
+                termos_encontrados[termo_chave] = len(matches)
+        
+        # Verifica menções a normas
+        normas = self.extrair_normas_do_texto(texto)
+        for tipo, numero in normas:
+            # Normas fiscais/tributárias específicas têm peso maior
+            if re.search(r'tribut|fiscal|icms|ipi', tipo, re.IGNORECASE):
+                pontuacao += 2
+            else:
+                pontuacao += 1
+            
+        # Se tem muitas seções sobre impostos/tributação, aumenta relevância
+        secoes_fiscais = re.findall(r'(capítulo|seção|artigo)[\s\d]+[–-][\s]*(tribut|fiscal|imposto)', texto, re.IGNORECASE)
+        pontuacao += len(secoes_fiscais) * 2
+                
+        return pontuacao, termos_encontrados
 
     def processar_documento(self, documento):
-        """
-        Processa o documento fornecido e marca como processado.
-        """
-        logger.info(f"Iniciando processamento do documento ID {documento.id}")
+        """Processa o documento e mantém apenas se for contábil"""
+        logger.info(f"Processando documento ID {documento.id}")
 
         try:
-            # Obter texto do documento (considerando que o arquivo está no caminho do modelo)
-            texto = self.extrair_texto_pdf(documento.arquivo_pdf.path)
-            if texto and self.is_contabil(texto):
-                resumo = self.gerar_resumo_contabil(texto)
-                documento.resumo = resumo
-                documento.processado = True
-                documento.save()
-                logger.info(f"Documento ID {documento.id} processado com sucesso")
-                return True
-            else:
-                logger.warning(f"Documento ID {documento.id} não relevante ou sem conteúdo")
+            # Verifica se o arquivo existe
+            if not documento.arquivo_pdf or not os.path.exists(documento.arquivo_pdf.path):
+                logger.warning(f"Arquivo PDF não encontrado para documento ID {documento.id}")
+                documento.delete()  # Remove documento sem arquivo
                 return False
+
+            # Extrai texto
+            texto = self.extrair_texto_pdf(documento.arquivo_pdf.path)
+            if not texto:
+                logger.warning(f"Não foi possível extrair texto do documento ID {documento.id}")
+                documento.delete()  # Remove documento sem texto
+                return False
+
+            # Verifica relevância contábil
+            if not self.is_contabil(texto):
+                logger.info(f"Documento ID {documento.id} não é contábil - será removido")
+                documento.arquivo_pdf.delete()  # Remove o arquivo PDF
+                documento.delete()  # Remove o registro do banco
+                return False
+
+            # Se for contábil, processa completamente
+            documento.texto_completo = texto
+            documento.resumo = self.gerar_resumo_contabil(texto)
+            documento.relevante_contabil = True
+            documento.processado = True
+            documento.save()
+            
+            logger.info(f"Documento ID {documento.id} processado e mantido (contábil)")
+            return True
+
         except Exception as e:
-            logger.error(f"Erro ao processar documento {documento.id}: {str(e)}", exc_info=True)
+            logger.error(f"Erro ao processar documento {documento.id}: {str(e)}")
             return False
 
+    def _excluir_documento(self, documento):
+        """Exclui o arquivo e opcionalmente o registro do documento não relevante"""
+        try:
+            # Remove o arquivo físico
+            if documento.arquivo_pdf and os.path.exists(documento.arquivo_pdf.path):
+                caminho = documento.arquivo_pdf.path
+                documento.arquivo_pdf.delete(save=False)  # Remove o arquivo sem salvar o modelo
+                logger.info(f"Arquivo excluído: {caminho}")
+            
+            # Se configurado para excluir também o registro
+            if hasattr(settings, 'EXCLUIR_REGISTRO_NAO_CONTABEIS') and settings.EXCLUIR_REGISTRO_NAO_CONTABEIS:
+                logger.info(f"Excluindo registro do documento ID {documento.id}")
+                documento.delete()
+            else:
+                # Atualiza o registro para indicar que o arquivo foi removido
+                documento.arquivo_removido = True
+                documento.save()
+                
+            logger.info(f"Documento não contábil ID {documento.id} foi processado e excluído")
+        except Exception as e:
+            logger.error(f"Erro ao excluir documento {documento.id}: {str(e)}")
+
     def extrair_texto_pdf(self, caminho_pdf):
-        """Extrai o texto de um arquivo PDF"""
+        """Extrai texto de PDFs com tratamento robusto de erros"""
         try:
             with open(caminho_pdf, 'rb') as f:
-                leitor = PyPDF2.PdfReader(f)
                 texto = ""
-                for pagina in leitor.pages:
-                    texto += pagina.extract_text()
-                return texto
+                try:
+                    leitor = PyPDF2.PdfReader(f)
+                    for pagina in leitor.pages:
+                        try:
+                            conteudo = pagina.extract_text()
+                            if conteudo:
+                                # Normaliza quebras de linha e espaços
+                                texto += re.sub(r'\s+', ' ', conteudo) + " "
+                        except Exception as e:
+                            logger.warning(f"Erro na página: {str(e)}")
+                            continue
+                except PyPDF2.PdfReadError:
+                    # Tentativa alternativa para PDFs problemáticos
+                    texto = self._extrair_texto_pdf_fallback(caminho_pdf)
+                
+                return texto.strip()
         except Exception as e:
-            logger.error(f"Erro ao extrair texto do PDF {caminho_pdf}: {str(e)}")
+            logger.error(f"Erro grave ao processar PDF: {str(e)}")
+            return ""
+
+    def _extrair_texto_pdf_fallback(self, caminho_pdf):
+        """Método alternativo para extração de texto"""
+        try:
+            import pdftotext
+            with open(caminho_pdf, "rb") as f:
+                pdf = pdftotext.PDF(f)
+                return "\n\n".join(pdf)
+        except:
             return ""
 
     def gerar_resumo_contabil(self, texto):
@@ -170,9 +238,10 @@ class PDFProcessor:
         pontos = 0
         
         # Verifica padrões contábeis
-        for padrao in self.padroes_contabeis:
-            if re.search(padrao, paragrafo, re.IGNORECASE):
-                pontos += 2
+        for padrao, peso in self.padroes_contabeis:
+            matches = re.findall(padrao, paragrafo, re.IGNORECASE)
+            if matches:
+                pontos += peso
         
         # Verifica menções a normas
         normas = self.extrair_normas_do_texto(paragrafo)
@@ -191,8 +260,10 @@ class PDFProcessor:
         for linha in texto.split('\n'):
             if len(linhas_relevantes) >= 3:
                 break
-            if any(re.search(padrao, linha, re.IGNORECASE) for padrao in self.padroes_contabeis):
-                linhas_relevantes.append(linha[:300])  # Limita o tamanho
+            for padrao, _ in self.padroes_contabeis:
+                if re.search(padrao, linha, re.IGNORECASE):
+                    linhas_relevantes.append(linha[:300])  # Limita o tamanho
+                    break
         
         if linhas_relevantes:
             return " | ".join(linhas_relevantes)
@@ -216,6 +287,14 @@ class PDFProcessor:
         documentos = Documento.objects.filter(processado=False)
         logger.info(f"Iniciando processamento de {documentos.count()} documentos")
         
+        resultados = {
+            'total': documentos.count(),
+            'processados': 0,
+            'relevantes': 0,
+            'nao_relevantes': 0,
+            'erros': 0
+        }
+        
         for documento in documentos:
             try:
                 logger.info(f"Processando documento ID {documento.id} - {documento.titulo}")
@@ -228,43 +307,60 @@ class PDFProcessor:
                 if not os.path.exists(documento.arquivo_pdf.path):
                     logger.warning(f"Arquivo PDF não encontrado no caminho: {documento.arquivo_pdf.path}")
                     continue
-                    
-                # Extrai texto
-                texto = self.extrair_texto_pdf(documento.arquivo_pdf.path)
-                if not texto:
-                    logger.warning(f"Não foi possível extrair texto do documento ID {documento.id}")
-                    continue
-                    
-                # Verifica relevância e gera resumo
-                documento.relevante_contabil = self.is_contabil(texto)
-                documento.texto_completo = texto
                 
-                if documento.relevante_contabil:
-                    documento.resumo = self.gerar_resumo_contabil(texto)
+                resultado = self.processar_documento(documento)
+                resultados['processados'] += 1
+                if resultado:
+                    resultados['relevantes'] += 1
                 else:
-                    documento.resumo = "Documento não relevante para contabilidade"
-                
-                documento.processado = True
-                documento.save()
-                logger.info(f"Documento ID {documento.id} processado com sucesso")
+                    resultados['nao_relevantes'] += 1
                 
             except Exception as e:
                 logger.error(f"Erro ao processar documento ID {documento.id}: {str(e)}", exc_info=True)
+                resultados['erros'] += 1
         
-        logger.info("Processamento de documentos concluído")
-        return documentos.count()
+        logger.info(f"Processamento concluído: {resultados['relevantes']} documentos relevantes, "
+                   f"{resultados['nao_relevantes']} não relevantes, {resultados['erros']} erros")
+        return resultados
     
     def extrair_normas_do_texto(self, texto):
+        """Extrai normas com formatação consistente"""
         padroes = [
-            r'(Lei|Lei Complementar|Decreto|Portaria|Instrução Normativa)\s+(nº?\.?\s*\d+[-/.]\d+)',
-            r'(Resolução)\s+(CNJ|CNMP|CGU)\s*(nº?\.?\s*\d+[/.]\d+)'
+            r'(Lei|Decreto|Portaria|Instrução Normativa|Resolução)\s+(n?[º°]?\s*[.-]?\s*\d+[/-]?\d*)',
+            r'(LEI|DECRETO|PORTARIA|INSTRUÇÃO NORMATIVA|RESOLUÇÃO)\s+(N?[º°]?\s*[.-]?\s*\d+[/-]?\d*)'
         ]
         
         normas = []
         for padrao in padroes:
-            for match in re.finditer(padrao, texto, re.IGNORECASE):
+            matches = re.finditer(padrao, texto, re.IGNORECASE)
+            for match in matches:
                 tipo = match.group(1).upper()
-                numero = re.sub(r'\s', '', match.group(2))
-                normas.append((tipo, numero))
+                numero = match.group(2)
+                
+                # Padronização do número
+                numero = re.sub(r'\s+', '', numero)  # Remove espaços
+                numero = re.sub(r'[º°]', 'º', numero)  # Padroniza ordinal
+                numero = re.sub(r'[.-](\d)', r'\1', numero)  # Remove pontos/hífens antes de números
+                
+                # Validação básica
+                if re.match(r'^\d+[/-]?\d*$', numero.split('º')[-1]):
+                    normas.append((tipo, numero))
         
-        return list(set(normas))  # Remove duplicatas
+        # Remove duplicatas mantendo a ordem
+        seen = set()
+        return [x for x in normas if not (x in seen or seen.add(x))]
+    
+        # Em pdf_processor.py, adicione:
+    def is_contabil(self, texto):
+        """Verifica se o texto contém termos contábeis relevantes"""
+        if not texto:
+            return False
+            
+        texto = texto.lower()
+        termos_contabeis = [
+            'tribut', 'imposto', 'icms', 'ipi', 'iss', 'receita federal',
+            'declaração', 'fiscal', 'contábil', 'escrituração', 'lucro real',
+            'simples nacional', 'mei', 'darf', 'efd', 'sped'
+        ]
+        
+        return any(termo in texto for termo in termos_contabeis)

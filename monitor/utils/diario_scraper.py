@@ -108,6 +108,10 @@ class DiarioOficialScraper:
         try:
             response = self.session.get(pdf_url, stream=True, timeout=30)
             response.raise_for_status()
+                    # Verificação rápida do conteúdo antes de salvar
+            if b"contabilidade" not in response.content[:5000] and b"tribut" not in response.content[:5000]:
+                  logger.info(f"PDF não parece ser contábil - ignorando: {pdf_url}")
+                  return None
             
             nome_arquivo = pdf_url.split('/')[-1].split('?')[0]
             if not nome_arquivo.lower().endswith('.pdf'):

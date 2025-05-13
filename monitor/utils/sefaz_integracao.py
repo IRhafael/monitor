@@ -12,6 +12,16 @@ class IntegradorSEFAZ:
     """
     Classe para integrar dados entre Diário Oficial e SEFAZ
     """
+    def buscar_norma_especifica(self, tipo, numero):
+        scraper = SEFAZScraper()
+        vigente = scraper.verificar_vigencia_norma(tipo, numero)
+    
+        return {
+            'tipo': tipo.upper(),
+            'numero': self._padronizar_numero_norma(numero),
+            'vigente': vigente
+        }
+    
     def __init__(self):
         self.cache = {}  # Simples cache em memória
         self.max_retries = 3
@@ -27,10 +37,7 @@ class IntegradorSEFAZ:
         return norma
     
     @staticmethod
-    def extrair_normas_do_texto(texto):
-        """
-        Extrai referências a normas do texto do documento
-        """
+    def extrair_normas_do_texto(self, texto):
         padroes = [
             r'(Lei|Decreto|Portaria|Instrução Normativa|Resolução)\s+(n?[º°]?\s*[.-]?\s*\d+[/-]?\d*)',
             r'(LEI|DECRETO|PORTARIA|INSTRUÇÃO NORMATIVA|RESOLUÇÃO)\s+(N?[º°]?\s*[.-]?\s*\d+[/-]?\d*)'
@@ -41,25 +48,21 @@ class IntegradorSEFAZ:
             matches = re.finditer(padrao, texto, re.IGNORECASE)
             for match in matches:
                 tipo = match.group(1).upper()
-                numero = match.group(2).replace(" ", "").replace(".", "")
+                numero = re.sub(r'\s+', '', match.group(2))  # Remove todos os espaços
+                numero = re.sub(r'[º°]', 'º', numero)  # Padroniza símbolo de ordinal
                 normas.append((tipo, numero))
         
         return list(set(normas))  # Remove duplicatas
 
     def verificar_vigencia_normas(self, documento_id):
         documento = Documento.objects.get(pk=documento_id)
-        
-        # Extrai normas do texto do documento
         normas_do_documento = self.extrair_normas_do_texto(documento.texto_completo)
         normas_vigentes = []
         
         for tipo, numero in normas_do_documento:
-            # Padroniza o formato do número (remove espaços, caracteres especiais)
-            numero = self._padronizar_numero_norma(numero)
-            
             # Verifica no cache/local primeiro
             norma = NormaVigente.objects.filter(
-                tipo__iexact=tipo.upper(),
+                tipo__iexact=tipo,
                 numero__iexact=numero
             ).first()
             
@@ -67,36 +70,21 @@ class IntegradorSEFAZ:
                 normas_vigentes.append(norma)
                 continue
                 
-            # Se não encontrou local, verifica na SEFAZ
-            scraper = SEFAZScraper()
-            vigente = scraper.verificar_vigencia_norma(tipo, numero)
-            
-            if vigente:
-                # Cria novo registro de norma vigente
+            # Verificação real na SEFAZ
+            try:
+                scraper = SEFAZScraper()
+                vigente = scraper.verificar_vigencia_norma(tipo, numero)
+                
                 nova_norma = NormaVigente.objects.create(
-                    tipo=tipo.upper(),
+                    tipo=tipo,
                     numero=numero,
                     data=datetime.now().date(),
-                    situacao="VIGENTE",
-                    descricao=f"Norma mencionada em {documento.titulo}",
-                    fonte="SEFAZ"
+                    situacao="VIGENTE" if vigente else "NAO_ENCONTRADA",
+                    fonte="SEFAZ" if vigente else "DIARIO_OFICIAL"
                 )
                 normas_vigentes.append(nova_norma)
-            else:
-                # Marca como não vigente se necessário
-                nova_norma = NormaVigente.objects.create(
-                    tipo=tipo.upper(),
-                    numero=numero,
-                    situacao="NAO_ENCONTRADA",
-                    descricao=f"Norma mencionada mas não encontrada na SEFAZ",
-                    fonte="DIARIO_OFICIAL"
-                )
-                normas_vigentes.append(nova_norma)
-        
-        # Atualiza o documento com as normas relacionadas
-        documento.normas_relacionadas.set(normas_vigentes)
-        documento.verificado_sefaz = True
-        documento.save()
+            except Exception as e:
+                logger.error(f"Erro ao verificar norma {tipo} {numero}: {str(e)}")
         
         return normas_vigentes
     
