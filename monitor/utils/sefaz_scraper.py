@@ -1,17 +1,49 @@
+import re
 from datetime import date, datetime
 import logging
 from django.utils import timezone
 from monitor.models import LogExecucao, Norma  
 import requests
 from bs4 import BeautifulSoup
+from random import uniform
+import time
+import time
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 logger = logging.getLogger(__name__)
 
 class SEFAZScraper:
-    def __init__(self, max_normas=20):
-        self.url_base = "https://www.sefaz.pi.gov.br/"
-        self.max_normas = max_normas
-        logger.info("Inicializando SEFAZScraper")
+    def __init__(self):
+        self.base_url = "https://portaldalegislacao.sefaz.pi.gov.br"
+        self.consulta_url = f"{self.base_url}/content/consulta"
+        self.driver = None
+
+    def iniciar_navegador(self):
+        """Configura o navegador Selenium"""
+        options = webdriver.ChromeOptions()
+        options.add_argument('--headless')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--no-sandbox')
+        self.driver = webdriver.Chrome(options=options)
+
+    def fazer_requisicao(self, url):
+        """Método seguro para fazer requisições"""
+        try:
+            time.sleep(uniform(*self.delay))  # Delay aleatório
+            response = requests.get(url, headers=self.headers, timeout=15)
+            
+            if response.status_code == 403:
+                logger.error("Acesso proibido (403) - Verifique headers e cookies")
+                return None
+                
+            return response
+            
+        except Exception as e:
+            logger.error(f"Erro na requisição: {str(e)}")
+            return None
 
     def iniciar_coleta(self):
         """Método principal para iniciar a coleta"""
@@ -101,27 +133,52 @@ class SEFAZScraper:
         
 
     def verificar_vigencia_norma(self, tipo, numero):
-        """Verifica se uma norma específica está vigente no site da SEFAZ"""
+        """Verifica vigência usando Selenium"""
         try:
-            # Implemente a lógica real de busca no site da SEFAZ aqui
-            params = {
-                'tipo': tipo.upper(),
-                'numero': self._formatar_numero_busca(numero)
-            }
-            
-            response = requests.get(f"{self.url_base}/consulta_norma", params=params, timeout=10)
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # Verifica se a norma está marcada como vigente
-            status_element = soup.find('div', class_='norma-status')
-            if status_element and 'vigente' in status_element.text.lower():
-                return True
+            if not self.driver:
+                self.iniciar_navegador()
                 
-            return False
+            # Acessa página de consulta
+            self.driver.get(self.consulta_url)
+            time.sleep(2)
+            
+            # Preenche formulário
+            self.driver.find_element(By.NAME, "tipoNorma").send_keys(tipo.upper())
+            self.driver.find_element(By.NAME, "numeroNorma").send_keys(numero)
+            self.driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
+            
+            # Aguarda resultados
+            WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, ".resultado-consulta"))
+            )
+            
+            # Analisa resultado
+            resultado = self.driver.find_element(By.CSS_SELECTOR, ".resultado-consulta").text
+            return "vigente" in resultado.lower()
             
         except Exception as e:
-            logger.error(f"Erro ao verificar vigência da norma {tipo} {numero}: {str(e)}")
+            print(f"Erro na consulta: {str(e)}")
             return False
+        finally:
+            if self.driver:
+                self.driver.quit()
+                self.driver = None
+        
+    def _analisar_resposta(self, html, tipo, numero):
+        """Analisa o HTML retornado"""
+        soup = BeautifulSoup(html, 'html.parser')
+        
+        # Verifica mensagens de erro
+        if "não encontrada" in soup.text.lower():
+            return False
+            
+        # Procura pela norma na tabela de resultados
+        resultados = soup.find_all('tr', class_='resultado-norma')
+        for resultado in resultados:
+            if numero in resultado.text and tipo.upper() in resultado.text:
+                return "Revogada" not in resultado.text
+                
+        return False
 
     def _formatar_numero_busca(self, numero):
         """Formata o número para a busca na SEFAZ"""

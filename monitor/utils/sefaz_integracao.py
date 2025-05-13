@@ -37,7 +37,7 @@ class IntegradorSEFAZ:
         return norma
     
     @staticmethod
-    def extrair_normas_do_texto(self, texto):
+    def extrair_normas_do_texto(texto):
         padroes = [
             r'(Lei|Decreto|Portaria|Instrução Normativa|Resolução)\s+(n?[º°]?\s*[.-]?\s*\d+[/-]?\d*)',
             r'(LEI|DECRETO|PORTARIA|INSTRUÇÃO NORMATIVA|RESOLUÇÃO)\s+(N?[º°]?\s*[.-]?\s*\d+[/-]?\d*)'
@@ -48,11 +48,12 @@ class IntegradorSEFAZ:
             matches = re.finditer(padrao, texto, re.IGNORECASE)
             for match in matches:
                 tipo = match.group(1).upper()
-                numero = re.sub(r'\s+', '', match.group(2))  # Remove todos os espaços
-                numero = re.sub(r'[º°]', 'º', numero)  # Padroniza símbolo de ordinal
+                numero = re.sub(r'\s+', '', match.group(2))
+                numero = re.sub(r'[º°]', 'º', numero)
                 normas.append((tipo, numero))
         
-        return list(set(normas))  # Remove duplicatas
+        return list(set(normas))
+
 
     def verificar_vigencia_normas(self, documento_id):
         documento = Documento.objects.get(pk=documento_id)
