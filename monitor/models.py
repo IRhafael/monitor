@@ -52,7 +52,7 @@ class NormaVigente(models.Model):
         ('OUTROS', 'Outros'),
     ]
 
-   
+    data_verificacao = models.DateTimeField(null=True, blank=True)  
     tipo = models.CharField(max_length=20, choices=TIPO_CHOICES, verbose_name="Tipo")
     numero = models.CharField(max_length=50, verbose_name="Número")
     data = models.DateField(verbose_name="Data", null=True, blank=True)
@@ -60,6 +60,7 @@ class NormaVigente(models.Model):
     url = models.URLField(verbose_name="URL", blank=True)
     descricao = models.TextField(verbose_name="Descrição", blank=True)
     data_coleta = models.DateTimeField(default=timezone.now, verbose_name="Data da Coleta")
+    ultima_menção = models.ForeignKey('Documento', null=True, on_delete=models.SET_NULL)
     fonte = models.CharField(max_length=50, choices=[
         ('SEFAZ', 'SEFAZ'),
         ('DIARIO_OFICIAL', 'Diário Oficial')

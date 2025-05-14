@@ -250,6 +250,20 @@ class RelatorioGenerator:
                 ""
             ])
             row_num += 1
+            
+        # Nova seção: Evolução Mensal
+        from django.db.models.functions import TruncMonth
+        evolucao = (
+            Documento.objects
+            .annotate(mes=TruncMonth('data_publicacao'))
+            .values('mes')
+            .annotate(total=Count('id'))
+            .order_by('mes')
+        )
+        
+        worksheet.append(["Evolução Mensal de Documentos"])
+        for item in evolucao:
+            worksheet.append([item['mes'].strftime("%Y-%m"), item['total']])
     
     @staticmethod
     def _ajustar_colunas(worksheet):

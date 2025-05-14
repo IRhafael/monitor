@@ -6,7 +6,7 @@ import traceback
 from io import StringIO
 from typing import Tuple, List, Dict, Optional
 from datetime import datetime
-
+from transformers import pipeline
 import PyPDF2
 from pdfminer.high_level import extract_text_to_fp
 from pdfminer.layout import LAParams
@@ -262,24 +262,21 @@ class PDFProcessor:
             logger.error(f"Falha ao processar documento relevante ID {documento.id}: {str(e)}")
             return False
 
+
+
     def _gerar_resumo(self, texto: str, detalhes: Dict) -> str:
-        """Gera um resumo inteligente do documento"""
-        partes = []
+        # Usa BERT para sumarização extrativa (mantém frases originais)
+        summarizer = pipeline("summarization", model="neuralmind/bert-base-portuguese-cased")
+        resumo = summarizer(texto, max_length=150, min_length=30, do_sample=False)
         
+        # Combina com informações de normas/termos
+        partes = []
         if detalhes.get('normas'):
             normas_str = ", ".join(f"{tipo} {numero}" for tipo, numero in detalhes['normas'][:3])
-            partes.append(f" Normas mencionadas: {normas_str}")
+            partes.append(f"🔹 **Normas mencionadas**: {normas_str}")
         
-        if detalhes.get('termos'):
-            termos_str = ", ".join(f"{termo} ({count}x)" for termo, count in detalhes['termos'].items())
-            partes.append(f" Termos contábeis: {termos_str}")
-        
-        trechos = self._extrair_trechos_relevantes(texto)
-        if trechos:
-            partes.append(" Trechos destacados:")
-            partes.extend(trechos)
-        
-        return "\n\n".join(partes)[:2000]
+        partes.append(f"📌 **Resumo automático**: {resumo[0]['summary_text']}")
+        return "\n\n".join(partes)
 
     def _extrair_trechos_relevantes(self, texto: str) -> List[str]:
         """Extrai trechos relevantes do texto"""

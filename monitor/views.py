@@ -1,7 +1,13 @@
+from datetime import timedelta
+from django.forms import DurationField
 from django.http import Http404, HttpResponse, FileResponse, JsonResponse
 from django.contrib.auth.decorators import login_required
 import os
 from django.conf import settings
+
+from monitor.utils import PDFProcessor
+from monitor.utils.diario_scraper import DiarioOficialScraper
+from monitor.utils.sefaz_integracao import IntegradorSEFAZ
 from .models import Documento, NormaVigente, LogExecucao
 from .tasks import executar_coleta_completa, gerar_relatorio_excel
 from django.shortcuts import render, redirect
@@ -12,7 +18,7 @@ import os
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse, Http404
 from .utils.relatorio import RelatorioGenerator
-
+from celery import shared_task
 
 
 
@@ -126,3 +132,37 @@ def download_relatorio(request):
     from django.http import Http404
     raise Http404("Relatório não encontrado")
 
+@shared_task
+def pipeline_completo():
+    # 1. Coleta
+    scraper = DiarioOficialScraper()
+    docs = scraper.iniciar_coleta()
+    
+    # 2. Processamento
+    processor = PDFProcessor()
+    for doc in docs:
+        processor.processar_documento(doc)
+    
+    # 3. Verificação SEFAZ
+    integrador = IntegradorSEFAZ()
+    integrador.verificar_vigencia_automatica()
+    
+    # 4. Atualiza status
+    Documento.objects.filter(id__in=[d.id for d in docs]).update(processado=True)
+
+
+@login_required
+def dashboard_vigencia(request):
+    normas = NormaVigente.objects.annotate(
+        dias_desde_verificacao=ExpressionWrapper(
+            timezone.now() - F('data_verificacao'),
+            output_field=DurationField()
+        )
+    ).order_by('dias_desde_verificacao')
+    
+    context = {
+        'normas_vigentes': normas.filter(situacao="VIGENTE"),
+        'normas_vencidas': normas.filter(situacao="REVOGADA"),
+        'alertas': normas.filter(dias_desde_verificacao__gt=timedelta(days=90))
+    }
+    return render(request, 'monitor/vigencia.html', context)

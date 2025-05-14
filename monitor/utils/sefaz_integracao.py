@@ -55,39 +55,21 @@ class IntegradorSEFAZ:
         return list(set(normas))
 
 
-    def verificar_vigencia_normas(self, documento_id):
-        documento = Documento.objects.get(pk=documento_id)
-        normas_do_documento = self.extrair_normas_do_texto(documento.texto_completo)
-        normas_vigentes = []
+    def verificar_vigencia_automatica(self):
+        """Verifica normas não validadas nos últimos 30 dias"""
+        from datetime import datetime, timedelta
+        data_limite = datetime.now() - timedelta(days=30)
         
-        for tipo, numero in normas_do_documento:
-            # Verifica no cache/local primeiro
-            norma = NormaVigente.objects.filter(
-                tipo__iexact=tipo,
-                numero__iexact=numero
-            ).first()
-            
-            if norma:
-                normas_vigentes.append(norma)
-                continue
-                
-            # Verificação real na SEFAZ
-            try:
-                scraper = SEFAZScraper()
-                vigente = scraper.verificar_vigencia_norma(tipo, numero)
-                
-                nova_norma = NormaVigente.objects.create(
-                    tipo=tipo,
-                    numero=numero,
-                    data=datetime.now().date(),
-                    situacao="VIGENTE" if vigente else "NAO_ENCONTRADA",
-                    fonte="SEFAZ" if vigente else "DIARIO_OFICIAL"
-                )
-                normas_vigentes.append(nova_norma)
-            except Exception as e:
-                logger.error(f"Erro ao verificar norma {tipo} {numero}: {str(e)}")
+        normas = NormaVigente.objects.filter(
+            Q(data_verificacao__lt=data_limite) | Q(data_verificacao__isnull=True),
+            situacao="VIGENTE"
+        )
         
-        return normas_vigentes
+        for norma in normas:
+            vigente = self.buscar_norma_especifica(norma.tipo, norma.numero)
+            norma.situacao = "VIGENTE" if vigente else "REVOGADA"
+            norma.data_verificacao = datetime.now()
+            norma.save()
     
 
     def _padronizar_numero_norma(self, numero):
