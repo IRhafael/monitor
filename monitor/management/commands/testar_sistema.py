@@ -133,3 +133,18 @@ class Command(BaseCommand):
         self.assertIn(("LEI", "1234/2025"), detalhes['normas'])
         self.assertIn(("DECRETO", "5678"), detalhes['normas'])
         self.assertIn("icms", detalhes['termos'])
+
+
+    def testar_extracao_normas(self):
+        teste_cases = [
+            ("Lei Complementar 123/2020", [("LC", "123/2020")]),
+            ("Decreto n° 45.678/2021", [("DECRETO", "45678/2021")]),
+            ("Referência à Portaria 123 e Lei 456", [("PORTARIA", "123"), ("LEI", "456")]),
+            ("Texto sem normas", [])
+        ]
+        
+        for texto, esperado in teste_cases:
+            resultado = self.extrair_normas_do_texto(texto)
+            assert set(resultado) == set(esperado), f"Falha no caso: {texto}"
+        
+        print("Todos os testes de extração passaram!")

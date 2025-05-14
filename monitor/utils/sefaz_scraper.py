@@ -39,13 +39,13 @@ class SEFAZScraper:
         self.base_url = "https://portaldalegislacao.sefaz.pi.gov.br"
         self.search_url = f"{self.base_url}/search-results"
         self.driver = None
-        self.timeout = 30  # Timeout reduzido para 30 segundos
-        self.max_retries = 2  # Número reduzido de tentativas
+        self.timeout = 30
+        self.max_retries = 2
         
         # Configuração otimizada do ChromeService
         self.chrome_service = ChromeService(
             log_path='chromedriver.log',
-            service_args=['--silent']  # Modo silencioso
+            service_args=['--silent', '--disable-logging']
         )
 
     def _iniciar_navegador(self):
@@ -73,6 +73,14 @@ class SEFAZScraper:
             chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
             chrome_options.add_experimental_option("useAutomationExtension", False)
             
+            # Configurações adicionais para evitar detecção
+            chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+            chrome_options.add_argument("--disable-web-security")
+            chrome_options.add_argument("--allow-running-insecure-content")
+            
+            # Desabilitar imagens para melhor performance
+            chrome_options.add_argument("--blink-settings=imagesEnabled=false")
+            
             # Inicialização do driver
             self.driver = webdriver.Chrome(
                 service=self.chrome_service,
@@ -88,6 +96,38 @@ class SEFAZScraper:
         except Exception as e:
             logger.error(f"Erro ao iniciar navegador: {str(e)}")
             return False
+        
+    def _executar_com_retry(self, func, *args, **kwargs):
+        for tentativa in range(1, self.max_retries + 1):
+            try:
+                if not self._iniciar_navegador():
+                    time.sleep(2 * tentativa)
+                    continue
+                    
+                resultado = func(*args, **kwargs)
+                return resultado
+                
+            except Exception as e:
+                logger.warning(f"Tentativa {tentativa} falhou: {str(e)}")
+                if tentativa == self.max_retries:
+                    raise
+                time.sleep(3 * tentativa)  # Backoff exponencial
+            finally:
+                self._fechar_navegador()
+        def testar_conexao(self):
+            """Testa se a conexão com o portal está funcionando"""
+            try:
+                return self._executar_com_retry(self._testar_conexao_interna)
+            except Exception as e:
+                logger.error(f"Falha ao testar conexão: {str(e)}")
+                return False
+
+        def _testar_conexao_interna(self):
+            """Teste interno de conexão"""
+            self.driver.get(self.base_url)
+            WebDriverWait(self.driver, 15).until(
+                EC.presence_of_element_located((By.TAG_NAME, "body")))
+            return "SEFAZ" in self.driver.title
 
     def _fechar_navegador(self):
         """Fecha o navegador corretamente"""
@@ -116,6 +156,9 @@ class SEFAZScraper:
             # Tentativa 2: Pesquisa simplificada
             return self._pesquisa_rapida(tipo, numero) or False
             
+        except Exception as e:
+            logger.error(f"Erro na verificação rápida: {str(e)}")
+            return False
         finally:
             self._fechar_navegador()
 

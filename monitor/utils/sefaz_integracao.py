@@ -10,6 +10,11 @@ from monitor.models import Documento, NormaVigente
 from .sefaz_scraper import SEFAZScraper
 from selenium.common.exceptions import WebDriverException
 import urllib.parse
+from django.core.cache import cache
+from django.conf import settings
+# Verifique se o cache está configurado no settings.py
+if not hasattr(settings, 'CACHES'):
+    raise ImproperlyConfigured("Por favor, configure o backend de cache no settings.py")
 
 
 logger = logging.getLogger(__name__)
@@ -18,23 +23,22 @@ class IntegradorSEFAZ:
     def __init__(self):
         self.scraper = SEFAZScraper()
         self.max_tentativas = 2  # Reduzido para 2 tentativas
-        self.cache = {}
+        #self.cache = {}
         self.timeout = 40  # Timeout reduzido
 
 
     def buscar_norma_especifica(self, tipo, numero):
         """Verifica se uma norma específica está vigente na SEFAZ"""
         try:
-            # Padroniza entrada
             tipo = tipo.upper().strip()
             numero = self._padronizar_numero_norma(numero)
-            
             logger.info(f"Verificando vigência de {tipo} {numero}")
             
-            # Verifica cache primeiro
-            cache_key = f"{tipo}_{numero}"
-            if cache_key in self.cache:
-                return self.cache[cache_key]
+            # Verifica cache primeiro (usando Django cache)
+            cache_key = f"sefaz_{tipo}_{numero}"
+            cached_result = cache.get(cache_key)
+            if cached_result:
+                return cached_result
                 
             vigente = self.scraper.verificar_vigencia_norma(tipo, numero)
             
@@ -46,8 +50,25 @@ class IntegradorSEFAZ:
             }
             
             # Armazena no cache por 24 horas
-            self.cache[cache_key] = resultado
+            cache.set(cache_key, resultado, 86400)  # 24 horas em segundos
             return resultado
+            
+        except WebDriverException as e:
+            logger.error(f"Erro de navegador ao buscar norma {tipo} {numero}: {str(e)}")
+            return {
+                'tipo': tipo,
+                'numero': numero,
+                'vigente': False,
+                'erro': "Erro de conexão com o portal"
+            }
+        except Exception as e:
+            logger.error(f"Erro inesperado ao buscar norma {tipo} {numero}: {str(e)}")
+            return {
+                'tipo': tipo,
+                'numero': numero,
+                'vigente': False,
+                'erro': str(e)
+            }
             
         except Exception as e:
             logger.error(f"Erro ao buscar norma {tipo} {numero}: {str(e)}")
@@ -107,59 +128,71 @@ class IntegradorSEFAZ:
         return resultados
 
     def verificar_vigencia_automatica(self, documento_id):
-        """Versão ultra-otimizada com cache persistente"""
+        """Versão otimizada com batch processing"""
         try:
             documento = Documento.objects.get(id=documento_id)
             if not documento.normas_relacionadas.exists():
                 return []
 
             normas_verificadas = []
+            normas_para_verificar = documento.normas_relacionadas.all().order_by('tipo')[:15]  # Aumentado para 15
             
-            for norma in documento.normas_relacionadas.all().order_by('tipo')[:10]:  # Limita a 10 normas
+            for norma in normas_para_verificar:
                 try:
-                    # Verificação com cache e timeout controlado
-                    resultado = self._verificar_norma_com_cache(norma)
-                    if resultado is not None:
-                        norma.situacao = "VIGENTE" if resultado else "REVOGADA"
-                        norma.data_verificacao = timezone.now()
-                        norma.save()
-                        normas_verificadas.append(norma)
+                    # Usa verificação rápida com fallback
+                    vigente = self._verificar_norma_eficiente(norma)
+                    
+                    norma.situacao = "VIGENTE" if vigente else "REVOGADA"
+                    norma.data_verificacao = timezone.now()
+                    norma.save()
+                    normas_verificadas.append(norma)
+                    
                 except Exception as e:
                     logger.error(f"Erro na norma {norma}: {str(e)}")
                     continue
 
             return normas_verificadas
             
-        except Exception as e:
-            logger.error(f"Erro geral: {str(e)}")
+        except Documento.DoesNotExist:
+            logger.error(f"Documento {documento_id} não encontrado")
             return []
+        except Exception as e:
+            logger.error(f"Erro geral em verificar_vigencia_automatica: {str(e)}")
+            return []
+
+    def _verificar_norma_eficiente(self, norma):
+        """Estratégia de verificação em camadas"""
+        try:
+            # 1. Tentar cache
+            cache_key = f"sefaz_{norma.tipo}_{norma.numero}"
+            cached = cache.get(cache_key)
+            if cached and (timezone.now() - cached['data_consulta']) < timedelta(hours=12):
+                return cached['vigente']
+            
+            # 2. Tentar método rápido
+            try:
+                vigente = self.scraper.verificar_vigencia_rapida(norma.tipo, norma.numero)
+                cache.set(cache_key, {
+                    'vigente': vigente,
+                    'data_consulta': timezone.now()
+                }, 43200)  # 12 horas em segundos
+                return vigente
+            except Exception as e:
+                logger.warning(f"Falha no método rápido para {norma}: {str(e)}")
+            
+            # 3. Método completo como fallback
+            vigente = self.scraper.verificar_vigencia_norma(norma.tipo, norma.numero)
+            cache.set(cache_key, {
+                'vigente': vigente if vigente is not None else False,
+                'data_consulta': timezone.now()
+            }, 43200)
+            return vigente
             
         except Exception as e:
-            logger.error(f"Erro ao verificar vigência automática: {str(e)}")
-            return []
+            logger.error(f"Erro completo em _verificar_norma_eficiente para {norma}: {str(e)}")
+            return False
         
 
-    def _verificar_norma_com_cache(self, norma):
-        """Verifica com cache e estratégia de fallback"""
-        cache_key = f"{norma.tipo}_{norma.numero}"
-        
-        # Verifica cache primeiro (válido por 12 horas)
-        if cache_key in self.cache:
-            cache_data = self.cache[cache_key]
-            if (timezone.now() - cache_data['timestamp']) < timedelta(hours=12):
-                return cache_data['vigente']
-        
-        # Tenta verificação rápida
-        try:
-            resultado = self.scraper.verificar_vigencia_rapida(norma.tipo, norma.numero)
-            self.cache[cache_key] = {
-                'vigente': resultado,
-                'timestamp': timezone.now()
-            }
-            return resultado
-        except Exception as e:
-            logger.warning(f"Falha no método rápido: {str(e)}")
-            return None
         
 
     def _determinar_tipo_norma(self, texto):
@@ -184,29 +217,46 @@ class IntegradorSEFAZ:
         return re.sub(r'[^\d/]', '', match.group(1)) if match else None
 
     def extrair_normas_do_texto(self, texto):
-        """Extrai normas mencionadas no texto"""
+        """Extrai normas mencionadas no texto com melhor precisão"""
         if not texto:
             return []
             
         padroes = [
-            r'(?i)(Lei|Decreto|Portaria|Instrução Normativa|Resolução)\s+(?:n?[º°]?\s*)?(\d+[\.\/-]?\d*)',
-            r'(?i)(Lei Complementar)\s+(n?[º°]?\s*)?(\d+)',
-            r'(?i)(Medida Provisória)\s+(n?[º°]?\s*)?(\d+)'
+            # Padrão para Leis Complementares
+            r'(?i)(Lei\s+Complementar|LC)\s*(?:n?[º°]?\s*)?(\d+)',
+            # Padrão para Medidas Provisórias
+            r'(?i)(Medida\s+Provisória|MP)\s*(?:n?[º°]?\s*)?(\d+)',
+            # Padrão genérico para outros tipos
+            r'(?i)(Lei|Decreto|Portaria|Instrução Normativa|Resolução|Deliberação)\s+(?:n?[º°]?\s*)?(\d+[\/-]\d{2,4})',
+            # Padrão para normas sem tipo explícito (apenas número)
+            r'(?i)(?:n?[º°]\s*)?(\d+[\/-]\d{2,4})'
         ]
         
-        normas = []
+        normas_encontradas = set()
+        
         for padrao in padroes:
             matches = re.finditer(padrao, texto)
             for match in matches:
                 try:
-                    tipo = self._determinar_tipo_norma(match.group(1))
-                    numero = self._extrair_numero_norma(match.group(2))
-                    if tipo and numero:
-                        normas.append((tipo, numero))
-                except (IndexError, AttributeError):
+                    grupos = match.groups()
+                    if len(grupos) >= 2:  # Temos tipo e número
+                        tipo = self._determinar_tipo_norma(grupos[0])
+                        numero = self._extrair_numero_norma(grupos[1])
+                    else:  # Apenas número
+                        tipo = None
+                        numero = self._extrair_numero_norma(grupos[0])
+                    
+                    if numero:
+                        if not tipo:
+                            # Tenta inferir o tipo pelo contexto
+                            contexto = texto[max(0, match.start()-50):match.end()+50]
+                            tipo = self._inferir_tipo_pelo_contexto(contexto) or "DESCONHECIDO"
+                        
+                        normas_encontradas.add((tipo, numero))
+                except (IndexError, AttributeError) as e:
                     continue
                     
-        return list(set(normas))
+        return list(normas_encontradas)
 
     def comparar_mudancas(self, dias_retroativos=30):
         """
@@ -264,3 +314,22 @@ class IntegradorSEFAZ:
         """Padroniza o formato do número da norma"""
         numero = re.sub(r'[^\d/]', '', str(numero))
         return numero.strip()
+    
+    def _inferir_tipo_pelo_contexto(self, contexto):
+        contexto = contexto.lower()
+        if 'lei complementar' in contexto or ' lc ' in contexto:
+            return 'LC'
+        elif 'decreto' in contexto:
+            return 'DECRETO'
+        elif 'portaria' in contexto:
+            return 'PORTARIA'
+        elif 'instrução normativa' in contexto:
+            return 'INSTRUCAO NORMATIVA'
+        return None
+
+    def _eh_numero_valido(self, numero):
+        """Verifica se o número parece ser uma norma válida"""
+        partes = re.split(r'[/-]', numero)
+        if len(partes) != 2:
+            return False
+        return partes[0].isdigit() and partes[1].isdigit()
