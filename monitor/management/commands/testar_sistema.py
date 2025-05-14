@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+import time
 from django.core.management.base import BaseCommand
 from monitor.models import Documento
 from monitor.utils.pdf_processor import PDFProcessor
@@ -27,45 +28,43 @@ class Command(BaseCommand):
         # 2. Processar documentos com PDFProcessor
         self.stdout.write('\n=== TESTANDO PROCESSAMENTO DE PDFs ===')
         pdf_processor = PDFProcessor()
-
-        for doc in docs_nao_processados[:1]:  # Limita a 5 para teste
-            self.stdout.write(f'Processando documento ID {doc.id} - {doc.titulo}')
-
+        
+        for doc in docs_nao_processados[:1]:  # Limita a 1 para teste
             try:
-                resultado = pdf_processor.processar_documento(doc)
-                if resultado:
+                self.stdout.write(f'Processando documento ID {doc.id} - {doc.titulo}')
+                
+                if pdf_processor.processar_documento(doc):
                     doc.refresh_from_db()
-                    self.stdout.write(self.style.SUCCESS(f'Documento processado com sucesso!'))
+                    self.stdout.write(self.style.SUCCESS('Documento processado com sucesso!'))
                     self.stdout.write(f'- Resumo: {doc.resumo[:100]}...')
                     self.stdout.write(f'- Relevante: {doc.relevante_contabil}')
                     self.stdout.write(f'- Normas relacionadas: {doc.normas_relacionadas.count()}')
                 else:
-                    self.stdout.write(self.style.WARNING('Documento não foi considerado relevante'))
-
-                    # Deleta o documento que não é relevante contábil
-                    doc.delete()
-                    self.stdout.write(self.style.NOTICE(f'Documento ID {doc.id} deletado por não ser relevante contábil.'))
-
+                    self.stdout.write(self.style.WARNING('Documento não relevante'))
+                    # Não tenta acessar doc.id após delete
+                    
             except Exception as e:
                 self.stdout.write(self.style.ERROR(f'Erro ao processar: {str(e)}'))
 
-        # 3. Testar integração com SEFAZ
-        self.stdout.write('\n=== TESTANDO INTEGRAÇÃO COM SEFAZ ===')
+        # 3. Testar integração com SEFAZ (versão otimizada)
+        self.stdout.write('\n=== TESTANDO INTEGRAÇÃO COM SEFAZ (OTIMIZADA) ===')
         integrador = IntegradorSEFAZ()
-
+        
+        # Pega um documento com normas relacionadas
         doc_com_normas = Documento.objects.filter(
-            processado=True,
-            relevante_contabil=True
-        ).exclude(normas_relacionadas=None).first()
-
+            normas_relacionadas__isnull=False
+        ).first()
+        
         if doc_com_normas:
-            self.stdout.write(f'Verificando normas para documento ID {doc_com_normas.id}')
+            start_time = time.time()
             normas = integrador.verificar_vigencia_automatica(doc_com_normas.id)
-            self.stdout.write(f'Encontradas {len(normas)} normas:')
-            for norma in normas:
-                self.stdout.write(f'- {norma.tipo} {norma.numero} ({norma.situacao})')
+            elapsed_time = time.time() - start_time
+            
+            self.stdout.write(f"Verificadas {len(normas)} normas em {elapsed_time:.2f}s")
+            for norma in normas[:5]:  # Mostra apenas as primeiras 5
+                self.stdout.write(f"- {norma.tipo} {norma.numero}: {norma.situacao}")
         else:
-            self.stdout.write(self.style.WARNING('Nenhum documento com normas encontrado para teste'))
+            self.stdout.write(self.style.WARNING('Nenhum documento com normas encontrado'))
 
         # 4. Testar comparação de mudanças
         self.stdout.write('\n=== TESTANDO COMPARAÇÃO DE MUDANÇAS ===')

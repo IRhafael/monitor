@@ -24,24 +24,42 @@ class DiarioOficialScraper:
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         })
-        # Termos contábeis relevantes (em bytes para busca binária)
+
+        # Atualize a lista de termos contábeis
         self.termos_contabeis = [
             b'contabil', b'tribut', b'imposto', b'icms', b'ipi', b'iss',
             b'fiscal', b'receita', b'declaracao', b'darf', b'sped',
             b'efd', b'pis', b'cofins', b'csll', b'irpj', b'simples nacional',
-            b'lucro real', b'mei', b'escrituracao', b'balanco', b'demonstrativo'
+            b'lucro real', b'mei', b'escrituracao', b'balanco', b'demonstrativo',
+            b'nota fiscal', b'nfe', b'nfce', b'cte', b'mdfe', b'dacte',
+            b'certificado digital', b'sefaz', b'secretaria da fazenda',
+            b'obrigacao acessoria', b'regime tributario'
         ]
 
+    # Modifique o método configurar_navegador
     def configurar_navegador(self):
         """Configura o navegador Chrome em modo headless"""
         chrome_options = Options()
-        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--headless=new")  # Novo modo headless
         chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--ignore-certificate-errors")
-        chrome_options.add_argument("--ignore-ssl-errors")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--window-size=1280,720")
-        return webdriver.Chrome(options=chrome_options)
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--log-level=3")  # Reduz logs do Chrome
+        chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
+        
+        # Configurações para evitar detecção
+        chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        chrome_options.add_experimental_option("useAutomationExtension", False)
+        
+        try:
+            driver = webdriver.Chrome(options=chrome_options)
+            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            return driver
+        except Exception as e:
+            logger.error(f"Erro ao iniciar navegador: {str(e)}")
+            return None
 
     def iniciar_coleta(self, data_inicio=None, data_fim=None):
         """Inicia a coleta de documentos contábeis"""

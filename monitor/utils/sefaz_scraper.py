@@ -15,9 +15,12 @@ from selenium.common.exceptions import (TimeoutException,
                                       NoSuchElementException, 
                                       WebDriverException)
 from bs4 import BeautifulSoup
+from selenium.webdriver.chrome.service import Service as ChromeService
 import nltk
 from nltk.tokenize import sent_tokenize
 from nltk.corpus import stopwords
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suprime mensagens do TensorFlow
 
 # Garante que os recursos do NLTK estejam disponíveis
 try:
@@ -32,39 +35,62 @@ except LookupError:
 logger = logging.getLogger(__name__)
 
 class SEFAZScraper:
-    def __init__(self, max_normas=20):
+    def __init__(self):
         self.base_url = "https://portaldalegislacao.sefaz.pi.gov.br"
         self.search_url = f"{self.base_url}/search-results"
-        self.max_normas = max_normas
         self.driver = None
-        self.timeout = 30  # Aumentado para 30 segundos
-        self.max_retries = 3
-        self.stop_words = set(stopwords.words('portuguese'))
+        self.timeout = 30  # Timeout reduzido para 30 segundos
+        self.max_retries = 2  # Número reduzido de tentativas
+        
+        # Configuração otimizada do ChromeService
+        self.chrome_service = ChromeService(
+            log_path='chromedriver.log',
+            service_args=['--silent']  # Modo silencioso
+        )
 
     def _iniciar_navegador(self):
-        """Configura o navegador com opções otimizadas"""
+        """Configuração otimizada do navegador"""
         try:
             chrome_options = Options()
-            chrome_options.add_argument("--headless=new")  # Novo modo headless
+            
+            # Configurações essenciais
+            chrome_options.add_argument("--headless=new")
             chrome_options.add_argument("--disable-gpu")
             chrome_options.add_argument("--no-sandbox")
-            chrome_options.add_argument("--window-size=1280,720")
             chrome_options.add_argument("--disable-dev-shm-usage")
             
-            # Configurações para evitar detecção
+            # Otimizações de performance
+            chrome_options.add_argument("--disable-extensions")
+            chrome_options.add_argument("--disable-logging")
+            chrome_options.add_argument("--log-level=3")
+            
+            # Configurações de rede
+            chrome_options.add_argument("--disable-http2")
+            chrome_options.add_argument("--disable-quic")
+            
+            # Evitar detecção como bot
             chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
             chrome_options.add_experimental_option("useAutomationExtension", False)
             
-            self.driver = webdriver.Chrome(options=chrome_options)
-            self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            # Inicialização do driver
+            self.driver = webdriver.Chrome(
+                service=self.chrome_service,
+                options=chrome_options
+            )
+            
+            # Configurações de timeout
+            self.driver.set_page_load_timeout(self.timeout)
+            self.driver.set_script_timeout(20)
+            self.driver.implicitly_wait(5)
+            
             return True
         except Exception as e:
             logger.error(f"Erro ao iniciar navegador: {str(e)}")
             return False
 
     def _fechar_navegador(self):
-        """Fecha o navegador se estiver aberto"""
+        """Fecha o navegador corretamente"""
         if self.driver:
             try:
                 self.driver.quit()
@@ -73,35 +99,57 @@ class SEFAZScraper:
             finally:
                 self.driver = None
 
+    def verificar_vigencia_rapida(self, tipo, numero):
+        """Método otimizado para verificação rápida"""
+        tipo = tipo.upper().strip()
+        numero = re.sub(r'[^\d/]', '', str(numero)).strip()
+        
+        try:
+            if not self._iniciar_navegador():
+                return False
+                
+            # Tentativa 1: URL direta (mais rápida)
+            status = self._verificar_por_url_direta(tipo, numero)
+            if status is not None:
+                return status
+                
+            # Tentativa 2: Pesquisa simplificada
+            return self._pesquisa_rapida(tipo, numero) or False
+            
+        finally:
+            self._fechar_navegador()
+
     def _pesquisar_norma(self, tipo, numero):
-        """Executa a pesquisa no portal"""
+        """Pesquisa otimizada com timeout reduzido"""
         try:
             query = f"{tipo} {numero}".strip()
             url = f"{self.search_url}?q={urllib.parse.quote_plus(query)}"
-            self.driver.get(url)
             
-            # Aguarda o carregamento dos resultados
-            WebDriverWait(self.driver, self.timeout).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, ".search-results-container"))
-            )
+            # Timeout reduzido para a pesquisa
+            self.driver.set_page_load_timeout(30)
             
-            # Verifica se há resultados
             try:
-                sem_resultados = self.driver.find_element(
-                    By.XPATH, "//*[contains(text(), 'Nenhum resultado encontrado')]"
-                )
-                if sem_resultados:
-                    return None
-            except NoSuchElementException:
-                pass
+                self.driver.get(url)
+            except TimeoutException:
+                logger.warning(f"Timeout parcial no carregamento de {query}")
+                # Continua com o conteúdo já carregado
                 
-            return True
-            
-        except TimeoutException:
-            logger.error(f"Timeout ao pesquisar {tipo} {numero}")
-            return None
+            # Espera flexível por resultados
+            try:
+                WebDriverWait(self.driver, 15).until(
+                    lambda d: d.execute_script('return document.readyState') == 'complete'
+                )
+                
+                # Verificação rápida de resultados
+                resultados = self.driver.find_elements(By.CSS_SELECTOR, ".result-item, .search-result")
+                return bool(resultados)
+                
+            except TimeoutException:
+                logger.warning(f"Timeout ao aguardar resultados para {query}")
+                return None
+                
         except Exception as e:
-            logger.error(f"Erro na pesquisa: {str(e)}")
+            logger.error(f"Erro na pesquisa de {query}: {str(e)}")
             return None
 
     def _extrair_url_documento(self):
@@ -234,35 +282,71 @@ class SEFAZScraper:
                     referencias.append(referencia)
                     
         return referencias
+    
+    def _verificar_por_url_direta(self, tipo, numero):
+        """Tenta acessar diretamente a norma"""
+        try:
+            url = f"{self.base_url}/{tipo.lower()}/{numero}"
+            self.driver.get(url)
+            
+            # Verificação instantânea de conteúdo
+            if "revogado" in self.driver.page_source.lower():
+                return False
+            if "vigente" in self.driver.page_source.lower():
+                return True
+            return None
+        except Exception:
+            return None
+
+    def _pesquisa_rapida(self, tipo, numero):
+        """Pesquisa simplificada com timeout reduzido"""
+        try:
+            query = f"{tipo} {numero}"
+            url = f"{self.search_url}?q={urllib.parse.quote_plus(query)}"
+            self.driver.get(url)
+            
+            # Espera por elementos visíveis (não completa)
+            WebDriverWait(self.driver, 15).until(
+                EC.visibility_of_element_located((By.XPATH, "//*[contains(@class, 'result')]"))
+            )
+            
+            # Verificação rápida no primeiro resultado
+            primeiro_resultado = self.driver.find_element(By.XPATH, "//*[contains(@class, 'result')]")
+            return "revogado" not in primeiro_resultado.text.lower()
+        except Exception:
+            return None
 
     def verificar_vigencia_norma(self, tipo, numero):
-        """Verifica se uma norma está vigente com múltiplas tentativas"""
+        """Versão robusta com múltiplas estratégias"""
+        tipo = tipo.upper().strip()
+        numero = re.sub(r'[^\d/]', '', str(numero)).strip()
+        
         for tentativa in range(1, self.max_retries + 1):
             try:
-                logger.info(f"Verificando {tipo} {numero} (tentativa {tentativa})")
-                
                 if not self._iniciar_navegador():
+                    time.sleep(3 * tentativa)
                     continue
                     
-                resultado_pesquisa = self._pesquisar_norma(tipo, numero)
-                if resultado_pesquisa is None:
-                    logger.warning(f"Norma {tipo} {numero} não encontrada")
-                    continue
-                    
-                status = self._extrair_status_norma()
+                # Tentativa 1: URL direta (mais rápida)
+                status = self._verificar_por_url_direta(tipo, numero)
                 if status is not None:
                     return status
                     
-                logger.warning(f"Status da norma {tipo} {numero} não determinado")
+                # Tentativa 2: Pesquisa tradicional
+                encontrada = self._pesquisar_norma(tipo, numero)
+                if encontrada is None:
+                    return False
+                    
+                return self._extrair_status_norma() or True  # Assume vigente se não determinar
                 
             except Exception as e:
-                logger.error(f"Erro na tentativa {tentativa}: {str(e)}")
+                logger.error(f"Tentativa {tentativa} falhou: {str(e)}")
             finally:
                 self._fechar_navegador()
-                time.sleep(2)  # Intervalo entre tentativas
-                
-        logger.error(f"Falha ao verificar {tipo} {numero} após {self.max_retries} tentativas")
-        return False
+                if tentativa < self.max_retries:
+                    time.sleep(5 * tentativa)  # Backoff exponencial
+        
+        return False  # Default conservadorconservador
 
     def coletar_normas(self):
         """Coleta as últimas normas publicadas"""

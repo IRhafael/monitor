@@ -45,61 +45,63 @@ class PDFProcessor:
             raise
 
     def _configure_matchers(self):
-        """Configura os matchers para termos contábeis e normas"""
+        """Configura os matchers corretamente"""
         # Matcher para termos contábeis
         self.termo_matcher = Matcher(self.nlp.vocab)
-        termo_patterns = [
+        patterns = [
             [{"LOWER": {"IN": ["icms", "ipi", "iss", "pis", "cofins", "csll", "irpj"]}}],
             [{"LOWER": {"IN": ["sped", "efd", "dctf", "dirf", "das", "darf"]}}],
-            [{"LEMMA": {"IN": ["tributário", "fiscalização"]}}],
+            [{"LEMMA": {"IN": ["tributário", "fiscal", "tributo", "fiscalização"]}}],
             [{"LOWER": "receita"}, {"LOWER": "federal"}],
-            [{"LOWER": "balanço"}, {"LOWER": "patrimonial"}]
+            [{"LOWER": "balanço"}, {"LOWER": "patrimonial"}],
+            [{"LOWER": "simples"}, {"LOWER": "nacional"}],
+            [{"LOWER": "obrigação"}, {"LOWER": "acessória"}]
         ]
-        for pattern in termo_patterns:
+        for pattern in patterns:
             self.termo_matcher.add("TERMO_CONTABIL", [pattern])
 
         # Matcher para normas
         self.norma_matcher = Matcher(self.nlp.vocab)
         norma_patterns = [
             [{"LOWER": {"IN": ["lei", "decreto", "portaria"]}}, 
-             {"IS_PUNCT": True, "OP": "?"}, 
-             {"TEXT": {"REGEX": r"n?[º°]?"}}, 
-             {"IS_PUNCT": True, "OP": "?"}, 
-             {"TEXT": {"REGEX": r"\d+[/-]?\d*"}}],
+            {"IS_PUNCT": True, "OP": "?"}, 
+            {"TEXT": {"REGEX": r"n?[º°]?"}}, 
+            {"IS_PUNCT": True, "OP": "?"}, 
+            {"TEXT": {"REGEX": r"\d+[/-]?\d*"}}],
             [{"LOWER": "lei"}, {"LOWER": "complementar"}, 
-             {"TEXT": {"REGEX": r"n?[º°]?"}, "OP": "?"}, 
-             {"TEXT": {"REGEX": r"\d+"}}],
-            [{"LOWER": "medida"}, {"LOWER": "provisória"}, 
-             {"TEXT": {"REGEX": r"n?[º°]?"}, "OP": "?"}, 
-             {"TEXT": {"REGEX": r"\d+"}}]
+            {"TEXT": {"REGEX": r"n?[º°]?"}, "OP": "?"}, 
+            {"TEXT": {"REGEX": r"\d+"}}]
         ]
         for i, pattern in enumerate(norma_patterns):
             self.norma_matcher.add(f"NORMA_{i}", [pattern])
 
-    @transaction.atomic
     def processar_documento(self, documento: Documento) -> bool:
-        """Processa um documento com tratamento robusto de erros"""
-        logger.info(f"Iniciando processamento do documento ID {documento.id}")
-        
+        """Versão corrigida do processamento"""
         try:
-            if not self._validar_documento(documento):
+            if not documento or not documento.arquivo_pdf:
+                logger.warning("Documento inválido ou sem arquivo PDF")
+                return False
+
+            # Verificação adicional do arquivo
+            if not os.path.exists(documento.arquivo_pdf.path):
+                logger.error(f"Arquivo não encontrado: {documento.arquivo_pdf.path}")
                 return False
 
             texto = self._extrair_texto_com_fallback(documento.arquivo_pdf.path)
-            if not texto:
-                logger.error(f"Falha ao extrair texto do documento ID {documento.id}")
+            if not texto or len(texto.strip()) < 50:
+                logger.warning("Texto vazio ou muito pequeno")
                 return False
 
             relevante, detalhes = self.analisar_relevancia(texto)
             if not relevante:
                 logger.info(f"Documento ID {documento.id} não é relevante")
-                self._handle_documento_nao_relevante(documento)
+                documento.delete()  # Deleta corretamente
                 return False
 
             return self._processar_documento_relevante(documento, texto, detalhes)
 
         except Exception as e:
-            logger.error(f"Erro crítico ao processar documento ID {documento.id}: {str(e)}\n{traceback.format_exc()}")
+            logger.error(f"Erro ao processar documento: {str(e)}")
             return False
 
     def _validar_documento(self, documento: Documento) -> bool:

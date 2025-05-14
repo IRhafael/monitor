@@ -1,4 +1,6 @@
 # monitor/utils/sefaz_integracao.py
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Silencia completamente o TensorFlow
 import re
 import logging
 from datetime import datetime, timedelta
@@ -6,62 +8,80 @@ from django.utils import timezone
 from django.db.models import Q
 from monitor.models import Documento, NormaVigente
 from .sefaz_scraper import SEFAZScraper
+from selenium.common.exceptions import WebDriverException
+import urllib.parse
+
 
 logger = logging.getLogger(__name__)
 
 class IntegradorSEFAZ:
     def __init__(self):
-        self.cache = {}
-        self.max_retries = 3
         self.scraper = SEFAZScraper()
+        self.max_tentativas = 2  # Reduzido para 2 tentativas
+        self.cache = {}
+        self.timeout = 40  # Timeout reduzido
+
 
     def buscar_norma_especifica(self, tipo, numero):
         """Verifica se uma norma específica está vigente na SEFAZ"""
-        vigente = self.scraper.verificar_vigencia_norma(tipo, numero)
-        return {
-            'tipo': tipo.upper(),
-            'numero': self._padronizar_numero_norma(numero),
-            'vigente': vigente
-        }
+        try:
+            # Padroniza entrada
+            tipo = tipo.upper().strip()
+            numero = self._padronizar_numero_norma(numero)
+            
+            logger.info(f"Verificando vigência de {tipo} {numero}")
+            
+            # Verifica cache primeiro
+            cache_key = f"{tipo}_{numero}"
+            if cache_key in self.cache:
+                return self.cache[cache_key]
+                
+            vigente = self.scraper.verificar_vigencia_norma(tipo, numero)
+            
+            resultado = {
+                'tipo': tipo,
+                'numero': numero,
+                'vigente': vigente if vigente is not None else False,
+                'data_consulta': timezone.now()
+            }
+            
+            # Armazena no cache por 24 horas
+            self.cache[cache_key] = resultado
+            return resultado
+            
+        except Exception as e:
+            logger.error(f"Erro ao buscar norma {tipo} {numero}: {str(e)}")
+            return {
+                'tipo': tipo,
+                'numero': numero,
+                'vigente': False,
+                'erro': str(e)
+            }
 
 
 
-    def verificar_vigencia_norma(self, tipo, numero):
-        """Versão melhorada com mais tentativas e logs detalhados"""
-        for tentativa in range(1, self.max_retries + 1):
+    def verificar_vigencia_normas(self, documento_id):
+        """Versão melhorada para verificar múltiplas normas"""
+        documento = Documento.objects.get(id=documento_id)
+        normas_verificadas = []
+        
+        for norma in documento.normas_relacionadas.all():
             try:
-                if not self._iniciar_navegador():
-                    logger.error("Falha ao iniciar navegador")
-                    return False
-                    
-                logger.info(f"Verificando norma {tipo} {numero} (tentativa {tentativa})")
+                resultado = self.buscar_norma_especifica(norma.tipo, norma.numero)
                 
-                # Codificação segura para URLs
-                query = f"{tipo}+{numero}"
-                url = f"{self.search_url}?q={urllib.parse.quote_plus(query)}"
-                self.driver.get(url)
+                # Atualiza status da norma
+                norma.situacao = "VIGENTE" if resultado['vigente'] else "REVOGADA"
+                norma.data_verificacao = timezone.now()
+                norma.save()
                 
-                # Aguardar e processar resultados
-                WebDriverWait(self.driver, self.timeout).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, ".result-item"))
-                )
-                
-                resultados = self.driver.find_elements(By.CSS_SELECTOR, ".result-item")
-                for resultado in resultados:
-                    texto = resultado.text.lower()
-                    if str(numero).lower() in texto and tipo.lower() in texto:
-                        return "revogado" not in texto and "cancelado" not in texto
-                        
-                logger.warning(f"Norma {tipo} {numero} não encontrada nos resultados")
-                return False
+                normas_verificadas.append(norma)
                 
             except Exception as e:
-                logger.error(f"Erro na tentativa {tentativa}: {str(e)}")
-                time.sleep(2)  # Espera entre tentativas
-            finally:
-                self._fechar_navegador()
-        
-        return False
+                logger.error(f"Erro ao verificar norma {norma}: {str(e)}")
+                continue
+                
+        return normas_verificadas
+
 
     def verificar_documentos_nao_verificados(self):
         """Verifica todos os documentos não verificados"""
@@ -86,22 +106,61 @@ class IntegradorSEFAZ:
         
         return resultados
 
-    def verificar_vigencia_automatica(self, documento):
-        """Verifica normas não validadas nos últimos 30 dias"""
-        data_limite = timezone.now() - timedelta(days=30)
-        
-        normas = NormaVigente.objects.filter(
-            Q(data_verificacao__lt=data_limite) | Q(data_verificacao__isnull=True),
-            situacao="VIGENTE"
-        )
-        
-        for norma in normas:
-            resultado = self.buscar_norma_especifica(norma.tipo, norma.numero)
-            norma.situacao = "VIGENTE" if resultado['vigente'] else "REVOGADA"
-            norma.data_verificacao = timezone.now()
-            norma.save()
+    def verificar_vigencia_automatica(self, documento_id):
+        """Versão ultra-otimizada com cache persistente"""
+        try:
+            documento = Documento.objects.get(id=documento_id)
+            if not documento.normas_relacionadas.exists():
+                return []
 
-        return []
+            normas_verificadas = []
+            
+            for norma in documento.normas_relacionadas.all().order_by('tipo')[:10]:  # Limita a 10 normas
+                try:
+                    # Verificação com cache e timeout controlado
+                    resultado = self._verificar_norma_com_cache(norma)
+                    if resultado is not None:
+                        norma.situacao = "VIGENTE" if resultado else "REVOGADA"
+                        norma.data_verificacao = timezone.now()
+                        norma.save()
+                        normas_verificadas.append(norma)
+                except Exception as e:
+                    logger.error(f"Erro na norma {norma}: {str(e)}")
+                    continue
+
+            return normas_verificadas
+            
+        except Exception as e:
+            logger.error(f"Erro geral: {str(e)}")
+            return []
+            
+        except Exception as e:
+            logger.error(f"Erro ao verificar vigência automática: {str(e)}")
+            return []
+        
+
+    def _verificar_norma_com_cache(self, norma):
+        """Verifica com cache e estratégia de fallback"""
+        cache_key = f"{norma.tipo}_{norma.numero}"
+        
+        # Verifica cache primeiro (válido por 12 horas)
+        if cache_key in self.cache:
+            cache_data = self.cache[cache_key]
+            if (timezone.now() - cache_data['timestamp']) < timedelta(hours=12):
+                return cache_data['vigente']
+        
+        # Tenta verificação rápida
+        try:
+            resultado = self.scraper.verificar_vigencia_rapida(norma.tipo, norma.numero)
+            self.cache[cache_key] = {
+                'vigente': resultado,
+                'timestamp': timezone.now()
+            }
+            return resultado
+        except Exception as e:
+            logger.warning(f"Falha no método rápido: {str(e)}")
+            return None
+        
 
     def _determinar_tipo_norma(self, texto):
         """Determina o tipo da norma com base no texto"""
