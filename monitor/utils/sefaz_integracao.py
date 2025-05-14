@@ -161,7 +161,16 @@ class IntegradorSEFAZ:
             return []
 
     def _verificar_norma_eficiente(self, norma):
-        """Estratégia de verificação em camadas"""
+       
+        cache_key = f"sefaz_{norma.tipo}_{norma.numero}"
+        try:
+            cached = cache.get(cache_key)
+            if cached:
+                if isinstance(cached, dict) and 'vigente' in cached:
+                    return cached['vigente']
+                return cached
+        except Exception as e:
+            logger.warning(f"Erro ao acessar cache: {str(e)}")
         try:
             # 1. Tentar cache
             cache_key = f"sefaz_{norma.tipo}_{norma.numero}"
@@ -217,46 +226,28 @@ class IntegradorSEFAZ:
         return re.sub(r'[^\d/]', '', match.group(1)) if match else None
 
     def extrair_normas_do_texto(self, texto):
-        """Extrai normas mencionadas no texto com melhor precisão"""
+        """Versão simplificada e mais robusta"""
         if not texto:
             return []
-            
+
         padroes = [
-            # Padrão para Leis Complementares
-            r'(?i)(Lei\s+Complementar|LC)\s*(?:n?[º°]?\s*)?(\d+)',
-            # Padrão para Medidas Provisórias
-            r'(?i)(Medida\s+Provisória|MP)\s*(?:n?[º°]?\s*)?(\d+)',
-            # Padrão genérico para outros tipos
-            r'(?i)(Lei|Decreto|Portaria|Instrução Normativa|Resolução|Deliberação)\s+(?:n?[º°]?\s*)?(\d+[\/-]\d{2,4})',
-            # Padrão para normas sem tipo explícito (apenas número)
-            r'(?i)(?:n?[º°]\s*)?(\d+[\/-]\d{2,4})'
+            r'(?i)(Lei Complementar|LC)\s+(?:n?[º°]?\s*)?(\d+)',
+            r'(?i)(Lei|Decreto|Portaria)\s+(?:n?[º°]?\s*)?(\d+[/-]\d{2,4})'
         ]
         
-        normas_encontradas = set()
+        normas = set()
         
         for padrao in padroes:
-            matches = re.finditer(padrao, texto)
-            for match in matches:
+            for match in re.finditer(padrao, texto):
                 try:
-                    grupos = match.groups()
-                    if len(grupos) >= 2:  # Temos tipo e número
-                        tipo = self._determinar_tipo_norma(grupos[0])
-                        numero = self._extrair_numero_norma(grupos[1])
-                    else:  # Apenas número
-                        tipo = None
-                        numero = self._extrair_numero_norma(grupos[0])
-                    
-                    if numero:
-                        if not tipo:
-                            # Tenta inferir o tipo pelo contexto
-                            contexto = texto[max(0, match.start()-50):match.end()+50]
-                            tipo = self._inferir_tipo_pelo_contexto(contexto) or "DESCONHECIDO"
-                        
-                        normas_encontradas.add((tipo, numero))
-                except (IndexError, AttributeError) as e:
+                    tipo = self._determinar_tipo_norma(match.group(1))
+                    numero = self._padronizar_numero_norma(match.group(2))
+                    if tipo and numero:
+                        normas.add((tipo.upper(), numero))
+                except (IndexError, AttributeError):
                     continue
                     
-        return list(normas_encontradas)
+        return list(normas)
 
     def comparar_mudancas(self, dias_retroativos=30):
         """

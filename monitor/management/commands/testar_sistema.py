@@ -148,3 +148,26 @@ class Command(BaseCommand):
             assert set(resultado) == set(esperado), f"Falha no caso: {texto}"
         
         print("Todos os testes de extração passaram!")
+
+
+
+    def testar_verificacao_norma(self, tipo, numero):
+        """Teste completo para uma norma específica"""
+        print(f"\n=== TESTE PARA {tipo} {numero} ===")
+        
+        # 1. Teste de URL direta
+        print("1. Testando URL direta...")
+        status_url = self._verificar_por_url_direta(tipo, numero)
+        print(f"Resultado URL direta: {status_url}")
+        
+        # 2. Teste de pesquisa rápida
+        print("2. Testando pesquisa rápida...")
+        status_rapido = self._pesquisa_rapida(tipo, numero)
+        print(f"Resultado pesquisa rápida: {status_rapido}")
+        
+        # 3. Teste completo
+        print("3. Teste completo...")
+        status_completo = self.verificar_vigencia_norma(tipo, numero)
+        print(f"Resultado completo: {status_completo}")
+        
+        return status_completo
