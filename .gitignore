@@ -1,5 +1,5 @@
 # Ambiente virtual
-venv/
+venv311/
 
 # Arquivos compilados do Python
 __pycache__/
