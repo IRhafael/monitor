@@ -21,7 +21,11 @@ class Documento(models.Model):
     relevante_contabil = models.BooleanField(default=False)
     assunto = models.CharField(max_length=100, blank=True, null=True)
     normas_relacionadas = models.ManyToManyField('NormaVigente', blank=True)
-
+    processamento_metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Metadados do processamento com spaCy"
+    )
     
     class Meta:
         verbose_name = "Documento"
@@ -65,6 +69,11 @@ class NormaVigente(models.Model):
         ('SEFAZ', 'SEFAZ'),
         ('DIARIO_OFICIAL', 'Diário Oficial')
     ], default='SEFAZ')
+    padrao_extração = models.CharField(
+        max_length=50,
+        blank=True,
+        help_text="Padrão usado para extrair esta norma"
+    )
 
 
     class Meta:

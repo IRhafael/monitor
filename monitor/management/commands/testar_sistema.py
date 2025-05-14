@@ -124,3 +124,13 @@ class Command(BaseCommand):
 
         os.unlink(tmp_path)
         return doc
+
+    def test_spacy_processing(self):
+        processor = PDFProcessor()
+        test_text = "A Lei 1234/2025 altera o Decreto 5678 sobre ICMS"
+        
+        relevante, detalhes = processor.analisar_relevancia(test_text)
+        self.assertTrue(relevante)
+        self.assertIn(("LEI", "1234/2025"), detalhes['normas'])
+        self.assertIn(("DECRETO", "5678"), detalhes['normas'])
+        self.assertIn("icms", detalhes['termos'])

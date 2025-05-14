@@ -6,12 +6,12 @@ import traceback
 from io import StringIO
 from typing import Tuple, List, Dict, Optional
 from datetime import datetime
-from transformers import pipeline
+import spacy
+from spacy.matcher import Matcher
+from spacy.language import Language
 import PyPDF2
-from pdfminer.high_level import extract_text_to_fp
+from pdfminer.high_level import extract_text as extract_text_to_fp
 from pdfminer.layout import LAParams
-import nltk
-from nltk.tokenize import sent_tokenize
 from django.conf import settings
 from django.core.exceptions import SuspiciousFileOperation
 from django.db import transaction
@@ -19,45 +19,62 @@ from monitor.models import Documento, NormaVigente
 
 logger = logging.getLogger(__name__)
 
+@Language.component("norma_matcher")
+def norma_matcher_component(doc):
+    """Componente de pipeline spaCy para identificar normas"""
+    return doc
+
 class PDFProcessor:
     def __init__(self):
-        self._setup_nltk()
+        self._setup_spacy()
         self._setup_patterns()
         self.limite_relevancia = 4
         self.max_retries = 3
         self.timeout = 30
 
-    def _setup_nltk(self):
-        """Configura recursos do NLTK com fallback"""
+    def _setup_spacy(self):
+        """Configura o pipeline NLP com spaCy"""
         try:
-            nltk.data.find('tokenizers/punkt')
-            nltk.data.find('tokenizers/punkt_tab/portuguese')
-        except LookupError:
-            try:
-                nltk.download('punkt')
-                nltk.download('punkt_tab')
-                nltk.download('stopwords')
-            except Exception as e:
-                logger.warning(f"Falha ao baixar recursos NLTK: {str(e)}")
+            self.nlp = spacy.load("pt_core_news_sm")
+            
+            # Configurar matchers
+            self._configure_matchers()
+            
+        except Exception as e:
+            logger.error(f"Falha ao configurar spaCy: {str(e)}")
+            raise
 
-    def _setup_patterns(self):
-        """Configura padrões de busca com pesos"""
-        self.padroes_contabeis = [
-            # Impostos e obrigações (alto peso)
-            (r'\b(icms|ipi|iss|pis|cofins|csll|irpj)\b', 3),
-            (r'\b(sped|efd|dctf|dirf|DAS|darf)\b', 3),
-            # Termos gerais (médio peso)
-            (r'tribut[aá]r[ií][ao]|fiscaliza[cç][aã]o', 2),
-            (r'receita\s+federal|sefaz|fazenda\s+nacional', 2),
-            # Conceitos contábeis (baixo peso)
-            (r'balan[cç]o\s+patrimonial|demonstra[cç][oõ]es\s+financeiras', 1)
+    def _configure_matchers(self):
+        """Configura os matchers para termos contábeis e normas"""
+        # Matcher para termos contábeis
+        self.termo_matcher = Matcher(self.nlp.vocab)
+        termo_patterns = [
+            [{"LOWER": {"IN": ["icms", "ipi", "iss", "pis", "cofins", "csll", "irpj"]}}],
+            [{"LOWER": {"IN": ["sped", "efd", "dctf", "dirf", "das", "darf"]}}],
+            [{"LEMMA": {"IN": ["tributário", "fiscalização"]}}],
+            [{"LOWER": "receita"}, {"LOWER": "federal"}],
+            [{"LOWER": "balanço"}, {"LOWER": "patrimonial"}]
         ]
+        for pattern in termo_patterns:
+            self.termo_matcher.add("TERMO_CONTABIL", [pattern])
 
-        self.padroes_normas = [
-            r'(?i)(Lei|Decreto|Portarias da SEFAZ |Instrução NormativaConvênios e Protocolos do CONFAZ|Resolução)\s+(?:n?[º°]?\s*)?(\d+[\.\/-]?\d*)',
-            r'(?i)(Lei Complementar)\s+(n?[º°]?\s*)?(\d+)',
-            r'(?i)(Medida Provisória)\s+(n?[º°]?\s*)?(\d+)'
+        # Matcher para normas
+        self.norma_matcher = Matcher(self.nlp.vocab)
+        norma_patterns = [
+            [{"LOWER": {"IN": ["lei", "decreto", "portaria"]}}, 
+             {"IS_PUNCT": True, "OP": "?"}, 
+             {"TEXT": {"REGEX": r"n?[º°]?"}}, 
+             {"IS_PUNCT": True, "OP": "?"}, 
+             {"TEXT": {"REGEX": r"\d+[/-]?\d*"}}],
+            [{"LOWER": "lei"}, {"LOWER": "complementar"}, 
+             {"TEXT": {"REGEX": r"n?[º°]?"}, "OP": "?"}, 
+             {"TEXT": {"REGEX": r"\d+"}}],
+            [{"LOWER": "medida"}, {"LOWER": "provisória"}, 
+             {"TEXT": {"REGEX": r"n?[º°]?"}, "OP": "?"}, 
+             {"TEXT": {"REGEX": r"\d+"}}]
         ]
+        for i, pattern in enumerate(norma_patterns):
+            self.norma_matcher.add(f"NORMA_{i}", [pattern])
 
     @transaction.atomic
     def processar_documento(self, documento: Documento) -> bool:
@@ -109,11 +126,15 @@ class PDFProcessor:
     def _extrair_com_pypdf2(self, caminho_pdf: str) -> str:
         """Extrai texto usando PyPDF2"""
         texto = ""
-        with open(caminho_pdf, 'rb') as f:
-            leitor = PyPDF2.PdfReader(f)
-            for pagina in leitor.pages:
-                texto += pagina.extract_text() or ""
-        return self._limpar_texto(texto)
+        try:
+            with open(caminho_pdf, 'rb') as f:
+                leitor = PyPDF2.PdfReader(f)
+                for pagina in leitor.pages:
+                    texto += pagina.extract_text() or ""
+            return self._limpar_texto(texto)
+        except Exception as e:
+            logger.warning(f"Erro no PyPDF2: {str(e)}")
+            return None
 
     def _extrair_com_pdfminer(self, caminho_pdf: str) -> str:
         """Extrai texto usando pdfminer.six"""
@@ -132,25 +153,11 @@ class PDFProcessor:
             logger.warning(f"Falha no pdfminer: {str(e)}")
             return None
 
-    def _extrair_com_fallback_alternativo(self, caminho_pdf: str) -> str:
-        """Método alternativo para extração de texto - versão simplificada"""
-        try:
-            # Tenta ler como texto puro (para PDFs que são na verdade arquivos de texto)
-            with open(caminho_pdf, 'r', encoding='utf-8', errors='ignore') as f:
-                texto = f.read(5000)  # Lê apenas os primeiros 5KB para verificação
-                if "PDF" not in texto[:20]:  # Se não parece ser um PDF binário
-                    return self._limpar_texto(texto)
-        except:
-            pass
-            
-        return None
-
     def _extrair_texto_com_fallback(self, caminho_pdf: str) -> Optional[str]:
         """Extrai texto com múltiplas estratégias de fallback"""
         strategies = [
             self._extrair_com_pypdf2,
-            self._extrair_com_pdfminer,
-            self._extrair_com_fallback_alternativo
+            self._extrair_com_pdfminer
         ]
         
         for strategy in strategies:
@@ -175,68 +182,69 @@ class PDFProcessor:
         return texto.strip()
 
     def analisar_relevancia(self, texto: str) -> Tuple[bool, Dict]:
-        """Analisa a relevância contábil com pontuação detalhada"""
+        """Analisa a relevância contábil com spaCy"""
         if not texto:
             return False, {}
             
-        texto = texto.lower()
+        doc = self.nlp(texto.lower())
         detalhes = {
             'pontuacao': 0,
             'termos': {},
             'normas': []
         }
 
-        for padrao, peso in self.padroes_contabeis:
-            matches = re.findall(padrao, texto)
-            if matches:
-                termo = matches[0] if isinstance(matches[0], str) else matches[0][0]
-                detalhes['termos'][termo] = detalhes['termos'].get(termo, 0) + len(matches)
-                detalhes['pontuacao'] += peso * len(matches)
+        # Encontrar termos contábeis
+        matches = self.termo_matcher(doc)
+        for match_id, start, end in matches:
+            termo = doc[start:end].text
+            peso = 3 if termo in ["icms", "ipi", "iss"] else 2  # Exemplo de pesos
+            
+            detalhes['termos'][termo] = detalhes['termos'].get(termo, 0) + 1
+            detalhes['pontuacao'] += peso
 
-        normas = self.extrair_normas(texto)
+        # Extrair normas
+        normas = self._extrair_normas_com_spacy(doc)
         detalhes['normas'] = normas
         detalhes['pontuacao'] += len(normas) * 2
 
         relevante = detalhes['pontuacao'] >= self.limite_relevancia
         return relevante, detalhes
 
-    def extrair_normas(self, texto: str) -> List[Tuple[str, str]]:
-        """Extrai normas com validação rigorosa"""
+    def _extrair_normas_com_spacy(self, doc) -> List[Tuple[str, str]]:
+        """Extrai normas usando spaCy Matcher"""
+        matches = self.norma_matcher(doc)
         normas = []
-        for padrao in self.padroes_normas:
-            for match in re.finditer(padrao, texto, re.IGNORECASE):
-                try:
-                    tipo = self._normalizar_tipo_norma(match.group(1))
-                    numero = self._normalizar_numero_norma(match.group(2))
-                    if tipo and numero:
-                        normas.append((tipo, numero))
-                except (IndexError, AttributeError):
-                    continue
-                    
-        seen = set()
-        return [n for n in normas if not (n in seen or seen.add(n))]
-
-    def _normalizar_tipo_norma(self, tipo: str) -> str:
-        """Normaliza o tipo de norma"""
-        if not tipo:
-            return ""
+        
+        for match_id, start, end in matches:
+            span = doc[start:end]
+            tipo = self._determinar_tipo_norma(span.text)
+            numero = self._extrair_numero_norma(span.text)
             
-        tipo = tipo.upper().strip()
-        mapeamento = {
-            'LEI COMPLEMENTAR': 'LC',
-            'MEDIDA PROVISÓRIA': 'MP',
-            'INSTRUÇÃO NORMATIVA': 'IN',
-            'RESOLUÇÃO': 'RES'
-        }
-        return mapeamento.get(tipo, tipo.split()[0])
+            if tipo and numero:
+                normas.append((tipo, numero))
+                
+        return list(set(normas))
 
-    def _normalizar_numero_norma(self, numero: str) -> str:
-        """Normaliza o número da norma"""
-        if not numero:
-            return ""
-            
-        numero = re.sub(r'[^\d\/]', '', numero)
-        return numero.strip()
+    def _determinar_tipo_norma(self, texto: str) -> str:
+        """Determina o tipo da norma"""
+        texto = texto.lower()
+        
+        if "lei complementar" in texto:
+            return "LC"
+        elif "medida provisória" in texto:
+            return "MP"
+        elif "portaria" in texto:
+            return "PORTARIA"
+        elif "decreto" in texto:
+            return "DECRETO"
+        elif "lei" in texto:
+            return "LEI"
+        return None
+
+    def _extrair_numero_norma(self, texto: str) -> str:
+        """Extrai o número da norma"""
+        match = re.search(r'(\d+[/-]?\d*)', texto)
+        return re.sub(r'[^\d/]', '', match.group(1)) if match else None
 
     def _processar_documento_relevante(self, documento: Documento, texto: str, detalhes: Dict) -> bool:
         """Processa um documento considerado relevante"""
@@ -262,37 +270,28 @@ class PDFProcessor:
             logger.error(f"Falha ao processar documento relevante ID {documento.id}: {str(e)}")
             return False
 
-
-
     def _gerar_resumo(self, texto: str, detalhes: Dict) -> str:
-        # Usa BERT para sumarização extrativa (mantém frases originais)
-        summarizer = pipeline("summarization", model="neuralmind/bert-base-portuguese-cased")
-        resumo = summarizer(texto, max_length=150, min_length=30, do_sample=False)
+        """Gera um resumo simplificado do documento"""
+        # Extrai as primeiras frases relevantes
+        doc = self.nlp(texto)
+        frases_relevantes = []
         
-        # Combina com informações de normas/termos
+        for sent in doc.sents:
+            if len(frases_relevantes) >= 3:
+                break
+            if any(termo in sent.text.lower() for termo in detalhes['termos']):
+                frases_relevantes.append(sent.text.strip())
+        
+        # Monta o resumo
         partes = []
         if detalhes.get('normas'):
             normas_str = ", ".join(f"{tipo} {numero}" for tipo, numero in detalhes['normas'][:3])
-            partes.append(f"🔹 **Normas mencionadas**: {normas_str}")
+            partes.append(f"Normas mencionadas: {normas_str}")
         
-        partes.append(f"📌 **Resumo automático**: {resumo[0]['summary_text']}")
-        return "\n\n".join(partes)
-
-    def _extrair_trechos_relevantes(self, texto: str) -> List[str]:
-        """Extrai trechos relevantes do texto"""
-        sentences = sent_tokenize(texto, language='portuguese')
-        relevantes = []
+        if frases_relevantes:
+            partes.append("Trechos relevantes:\n- " + "\n- ".join(frases_relevantes))
         
-        for sent in sentences:
-            if len(relevantes) >= 3:
-                break
-                
-            for padrao, _ in self.padroes_contabeis:
-                if re.search(padrao, sent, re.IGNORECASE):
-                    relevantes.append(sent.strip())
-                    break
-                    
-        return relevantes
+        return "\n\n".join(partes) if partes else "Resumo não disponível"
 
     def _handle_documento_nao_relevante(self, documento: Documento):
         """Lida com documentos não relevantes conforme configuração"""

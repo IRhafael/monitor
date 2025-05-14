@@ -2,6 +2,8 @@
 import re
 from datetime import datetime
 from venv import logger
+
+import spacy
 from .diario_scraper import DiarioOficialScraper
 from .sefaz_scraper import SEFAZScraper
 from ..models import Documento, NormaVigente
@@ -36,20 +38,21 @@ class IntegradorSEFAZ:
             self.cache[cache_key] = norma
         return norma
     
-    @staticmethod
-    def extrair_normas_do_texto(texto):
-        padroes = [
-            r'(Lei|Decreto|Portaria|Instrução Normativa|Resolução)\s+(n?[º°]?\s*[.-]?\s*\d+[/-]?\d*)',
-            r'(LEI|DECRETO|PORTARIA|INSTRUÇÃO NORMATIVA|RESOLUÇÃO)\s+(N?[º°]?\s*[.-]?\s*\d+[/-]?\d*)'
-        ]
+    def extrair_normas_do_texto(self, texto):
+        """Versão melhorada com spaCy"""
+        if not hasattr(self, 'nlp'):
+            self.nlp = spacy.load("pt_core_news_sm")
         
+        doc = self.nlp(texto)
         normas = []
-        for padrao in padroes:
-            matches = re.finditer(padrao, texto, re.IGNORECASE)
-            for match in matches:
-                tipo = match.group(1).upper()
-                numero = re.sub(r'\s+', '', match.group(2))
-                numero = re.sub(r'[º°]', 'º', numero)
+        
+        # Padrão para encontrar sequências do tipo "Lei 1234"
+        for match in self.norma_matcher(doc):
+            span = doc[match[1]:match[2]]
+            tipo = self._determinar_tipo_norma(span.text)
+            numero = self._extrair_numero_norma(span.text)
+            
+            if tipo and numero:
                 normas.append((tipo, numero))
         
         return list(set(normas))
