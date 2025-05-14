@@ -15,6 +15,7 @@ from selenium.common.exceptions import (TimeoutException,
 from selenium.webdriver.chrome.service import Service as ChromeService
 from contextlib import contextmanager
 import os
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class SEFAZScraper:
             service_args=['--silent', '--disable-logging']
         )
 
+    # ================== CORE METHODS ==================
     @contextmanager
     def browser_session(self):
         """Gerenciador de contexto para sessão do navegador"""
@@ -37,6 +39,9 @@ class SEFAZScraper:
             if not self._iniciar_navegador():
                 raise WebDriverException("Não foi possível iniciar o navegador")
             yield self.driver
+        except Exception as e:
+            logger.error(f"Erro na sessão do navegador: {str(e)}")
+            raise
         finally:
             self._fechar_navegador()
 
@@ -74,45 +79,68 @@ class SEFAZScraper:
             finally:
                 self.driver = None
 
-    def testar_conexao(self):
-        """Testa a conexão com o portal"""
-        try:
-            with self.browser_session():
-                self.driver.get(self.base_url)
-                WebDriverWait(self.driver, 15).until(
-                    EC.presence_of_element_located((By.TAG_NAME, "body")))
-                return "SEFAZ" in self.driver.title or "sefaz" in self.driver.current_url
-        except Exception as e:
-            logger.error(f"Falha no teste de conexão: {str(e)}")
-            return False
-
-    def verificar_vigencia_norma(self, tipo, numero):
-        """Verifica se uma norma está vigente"""
+    # ================== MAIN FLOW METHODS ==================
+    def verificar_vigencia(self, tipo, numero):
+        """Fluxo principal de verificação de vigência"""
         tipo = tipo.upper().strip()
         numero = re.sub(r'[^\d/]', '', str(numero)).strip()
         
         for tentativa in range(1, self.max_retries + 1):
             try:
                 with self.browser_session():
-                    # Tentativa 1: URL direta
-                    status = self._verificar_por_url_direta(tipo, numero)
+                    # 1. Tentativa via URL direta
+                    status = self._verificar_via_url_direta(tipo, numero)
                     if status is not None:
                         return status
                     
-                    # Tentativa 2: Pesquisa
-                    encontrada = self._pesquisar_norma(tipo, numero)
-                    if encontrada is None:
-                        return False
-                        
-                    return self._extrair_status_norma() or True
+                    # 2. Tentativa via pesquisa
+                    status = self._verificar_via_pesquisa(tipo, numero)
+                    if status is not None:
+                        return status
+                    
+                    return False  # Default se nenhum método funcionar
+                    
             except Exception as e:
                 logger.error(f"Tentativa {tentativa} falhou: {str(e)}")
                 if tentativa == self.max_retries:
                     return False
                 time.sleep(2 ** tentativa)  # Backoff exponencial
 
-    def _verificar_por_url_direta(self, tipo, numero):
-        """Tenta acessar diretamente a norma"""
+    def coletar_normas_recentes(self, max_normas=10):
+        """Coleta as normas mais recentes do portal"""
+        try:
+            with self.browser_session():
+                self.driver.get(self.search_url)
+                
+                # Executa pesquisa genérica
+                search_input = WebDriverWait(self.driver, self.timeout).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='search']"))
+                )
+                search_input.send_keys("norma")
+                self.driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
+                
+                # Processa resultados
+                resultados = WebDriverWait(self.driver, self.timeout).until(
+                    EC.presence_of_all_elements_located((By.CSS_SELECTOR, ".result-item"))
+                )[:max_normas]
+                
+                normas = []
+                for item in resultados:
+                    try:
+                        normas.append(self._extrair_dados_norma(item.text))
+                    except Exception as e:
+                        logger.warning(f"Erro ao processar item: {str(e)}")
+                        continue
+                        
+                return normas
+                
+        except Exception as e:
+            logger.error(f"Erro na coleta de normas: {str(e)}")
+            return []
+
+    # ================== SUPPORT METHODS ==================
+    def _verificar_via_url_direta(self, tipo, numero):
+        """Tentativa de verificação via URL direta"""
         try:
             url = f"{self.base_url}/{tipo.lower()}/{numero}"
             self.driver.get(url)
@@ -121,49 +149,68 @@ class SEFAZScraper:
                 return False
             if "vigente" in self.driver.page_source.lower():
                 return True
+                
             return None
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Falha na verificação por URL: {str(e)}")
             return None
 
-    def _pesquisar_norma(self, tipo, numero):
-        """Pesquisa a norma no portal"""
+    def _verificar_via_pesquisa(self, tipo, numero):
+        """Tentativa de verificação via pesquisa"""
         try:
             query = f"{tipo} {numero}"
             url = f"{self.search_url}?q={urllib.parse.quote_plus(query)}"
             self.driver.get(url)
             
             WebDriverWait(self.driver, 15).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, ".result-item, .search-result")))
-                
-            return bool(self.driver.find_elements(By.CSS_SELECTOR, ".result-item, .search-result"))
-        except TimeoutException:
-            logger.warning("Timeout na pesquisa - nenhum resultado encontrado")
-            return None
-        except Exception as e:
-            logger.error(f"Erro na pesquisa: {str(e)}")
-            return None
-
-    def _extrair_status_norma(self):
-        """Extrai o status da norma nos resultados"""
-        try:
-            resultados = self.driver.find_elements(
-                By.CSS_SELECTOR, ".result-item, .search-result"
+                EC.presence_of_element_located((By.CSS_SELECTOR, ".result-item"))
             )
             
-            for resultado in resultados[:3]:  # Analisa apenas os 3 primeiros
-                texto = resultado.text.lower()
-                if "revogado" in texto or "cancelado" in texto:
-                    return False
-                if "vigente" in texto:
-                    return True
-                    
-            return True  # Default conservador
+            # Verifica status no primeiro resultado
+            primeiro_resultado = self.driver.find_element(By.CSS_SELECTOR, ".result-item")
+            if "revogado" in primeiro_resultado.text.lower():
+                return False
+            return True
+        except TimeoutException:
+            logger.warning("Nenhum resultado encontrado na pesquisa")
+            return None
         except Exception as e:
-            logger.error(f"Erro ao extrair status: {str(e)}")
+            logger.warning(f"Erro na pesquisa: {str(e)}")
             return None
 
-    def testar_verificacao_norma(self, tipo, numero):
-        """Método de teste completo para uma norma"""
+    def _extrair_dados_norma(self, texto_item):
+        """Extrai dados estruturados de um item de norma"""
+        padrao_tipo = r'(LEI|DECRETO|PORTARIA|INSTRUÇÃO NORMATIVA)\s'
+        padrao_numero = r'N[º°]\s*([\d\/-]+)'
+        padrao_data = r'(\d{2}\/\d{2}\/\d{4})'
+        
+        tipo = re.search(padrao_tipo, texto_item, re.IGNORECASE)
+        numero = re.search(padrao_numero, texto_item)
+        data = re.search(padrao_data, texto_item)
+        
+        return {
+            'tipo': tipo.group(1) if tipo else None,
+            'numero': numero.group(1) if numero else None,
+            'data': datetime.strptime(data.group(1), '%d/%m/%Y').date() if data else None,
+            'texto': texto_item[:500] + "..." if len(texto_item) > 500 else texto_item
+        }
+
+    # ================== TEST METHODS ==================
+    def testar_conexao(self):
+        """Testa a conexão com o portal"""
+        try:
+            with self.browser_session():
+                self.driver.get(self.base_url)
+                WebDriverWait(self.driver, 15).until(
+                    EC.presence_of_element_located((By.TAG_NAME, "body"))
+                )
+                return "SEFAZ" in self.driver.title
+        except Exception as e:
+            logger.error(f"Falha no teste de conexão: {str(e)}")
+            return False
+
+    def testar_fluxo_completo(self, tipo, numero):
+        """Teste completo do fluxo para uma norma específica"""
         print(f"\n=== TESTE PARA {tipo} {numero} ===")
         
         print("\n1. Testando conexão...")
@@ -173,7 +220,37 @@ class SEFAZScraper:
         print("✅ Conexão OK")
         
         print("\n2. Verificando vigência...")
-        resultado = self.verificar_vigencia_norma(tipo, numero)
+        resultado = self.verificar_vigencia(tipo, numero)
         print(f"Resultado: {'VIGENTE' if resultado else 'REVOGADA/NÃO ENCONTRADA'}")
         
+        print("\n3. Coletando normas relacionadas...")
+        normas = self.coletar_normas_recentes(3)
+        print(f"Encontradas {len(normas)} normas recentes")
+        
         return resultado
+    
+
+
+
+    #TESTE MANUAL
+    def testar_conexao_manual(self):
+        """Teste manual da conexão"""
+        try:
+            self._iniciar_navegador()
+            self.driver.get(self.base_url)
+            time.sleep(5)  # Tempo para visualização
+            
+            # Tirar screenshot para análise
+            self.driver.save_screenshot('conexao_manual.png')
+            print("Página carregada. Verifique o screenshot 'conexao_manual.png'")
+            
+            # Verificar elementos
+            print(f"Título da página: {self.driver.title}")
+            print(f"URL atual: {self.driver.current_url}")
+            
+            return "SEFAZ" in self.driver.title
+        except Exception as e:
+            print(f"Erro durante teste manual: {str(e)}")
+            return False
+        finally:
+            self._fechar_navegador() 
