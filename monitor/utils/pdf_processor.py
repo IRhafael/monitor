@@ -27,7 +27,7 @@ def norma_matcher_component(doc):
 class PDFProcessor:
     def __init__(self):
         self._setup_spacy()
-        self._setup_patterns()
+        #self._setup_patterns()
         self.limite_relevancia = 4
         self.max_retries = 3
         self.timeout = 30

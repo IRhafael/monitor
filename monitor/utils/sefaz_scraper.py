@@ -2,16 +2,32 @@
 import re
 import time
 import logging
+import urllib.parse
+import json
 from datetime import datetime
 from django.utils import timezone
-from monitor.models import LogExecucao, Norma
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
-import urllib.parse
+from selenium.common.exceptions import (TimeoutException, 
+                                      NoSuchElementException, 
+                                      WebDriverException)
+from bs4 import BeautifulSoup
+import nltk
+from nltk.tokenize import sent_tokenize
+from nltk.corpus import stopwords
+
+# Garante que os recursos do NLTK estejam disponíveis
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt')
+try:
+    nltk.data.find('corpora/stopwords')
+except LookupError:
+    nltk.download('stopwords')
 
 logger = logging.getLogger(__name__)
 
@@ -21,19 +37,22 @@ class SEFAZScraper:
         self.search_url = f"{self.base_url}/search-results"
         self.max_normas = max_normas
         self.driver = None
-        self.timeout = 20  # segundos
+        self.timeout = 30  # Aumentado para 30 segundos
+        self.max_retries = 3
+        self.stop_words = set(stopwords.words('portuguese'))
 
     def _iniciar_navegador(self):
-        """Configura o navegador Selenium com opções otimizadas"""
+        """Configura o navegador com opções otimizadas"""
         try:
             chrome_options = Options()
-            chrome_options.add_argument("--headless")
+            chrome_options.add_argument("--headless=new")  # Novo modo headless
             chrome_options.add_argument("--disable-gpu")
             chrome_options.add_argument("--no-sandbox")
             chrome_options.add_argument("--window-size=1280,720")
+            chrome_options.add_argument("--disable-dev-shm-usage")
             
             # Configurações para evitar detecção
-            chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+            chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
             chrome_options.add_experimental_option("useAutomationExtension", False)
             
@@ -54,64 +73,196 @@ class SEFAZScraper:
             finally:
                 self.driver = None
 
-    def verificar_vigencia_norma(self, tipo, numero):
-        """Verifica se uma norma específica está vigente"""
+    def _pesquisar_norma(self, tipo, numero):
+        """Executa a pesquisa no portal"""
         try:
-            if not self._iniciar_navegador():
-                return False
-                
-            # Acessa a página de pesquisa
-            self.driver.get(self.search_url)
-            time.sleep(2)  # Espera inicial
-
-            # Localiza e preenche o campo de busca
+            query = f"{tipo} {numero}".strip()
+            url = f"{self.search_url}?q={urllib.parse.quote_plus(query)}"
+            self.driver.get(url)
+            
+            # Aguarda o carregamento dos resultados
+            WebDriverWait(self.driver, self.timeout).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, ".search-results-container"))
+            )
+            
+            # Verifica se há resultados
             try:
-                search_input = WebDriverWait(self.driver, self.timeout).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='search'], input[type='text']"))
+                sem_resultados = self.driver.find_element(
+                    By.XPATH, "//*[contains(text(), 'Nenhum resultado encontrado')]"
                 )
-                search_input.clear()
-                search_input.send_keys(f"{tipo} {numero}")
-                
-                # Encontra e clica no botão de pesquisa
-                search_button = self.driver.find_element(
-                    By.CSS_SELECTOR, 
-                    "button[type='submit'], button.search-button, button.btn-primary"
-                )
-                search_button.click()
-                
-                # Aguarda os resultados - ajuste este seletor conforme necessário
-                WebDriverWait(self.driver, self.timeout).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, ".search-results, .results-container, .result-item"))
-                )
-                
-                # Analisa os resultados
-                resultados = self.driver.find_elements(
-                    By.CSS_SELECTOR, 
-                    ".result-item, .search-result, .norma-item"
-                )
-                
-                for resultado in resultados:
-                    texto = resultado.text.lower()
-                    if str(numero).lower() in texto and tipo.lower() in texto:
-                        return "revogado" not in texto and "cancelado" not in texto
-                
-                return False
-                
-            except TimeoutException:
-                logger.error("Timeout ao aguardar elementos da página")
-                return False
+                if sem_resultados:
+                    return None
             except NoSuchElementException:
-                logger.error("Elemento não encontrado na página")
-                return False
+                pass
                 
-        except WebDriverException as e:
-            logger.error(f"Erro no WebDriver: {str(e)}")
-            return False
+            return True
+            
+        except TimeoutException:
+            logger.error(f"Timeout ao pesquisar {tipo} {numero}")
+            return None
         except Exception as e:
-            logger.error(f"Erro inesperado: {str(e)}")
-            return False
-        finally:
-            self._fechar_navegador()
+            logger.error(f"Erro na pesquisa: {str(e)}")
+            return None
+
+    def _extrair_url_documento(self):
+        """Extrai a URL do documento nos resultados"""
+        try:
+            resultados = self.driver.find_elements(
+                By.CSS_SELECTOR, ".result-item, .search-result"
+            )
+            
+            for resultado in resultados[:1]:  # Pega apenas o primeiro resultado
+                try:
+                    link = resultado.find_element(By.CSS_SELECTOR, "a")
+                    return link.get_attribute("href")
+                except NoSuchElementException:
+                    continue
+                    
+            return None
+            
+        except Exception as e:
+            logger.error(f"Erro ao extrair URL do documento: {str(e)}")
+            return None
+
+    def _extrair_status_norma(self):
+        """Extrai o status da norma nos resultados"""
+        try:
+            resultados = self.driver.find_elements(
+                By.CSS_SELECTOR, ".result-item, .search-result"
+            )
+            
+            for resultado in resultados:
+                try:
+                    titulo = resultado.find_element(By.CSS_SELECTOR, "h3").text
+                    texto = resultado.text.lower()
+                    
+                    # Verifica tags de status
+                    tags = resultado.find_elements(By.CSS_SELECTOR, ".tag, .status-badge")
+                    for tag in tags:
+                        if "revogado" in tag.text.lower() or "cancelado" in tag.text.lower():
+                            return False
+                    
+                    # Verifica no texto completo
+                    if "revogado" in texto or "cancelado" in texto:
+                        return False
+                        
+                    return True
+                    
+                except NoSuchElementException:
+                    continue
+                    
+            return None
+            
+        except Exception as e:
+            logger.error(f"Erro ao extrair status: {str(e)}")
+            return None
+
+    def _extrair_conteudo_completo(self, url):
+        """Extrai o conteúdo completo de uma norma a partir da URL"""
+        try:
+            if not url:
+                return None
+                
+            self.driver.get(url)
+            time.sleep(2)
+            
+            # Aguarda carregamento do conteúdo
+            WebDriverWait(self.driver, self.timeout).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, ".document-content, .norma-content, article"))
+            )
+            
+            # Extrai o conteúdo da norma
+            conteudo_elemento = self.driver.find_element(
+                By.CSS_SELECTOR, ".document-content, .norma-content, article"
+            )
+            
+            return conteudo_elemento.text
+            
+        except TimeoutException:
+            logger.error(f"Timeout ao acessar documento: {url}")
+            return None
+        except NoSuchElementException:
+            logger.error(f"Conteúdo não encontrado em: {url}")
+            return None
+        except Exception as e:
+            logger.error(f"Erro ao extrair conteúdo: {str(e)}")
+            return None
+
+    def _gerar_resumo(self, texto, max_sentencas=5):
+        """Gera um resumo do texto utilizando NLTK"""
+        if not texto:
+            return "Conteúdo não disponível para resumo."
+            
+        try:
+            # Tokeniza as sentenças
+            sentencas = sent_tokenize(texto, language='portuguese')
+            
+            # Se o texto for pequeno, retorna ele mesmo
+            if len(sentencas) <= max_sentencas:
+                return texto
+                
+            # Escolhe as primeiras sentenças como resumo (geralmente são mais informativas em normas)
+            resumo = ' '.join(sentencas[:max_sentencas])
+            return resumo
+            
+        except Exception as e:
+            logger.error(f"Erro ao gerar resumo: {str(e)}")
+            return texto[:500] + "..."  # Fallback simples
+    
+    def _extrair_referencias_normas(self, texto):
+        """Extrai referências a outras normas no texto"""
+        if not texto:
+            return []
+            
+        referencias = []
+        
+        # Padrões comuns de referências a normas
+        padroes = [
+            r'(Lei|Decreto|Portaria|Instrução Normativa|Resolução|Deliberação)\s+(?:n[º°.]?\s*)?(\d[\d\.\/\-]+)',
+            r'(LEI|DECRETO|PORTARIA|INSTRUÇÃO NORMATIVA|RESOLUÇÃO|DELIBERAÇÃO)\s+(?:N[º°.]?\s*)?(\d[\d\.\/\-]+)'
+        ]
+        
+        for padrao in padroes:
+            matches = re.finditer(padrao, texto, re.IGNORECASE)
+            for match in matches:
+                tipo = match.group(1).strip()
+                numero = re.sub(r'[^\d\/]', '', match.group(2)).strip()
+                
+                # Evita duplicatas
+                referencia = {'tipo': tipo.upper(), 'numero': numero}
+                if referencia not in referencias:
+                    referencias.append(referencia)
+                    
+        return referencias
+
+    def verificar_vigencia_norma(self, tipo, numero):
+        """Verifica se uma norma está vigente com múltiplas tentativas"""
+        for tentativa in range(1, self.max_retries + 1):
+            try:
+                logger.info(f"Verificando {tipo} {numero} (tentativa {tentativa})")
+                
+                if not self._iniciar_navegador():
+                    continue
+                    
+                resultado_pesquisa = self._pesquisar_norma(tipo, numero)
+                if resultado_pesquisa is None:
+                    logger.warning(f"Norma {tipo} {numero} não encontrada")
+                    continue
+                    
+                status = self._extrair_status_norma()
+                if status is not None:
+                    return status
+                    
+                logger.warning(f"Status da norma {tipo} {numero} não determinado")
+                
+            except Exception as e:
+                logger.error(f"Erro na tentativa {tentativa}: {str(e)}")
+            finally:
+                self._fechar_navegador()
+                time.sleep(2)  # Intervalo entre tentativas
+                
+        logger.error(f"Falha ao verificar {tipo} {numero} após {self.max_retries} tentativas")
+        return False
 
     def coletar_normas(self):
         """Coleta as últimas normas publicadas"""
@@ -135,7 +286,7 @@ class SEFAZScraper:
                 )
                 search_button.click()
                 
-                # Aguarda resultados - ajuste este seletor
+                # Aguarda resultados
                 WebDriverWait(self.driver, self.timeout).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, ".result-item, .search-result, .norma-item"))
                 )
@@ -225,6 +376,81 @@ class SEFAZScraper:
                     continue
         return None
 
+    def pesquisar_norma_detalhada(self, tipo, numero):
+        """Pesquisa e coleta informações detalhadas de uma norma"""
+        logger.info(f"Pesquisando detalhes da norma {tipo} {numero}")
+        
+        resultado = {
+            'tipo': tipo,
+            'numero': numero,
+            'encontrada': False,
+            'vigente': False,
+            'url_documento': None,
+            'conteudo_completo': None,
+            'resumo': None,
+            'referencias': []
+        }
+        
+        for tentativa in range(1, self.max_retries + 1):
+            try:
+                if not self._iniciar_navegador():
+                    continue
+                    
+                # Pesquisa a norma
+                encontrou = self._pesquisar_norma(tipo, numero)
+                if not encontrou:
+                    logger.warning(f"Norma {tipo} {numero} não encontrada (tentativa {tentativa})")
+                    continue
+                    
+                resultado['encontrada'] = True
+                
+                # Verifica vigência
+                status = self._extrair_status_norma()
+                resultado['vigente'] = status if status is not None else False
+                
+                # Extrai URL do documento
+                url_documento = self._extrair_url_documento()
+                resultado['url_documento'] = url_documento
+                
+                # Se encontrou URL, extrai conteúdo completo
+                if url_documento:
+                    conteudo = self._extrair_conteudo_completo(url_documento)
+                    resultado['conteudo_completo'] = conteudo
+                    
+                    # Gera resumo
+                    if conteudo:
+                        resultado['resumo'] = self._gerar_resumo(conteudo)
+                        
+                        # Extrai referências a outras normas
+                        resultado['referencias'] = self._extrair_referencias_normas(conteudo)
+                
+                return resultado
+                
+            except Exception as e:
+                logger.error(f"Erro ao pesquisar norma detalhada: {str(e)}")
+            finally:
+                self._fechar_navegador()
+                time.sleep(1)  # Intervalo entre tentativas
+                
+        return resultado
+
+    def pesquisar_referencias_entre_normas(self, normas_coletadas, max_refs=5):
+        """Pesquisa referências entre as normas coletadas"""
+        logger.info(f"Analisando referências entre {len(normas_coletadas)} normas")
+        
+        normas_detalhadas = []
+        
+        # Limita o número de normas para análise detalhada para evitar sobrecarga
+        for norma in normas_coletadas[:max_refs]:
+            try:
+                detalhes = self.pesquisar_norma_detalhada(norma['tipo'], norma['numero'])
+                if detalhes['encontrada']:
+                    normas_detalhadas.append(detalhes)
+            except Exception as e:
+                logger.error(f"Erro ao processar referências: {str(e)}")
+                
+        return normas_detalhadas
+
     def iniciar_coleta(self):
         """Método principal para iniciar a coleta"""
         logger.info("Iniciando coleta de normas")
@@ -233,18 +459,31 @@ class SEFAZScraper:
             normas_coletadas = self.coletar_normas()
             normas_salvas = 0
             
-            for norma in normas_coletadas:
-                _, created = Norma.objects.get_or_create(
-                    tipo=norma['tipo'],
-                    numero=norma['numero'],
-                    defaults={
-                        'data': norma['data'],
-                        'conteudo': norma.get('conteudo', '')
-                    }
-                )
-                if created:
-                    normas_salvas += 1
+            # Adiciona informações de vigência para cada norma
+            for i, norma in enumerate(normas_coletadas):
+                try:
+                    # Limita a verificação de vigência às primeiras normas para evitar sobrecarga
+                    if i < 10:  # Verifica apenas as 10 primeiras
+                        vigente = self.verificar_vigencia_norma(norma['tipo'], norma['numero'])
+                        norma['vigente'] = vigente
+                    
+                    # Salva a norma no banco de dados
+                    _, created = Norma.objects.get_or_create(
+                        tipo=norma['tipo'],
+                        numero=norma['numero'],
+                        defaults={
+                            'data': norma['data'],
+                            'conteudo': norma.get('conteudo', ''),
+                            'vigente': norma.get('vigente', True)
+                        }
+                    )
+                    if created:
+                        normas_salvas += 1
+                        
+                except Exception as e:
+                    logger.error(f"Erro ao processar norma {norma['tipo']} {norma['numero']}: {str(e)}")
             
+            # Registra log de execução
             LogExecucao.objects.create(
                 tipo_execucao='SEFAZ',
                 status='SUCESSO',
@@ -268,6 +507,56 @@ class SEFAZScraper:
                 data_fim=timezone.now(),
                 erro_detalhado=str(e)
             )
+            return {
+                'status': 'error',
+                'message': str(e)
+            }
+    
+    def gerar_relatorio_normas(self, normas_ids=None, limit=10):
+        """Gera um relatório detalhado das normas, opcionalmente filtrando por IDs"""
+        logger.info(f"Gerando relatório de normas")
+        
+        try:
+            # Define a query base
+            if normas_ids:
+                normas = Norma.objects.filter(id__in=normas_ids)
+            else:
+                normas = Norma.objects.all().order_by('-data')[:limit]
+            
+            relatorio = []
+            
+            for norma in normas:
+                # Pesquisa detalhes completos da norma
+                detalhes = self.pesquisar_norma_detalhada(norma.tipo, norma.numero)
+                
+                # Atualiza registro no banco com informações novas
+                if detalhes['encontrada']:
+                    norma.vigente = detalhes['vigente']
+                    if detalhes['url_documento']:
+                        norma.url_documento = detalhes['url_documento']
+                    if detalhes['conteudo_completo']:
+                        norma.conteudo = detalhes['conteudo_completo']
+                    norma.save()
+                
+                # Adiciona ao relatório
+                relatorio.append({
+                    'id': norma.id,
+                    'tipo': norma.tipo,
+                    'numero': norma.numero,
+                    'data': norma.data.strftime('%d/%m/%Y'),
+                    'vigente': detalhes['vigente'] if detalhes['encontrada'] else norma.vigente,
+                    'resumo': detalhes['resumo'] if detalhes['resumo'] else self._gerar_resumo(norma.conteudo),
+                    'referencias': detalhes['referencias'] if detalhes['encontrada'] else []
+                })
+            
+            return {
+                'status': 'success',
+                'normas': relatorio,
+                'total': len(relatorio)
+            }
+            
+        except Exception as e:
+            logger.error(f"Erro ao gerar relatório: {str(e)}", exc_info=True)
             return {
                 'status': 'error',
                 'message': str(e)

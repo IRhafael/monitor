@@ -28,7 +28,7 @@ class Command(BaseCommand):
         self.stdout.write('\n=== TESTANDO PROCESSAMENTO DE PDFs ===')
         pdf_processor = PDFProcessor()
 
-        for doc in docs_nao_processados[:5]:  # Limita a 5 para teste
+        for doc in docs_nao_processados[:1]:  # Limita a 5 para teste
             self.stdout.write(f'Processando documento ID {doc.id} - {doc.titulo}')
 
             try:
@@ -60,7 +60,7 @@ class Command(BaseCommand):
 
         if doc_com_normas:
             self.stdout.write(f'Verificando normas para documento ID {doc_com_normas.id}')
-            normas = integrador.verificar_vigencia_normas(doc_com_normas.id)
+            normas = integrador.verificar_vigencia_automatica(doc_com_normas.id)
             self.stdout.write(f'Encontradas {len(normas)} normas:')
             for norma in normas:
                 self.stdout.write(f'- {norma.tipo} {norma.numero} ({norma.situacao})')

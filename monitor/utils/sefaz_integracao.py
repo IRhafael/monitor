@@ -1,95 +1,76 @@
 # monitor/utils/sefaz_integracao.py
 import re
-from datetime import datetime
-from venv import logger
-
-import spacy
-from .diario_scraper import DiarioOficialScraper
+import logging
+from datetime import datetime, timedelta
+from django.utils import timezone
+from django.db.models import Q
+from monitor.models import Documento, NormaVigente
 from .sefaz_scraper import SEFAZScraper
-from ..models import Documento, NormaVigente
+
+logger = logging.getLogger(__name__)
 
 class IntegradorSEFAZ:
-    BASE_URL = "https://www.sefaz.pi.gov.br"
-    
-    """
-    Classe para integrar dados entre Diário Oficial e SEFAZ
-    """
+    def __init__(self):
+        self.cache = {}
+        self.max_retries = 3
+        self.scraper = SEFAZScraper()
+
     def buscar_norma_especifica(self, tipo, numero):
-        scraper = SEFAZScraper()
-        vigente = scraper.verificar_vigencia_norma(tipo, numero)
-    
+        """Verifica se uma norma específica está vigente na SEFAZ"""
+        vigente = self.scraper.verificar_vigencia_norma(tipo, numero)
         return {
             'tipo': tipo.upper(),
             'numero': self._padronizar_numero_norma(numero),
             'vigente': vigente
         }
-    
-    def __init__(self):
-        self.cache = {}  # Simples cache em memória
-        self.max_retries = 3
-
-    def buscar_norma_com_cache(self, tipo, numero):
-        cache_key = f"{tipo}_{numero}"
-        if cache_key in self.cache:
-            return self.cache[cache_key]
-            
-        norma = self.buscar_norma_especifica(tipo, numero)
-        if norma:
-            self.cache[cache_key] = norma
-        return norma
-    
-    def extrair_normas_do_texto(self, texto):
-        """Versão melhorada com spaCy"""
-        if not hasattr(self, 'nlp'):
-            self.nlp = spacy.load("pt_core_news_sm")
-        
-        doc = self.nlp(texto)
-        normas = []
-        
-        # Padrão para encontrar sequências do tipo "Lei 1234"
-        for match in self.norma_matcher(doc):
-            span = doc[match[1]:match[2]]
-            tipo = self._determinar_tipo_norma(span.text)
-            numero = self._extrair_numero_norma(span.text)
-            
-            if tipo and numero:
-                normas.append((tipo, numero))
-        
-        return list(set(normas))
 
 
-    def verificar_vigencia_automatica(self):
-        """Verifica normas não validadas nos últimos 30 dias"""
-        from datetime import datetime, timedelta
-        data_limite = datetime.now() - timedelta(days=30)
-        
-        normas = NormaVigente.objects.filter(
-            Q(data_verificacao__lt=data_limite) | Q(data_verificacao__isnull=True),
-            situacao="VIGENTE"
-        )
-        
-        for norma in normas:
-            vigente = self.buscar_norma_especifica(norma.tipo, norma.numero)
-            norma.situacao = "VIGENTE" if vigente else "REVOGADA"
-            norma.data_verificacao = datetime.now()
-            norma.save()
-    
 
-    def _padronizar_numero_norma(self, numero):
-        """Padroniza o formato do número da norma"""
-        numero = numero.upper()
-        # Remove caracteres especiais e espaços extras
-        numero = re.sub(r'[^\d/]', '', numero)
-        return numero.strip()
+    def verificar_vigencia_norma(self, tipo, numero):
+        """Versão melhorada com mais tentativas e logs detalhados"""
+        for tentativa in range(1, self.max_retries + 1):
+            try:
+                if not self._iniciar_navegador():
+                    logger.error("Falha ao iniciar navegador")
+                    return False
+                    
+                logger.info(f"Verificando norma {tipo} {numero} (tentativa {tentativa})")
+                
+                # Codificação segura para URLs
+                query = f"{tipo}+{numero}"
+                url = f"{self.search_url}?q={urllib.parse.quote_plus(query)}"
+                self.driver.get(url)
+                
+                # Aguardar e processar resultados
+                WebDriverWait(self.driver, self.timeout).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, ".result-item"))
+                )
+                
+                resultados = self.driver.find_elements(By.CSS_SELECTOR, ".result-item")
+                for resultado in resultados:
+                    texto = resultado.text.lower()
+                    if str(numero).lower() in texto and tipo.lower() in texto:
+                        return "revogado" not in texto and "cancelado" not in texto
+                        
+                logger.warning(f"Norma {tipo} {numero} não encontrada nos resultados")
+                return False
+                
+            except Exception as e:
+                logger.error(f"Erro na tentativa {tentativa}: {str(e)}")
+                time.sleep(2)  # Espera entre tentativas
+            finally:
+                self._fechar_navegador()
+        
+        return False
 
     def verificar_documentos_nao_verificados(self):
+        """Verifica todos os documentos não verificados"""
         documentos = Documento.objects.filter(verificado_sefaz=False)
         logger.info(f"Verificando {documentos.count()} documentos na SEFAZ")
         
         resultados = []
         for doc in documentos:
             try:
-                logger.info(f"Verificando documento ID {doc.id} - {doc.titulo}")
                 normas = self.verificar_vigencia_normas(doc.id)
                 resultados.append({
                     'documento': doc,
@@ -97,25 +78,84 @@ class IntegradorSEFAZ:
                     'status': 'sucesso'
                 })
             except Exception as e:
-                logger.error(f"Erro ao verificar documento ID {doc.id}: {str(e)}")
                 resultados.append({
                     'documento': doc,
                     'erro': str(e),
                     'status': 'erro'
                 })
         
-        logger.info(f"Verificação na SEFAZ concluída. {len(resultados)} documentos processados")
         return resultados
-    
+
+    def verificar_vigencia_automatica(self, documento):
+        """Verifica normas não validadas nos últimos 30 dias"""
+        data_limite = timezone.now() - timedelta(days=30)
+        
+        normas = NormaVigente.objects.filter(
+            Q(data_verificacao__lt=data_limite) | Q(data_verificacao__isnull=True),
+            situacao="VIGENTE"
+        )
+        
+        for norma in normas:
+            resultado = self.buscar_norma_especifica(norma.tipo, norma.numero)
+            norma.situacao = "VIGENTE" if resultado['vigente'] else "REVOGADA"
+            norma.data_verificacao = timezone.now()
+            norma.save()
+
+        return []
+
+    def _determinar_tipo_norma(self, texto):
+        """Determina o tipo da norma com base no texto"""
+        texto = texto.lower()
+        
+        if "lei complementar" in texto:
+            return "LC"
+        elif "medida provisória" in texto:
+            return "MP"
+        elif "portaria" in texto:
+            return "PORTARIA"
+        elif "decreto" in texto:
+            return "DECRETO"
+        elif "lei" in texto:
+            return "LEI"
+        return None
+
+    def _extrair_numero_norma(self, texto):
+        """Extrai o número da norma do texto"""
+        match = re.search(r'(\d+[/-]?\d*)', texto)
+        return re.sub(r'[^\d/]', '', match.group(1)) if match else None
+
+    def extrair_normas_do_texto(self, texto):
+        """Extrai normas mencionadas no texto"""
+        if not texto:
+            return []
+            
+        padroes = [
+            r'(?i)(Lei|Decreto|Portaria|Instrução Normativa|Resolução)\s+(?:n?[º°]?\s*)?(\d+[\.\/-]?\d*)',
+            r'(?i)(Lei Complementar)\s+(n?[º°]?\s*)?(\d+)',
+            r'(?i)(Medida Provisória)\s+(n?[º°]?\s*)?(\d+)'
+        ]
+        
+        normas = []
+        for padrao in padroes:
+            matches = re.finditer(padrao, texto)
+            for match in matches:
+                try:
+                    tipo = self._determinar_tipo_norma(match.group(1))
+                    numero = self._extrair_numero_norma(match.group(2))
+                    if tipo and numero:
+                        normas.append((tipo, numero))
+                except (IndexError, AttributeError):
+                    continue
+                    
+        return list(set(normas))
 
     def comparar_mudancas(self, dias_retroativos=30):
-        from datetime import datetime, timedelta
         """
         Compara as normas do Diário Oficial com as da SEFAZ e identifica mudanças
         Args:
             dias_retroativos: número de dias para analisar (padrão: 30)
         """
-        data_corte = datetime.now() - timedelta(days=dias_retroativos)
+        data_corte = timezone.now() - timedelta(days=dias_retroativos)
         
         # Normas vigentes na SEFAZ
         normas_sefaz = NormaVigente.objects.filter(fonte="SEFAZ", situacao="VIGENTE")
@@ -154,9 +194,14 @@ class IntegradorSEFAZ:
 
     def _obter_ultima_menção(self, norma):
         """Obtém a última data em que a norma foi mencionada"""
-        documentos = Documento.objects.filter(
+        documento = Documento.objects.filter(
             texto_completo__icontains=norma.numero,
             normas_relacionadas=norma
         ).order_by('-data_publicacao').first()
         
-        return documentos.data_publicacao if documentos else "Nunca mencionada"
+        return documento.data_publicacao.strftime("%d/%m/%Y") if documento else "Nunca mencionada"
+
+    def _padronizar_numero_norma(self, numero):
+        """Padroniza o formato do número da norma"""
+        numero = re.sub(r'[^\d/]', '', str(numero))
+        return numero.strip()
