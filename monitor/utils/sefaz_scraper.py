@@ -14,6 +14,11 @@ from webdriver_manager.chrome import ChromeDriverManager
 import requests
 from bs4 import BeautifulSoup
 from contextlib import contextmanager
+from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 
 logger = logging.getLogger(__name__)
@@ -93,7 +98,6 @@ class SEFAZScraper:
     def _pesquisar_norma(self, norm_type, norm_number):
         """Executa a pesquisa no portal"""
         try:
-            # Localiza o campo de busca pelo atributo formcontrolname
             search_input = self._wait_for_element(
                 By.CSS_SELECTOR, "input[formcontrolname='searchQuery']")
             
@@ -101,17 +105,21 @@ class SEFAZScraper:
                 self.logger.error("Campo de busca não encontrado")
                 return False
             
-            # Preenche o campo de busca
-            termo_busca = f"{norm_type} {norm_number}"
+            # Preenche o campo de busca com wildcard no final
+            termo_busca = f"{norm_type} {norm_number}*"
             search_input.clear()
             search_input.send_keys(termo_busca)
             self._save_debug_info("02_campo_preenchido")
             
-            # Submete a pesquisa
-            search_input.send_keys(Keys.RETURN)
-            time.sleep(3)  # Espera o carregamento
-            self._save_debug_info("03_pos_busca")
+            # Clica no botão de busca (melhor que usar Keys.RETURN)
+            search_button = self.driver.find_element(By.CSS_SELECTOR, "img[alt='search']")
+            search_button.click()
             
+            # Aguarda o carregamento
+            WebDriverWait(self.driver, 10).until(
+                lambda d: d.find_element(By.TAG_NAME, "iframe").is_displayed())
+            
+            self._save_debug_info("03_pos_busca")
             return True
             
         except Exception as e:
@@ -120,7 +128,7 @@ class SEFAZScraper:
             return False
 
     def get_norm_details(self, norm_type, norm_number):
-        """Busca aprimorada com execução real da pesquisa"""
+        """Busca detalhes da norma com base na estrutura HTML fornecida"""
         try:
             with self.browser_session():
                 # 1. Acessa a página principal
@@ -131,45 +139,109 @@ class SEFAZScraper:
                 if not self._pesquisar_norma(norm_type, norm_number):
                     return None
                 
-                # 3. Verifica se há iframe de resultados
-                if not self._switch_to_results_frame():
-                    self.logger.warning("Nenhum iframe de resultados encontrado")
+                # 3. Aguarda e muda para o iframe de resultados
+                try:
+                    WebDriverWait(self.driver, 10).until(
+                        EC.frame_to_be_available_and_switch_to_it((By.TAG_NAME, "iframe")))
+                    
+                    # 4. Aguarda o corpo do documento carregar
+                    WebDriverWait(self.driver, 10).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "div.document-body")))
+                    
+                    # 5. Extrai as informações da norma
+                    doc_body = self.driver.find_element(By.CSS_SELECTOR, "div.document-body")
+                    
+                    # Extrai o texto principal
+                    snippet = doc_body.find_element(By.CSS_SELECTOR, "div.field-snippet span.value").text
+                    
+                    # Extrai os campos individuais
+                    fields = {
+                        'situacao': self._extract_field(doc_body, "field-situacao"),
+                        'inicio_vigencia': self._extract_field(doc_body, "field-data_assinatura"),
+                        'data_publicacao': self._extract_field(doc_body, "field-data_publicacao"),
+                        'link_publicacao': self._extract_link(doc_body, "field-link_fonte"),
+                        'instituicao': self._extract_field(doc_body, "field-instituicao"),
+                        'processo_sei': self._extract_field(doc_body, "field-processo"),
+                        'documento_sei': self._extract_field(doc_body, "field-secao"),
+                        'apelido': self._extract_field(doc_body, "field-apelido"),
+                        'ementa': self._extract_field(doc_body, "field-ementa"),
+                        'altera': self._extract_links(doc_body, "field-alt")
+                    }
+                    
+                    # Constrói o resultado
+                    result = {
+                        'norma': f"{norm_type} {norm_number}",
+                        'texto_completo': snippet,
+                        **fields
+                    }
+                    
+                    self._save_debug_info("04_norma_encontrada")
+                    return result
+                    
+                except TimeoutException:
+                    self.logger.warning("Tempo excedido ao carregar resultados")
                     return None
-                
-                # 4. Processa os resultados
-                results = self._wait_for_element(
-                    By.CSS_SELECTOR, ".resultado-busca, .result-item, .search-result")
-                
-                if not results:
-                    self.logger.warning("Nenhum resultado encontrado")
+                except NoSuchElementException as e:
+                    self.logger.warning(f"Elemento não encontrado: {str(e)}")
                     return None
-                
-                # 5. Obtém o HTML dos resultados
-                frame_html = self.driver.page_source
-                soup = BeautifulSoup(frame_html, 'html.parser')
-                
-                # 6. Procura a norma específica
-                clean_number = self._clean_number(norm_number)
-                results = soup.select(".resultado-busca, .result-item, .search-result")
-                
-                for result in results:
-                    if self._is_matching_norm(result.get_text(), norm_type, clean_number):
-                        self._save_debug_info("04_norma_encontrada")
-                        return {
-                            'texto': result.get_text(separator=' ', strip=True),
-                            'elementos': len(results)
-                        }
-                
-                self.logger.warning("Norma não encontrada nos resultados")
-                return None
-                
+                    
         except Exception as e:
             self.logger.error(f"Erro geral: {str(e)}")
             self._save_debug_info("99_erro_geral")
             return None
         finally:
             if self.driver:
-                self.driver.switch_to.default_content()
+                try:
+                    self.driver.switch_to.default_content()
+                except:
+                    pass
+
+    def _has_search_results(self):
+        """Verifica se a busca retornou resultados"""
+        try:
+            # Verifica mensagem de "nenhum resultado"
+            no_results = self.driver.find_elements(By.XPATH, 
+                "//*[contains(text(), 'Nenhum resultado') or contains(text(), 'No results')]")
+            return not bool(no_results)
+        except:
+            return True
+        
+    def _extract_field(self, parent, field_class):
+        """Extrai o valor de um campo específico"""
+        try:
+            field = parent.find_element(By.CSS_SELECTOR, f"div.{field_class}")
+            # Remove o rótulo do campo (texto em strong)
+            for strong in field.find_elements(By.TAG_NAME, "strong"):
+                field_text = field.text.replace(strong.text, "").strip()
+            return field_text
+        except NoSuchElementException:
+            return None
+        
+    def _extract_link(self, parent, field_class):
+        """Extrai um link de um campo específico"""
+        try:
+            field = parent.find_element(By.CSS_SELECTOR, f"div.{field_class}")
+            link = field.find_element(By.TAG_NAME, "a")
+            return {
+                'texto': link.text,
+                'url': link.get_attribute("href")
+            }
+        except NoSuchElementException:
+            return None
+
+    def _extract_links(self, parent, field_class):
+        """Extrai múltiplos links de um campo (como 'Altera')"""
+        try:
+            field = parent.find_element(By.CSS_SELECTOR, f"div.{field_class}")
+            links = []
+            for link in field.find_elements(By.TAG_NAME, "a"):
+                links.append({
+                    'texto': link.text,
+                    'url': link.get_attribute("href")
+                })
+            return links
+        except NoSuchElementException:
+            return None
 
     def _switch_to_results_frame(self):
         """Versão aprimorada para localizar iframe de resultados"""
