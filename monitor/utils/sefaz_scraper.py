@@ -5,23 +5,22 @@ import time
 import logging
 import urllib.parse
 from datetime import datetime
-from django.utils import timezone
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import (TimeoutException, 
-                                      NoSuchElementException, 
-                                      WebDriverException)
-from selenium.webdriver.chrome.service import Service as ChromeService
-from contextlib import contextmanager
-import os
-from bs4 import BeautifulSoup
-from selenium import webdriver
+from selenium.common.exceptions import (
+    TimeoutException, 
+    NoSuchElementException, 
+    WebDriverException,
+    SessionNotCreatedException,
+    StaleElementReferenceException
+)
 from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
+from contextlib import contextmanager
 from webdriver_manager.chrome import ChromeDriverManager
-import logging
+import requests
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
@@ -31,21 +30,22 @@ class SEFAZScraper:
         self.timeout = 30
         self.driver = None
         
-        # Configuração mais robusta do ChromeDriver
+        # Configuração do ChromeDriver
         self.chrome_options = Options()
         self.chrome_options.add_argument("--headless=new")
         self.chrome_options.add_argument("--no-sandbox")
         self.chrome_options.add_argument("--disable-dev-shm-usage")
         self.chrome_options.add_argument("--disable-gpu")
         self.chrome_options.add_argument("--window-size=1920,1080")
+        self.chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         
-        # Configuração de logging
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
 
     @contextmanager
     def browser_session(self):
-        """Gerenciador de contexto mais robusto"""
+        """Gerenciador de contexto para a sessão do navegador"""
+        self.driver = None
         try:
             self.driver = webdriver.Chrome(
                 service=Service(ChromeDriverManager().install()),
@@ -58,261 +58,255 @@ class SEFAZScraper:
             raise
         finally:
             if self.driver:
-                self.driver.quit()
-                self.driver = None
-
-    def _start_browser(self):
-        """Configura e inicia o navegador"""
-        try:
-            chrome_options = Options()
-            chrome_options.add_argument("--headless=new")
-            chrome_options.add_argument("--no-sandbox")
-            chrome_options.add_argument("--disable-dev-shm-usage")
-            chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-            
-            self.driver = webdriver.Chrome(
-                service=self.chrome_service,
-                options=chrome_options
-            )
-            self.driver.set_page_load_timeout(self.timeout)
-            return True
-        except Exception as e:
-            logger.error(f"Browser start error: {str(e)}")
-            return False
-
-    def _close_browser(self):
-        """Fecha o navegador corretamente"""
-        if self.driver:
-            try:
-                self.driver.quit()
-            except Exception as e:
-                logger.warning(f"Error closing browser: {str(e)}")
-            finally:
-                self.driver = None
-
-    def _find_norm_item(self, norm_type, norm_number):
-        """Encontra o elemento HTML correto da norma"""
-        all_items = self.driver.find_elements(By.CSS_SELECTOR, ".search-results .result-item")
-        
-        # Padroniza o número para comparação
-        clean_number = re.sub(r'[^\d/]', '', norm_number)
-        
-        for item in all_items:
-            # Verifica no snippet (campo que contém tipo e número)
-            snippet = item.find_element(By.CSS_SELECTOR, ".field-snippet").text
-            if (norm_type.lower() in snippet.lower() and 
-                clean_number in re.sub(r'[^\d/]', '', snippet)):
-                return item
-        return None
-    
-    def _extract_norm_data(self, norm_element):
-            """Extrai todos os campos da norma conforme a tabela fornecida"""
-            fields_map = {
-                'situacao': '.field-situacao',
-                'data_assinatura': '.field-data_assinatura',
-                'data_publicacao': '.field-data_publicacao',
-                'link_fonte': '.field-link_fonte a',
-                'instituicao': '.field-instituicao',
-                'processo': '.field-processo',
-                'sei': '.field-sei',
-                'apelido': '.field-apelido',
-                'ementa': '.field-ementa',
-                'alt': '.field-alt'
-            }
-            
-            data = {}
-            for field, selector in fields_map.items():
                 try:
-                    element = norm_element.find_element(By.CSS_SELECTOR, selector)
-                    data[field] = element.text.strip()
-                    if field == 'link_fonte':  # Pega o href se for link
-                        data['link_fonte_url'] = element.get_attribute('href')
-                except NoSuchElementException:
-                    data[field] = None
-            
-            return data
+                    self.driver.quit()
+                except Exception as e:
+                    self.logger.warning(f"Erro ao fechar navegador: {str(e)}")
+                self.driver = None
 
-    
-
-    def check_norm_status(self, norm_type, norm_number):
-        """Verifica se a norma existe e está vigente"""
+    def _wait_for_element(self, by, value, timeout=30):
+        """Espera por um elemento específico"""
         try:
-            details = self.get_norm_details(norm_type, norm_number)
-            return details is not None and details.get('situacao') == 'VIGENTE'
-        except Exception as e:
-            self.logger.error(f"Erro ao verificar status: {str(e)}")
-            return False
-
-    def _check_via_search(self, norm_type, norm_number):
-        """Verifica status via pesquisa avançada"""
-        try:
-            query = f"{norm_type.upper()} {norm_number}"
-            self.driver.get(f"{self.search_url}?q={urllib.parse.quote_plus(query)}")
-            
-            WebDriverWait(self.driver, 15).until(
-                lambda d: "resultado" in d.page_source.lower() or "busca" in d.page_source.lower()
+            return WebDriverWait(self.driver, timeout).until(
+                EC.presence_of_element_located((by, value))
             )
-            
-            if "nenhum resultado" in self.driver.page_source.lower():
-                return None
-            
-            results = self.driver.find_elements(By.CSS_SELECTOR, ".result-item, .search-result")
-            if not results:
-                return None
-                
-            norm_number_clean = norm_number.lower().replace(".", "").replace("/", "-")
-            
-            for result in results:
-                if (norm_type.lower() in result.text.lower() and 
-                    (norm_number.lower() in result.text.lower() or 
-                     norm_number_clean in result.text.lower().replace("/", "-"))):
-                    
-                    try:
-                        result.click()
-                    except:
-                        try:
-                            link = result.find_element(By.TAG_NAME, "a").get_attribute("href")
-                            if link:
-                                self.driver.get(link)
-                            else:
-                                return None
-                        except:
-                            return None
-                    
-                    WebDriverWait(self.driver, 15).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "div.document-wrapper.clearfix")))
-                    
-                    details = self._get_norm_details()
-                    status = self._determine_status_from_details(details)
-                    return status if status is not None else True
-            
-            return None
-            
         except TimeoutException:
-            logger.warning("Timeout waiting for search results")
-            return None
-        except Exception as e:
-            logger.error(f"Search error: {str(e)}")
+            self.logger.warning(f"Elemento não encontrado: {value}")
             return None
 
-    def _check_via_direct_url(self, norm_type, norm_number):
-        """Tenta verificar status via URL direta"""
+    def _clean_number(self, number):
+        """Padroniza números para comparação"""
+        return re.sub(r'[^\d/]', '', number).lower()
+
+    def _extract_norm_data(self, norm_element):
+        """Extrai dados da norma com tratamento robusto"""
         try:
-            norm_type_url = norm_type.lower()
-            norm_number_url = norm_number.replace('/', '-')
-            
-            urls_to_try = [
-                f"{self.base_url}/{norm_type_url}/{norm_number_url}",
-                f"{self.base_url}/{norm_type_url.lower()}/{norm_number}",
-                f"{self.base_url}/{norm_type_url.lower()}/{norm_number.replace('/', '')}"
-            ]
-            
-            for url in urls_to_try:
-                self.driver.get(url)
-                time.sleep(2)
-                
-                if "error" in self.driver.current_url.lower() or "404" in self.driver.current_url:
-                    continue
-                
-                page_source = self.driver.page_source.lower()
-                
-                if any(term in page_source for term in ["revogado", "revogada", "não vigente"]):
-                    return False
-                
-                if any(term in page_source for term in ["vigente", "em vigor"]):
-                    return True
-                
-                if (norm_type.lower() in page_source and 
-                    norm_number.replace('/', '-') in page_source):
-                    return True
-            
-            return None
-            
+            data = {
+                'resumo': self._get_element_text(norm_element, '.field-snippet'),
+                'situacao': self._get_element_text(norm_element, '.field-situacao'),
+                'data_assinatura': self._get_element_text(norm_element, '.field-data_assinatura'),
+                'data_publicacao': self._get_element_text(norm_element, '.field-data_publicacao'),
+                'instituicao': self._get_element_text(norm_element, '.field-instituicao'),
+                'processo': self._get_element_text(norm_element, '.field-processo'),
+                'sei': self._get_element_text(norm_element, '.field-sei'),
+                'apelido': self._get_element_text(norm_element, '.field-apelido'),
+                'ementa': self._get_element_text(norm_element, '.field-ementa'),
+                'leis_alteradas': self._get_alt_laws(norm_element),
+                'link_fonte': self._get_link_text(norm_element),
+                'link_fonte_url': self._get_link_href(norm_element)
+            }
+            return {k: v for k, v in data.items() if v is not None}
         except Exception as e:
-            logger.warning(f"Direct URL check failed: {str(e)}")
+            self.logger.error(f"Erro ao extrair dados: {str(e)}")
             return None
+
+    def _get_element_text(self, parent, selector):
+        """Obtém texto de elemento com tratamento de erro"""
+        try:
+            return parent.find_element(By.CSS_SELECTOR, selector).text.strip()
+        except NoSuchElementException:
+            return None
+
+    def _get_link_text(self, parent):
+        """Obtém texto do link"""
+        try:
+            return parent.find_element(By.CSS_SELECTOR, '.field-link_fonte a').text.strip()
+        except NoSuchElementException:
+            return None
+
+    def _get_link_href(self, parent):
+        """Obtém URL do link"""
+        try:
+            return parent.find_element(By.CSS_SELECTOR, '.field-link_fonte a').get_attribute('href')
+        except NoSuchElementException:
+            return None
+
+    def _get_alt_laws(self, parent):
+        """Obtém leis alteradas"""
+        try:
+            alt_element = parent.find_element(By.CSS_SELECTOR, '.field-alt')
+            return [a.text.strip() for a in alt_element.find_elements(By.TAG_NAME, 'a') if a.text.strip()]
+        except NoSuchElementException:
+            return []
+
+    def _switch_to_results_frame(self):
+        """Muda para o iframe que contém os resultados"""
+        try:
+            # Primeiro tenta encontrar o iframe diretamente
+            iframe = self._wait_for_element(By.CSS_SELECTOR, "iframe")
+            if iframe:
+                self.driver.switch_to.frame(iframe)
+                return True
+            
+            # Se não encontrar, tenta métodos alternativos
+            iframes = self.driver.find_elements(By.TAG_NAME, "iframe")
+            for iframe in iframes:
+                try:
+                    self.driver.switch_to.frame(iframe)
+                    # Verifica se está no frame correto procurando por elementos de resultado
+                    if self._wait_for_element(By.CSS_SELECTOR, ".result-item, .search-result", timeout=5):
+                        return True
+                    self.driver.switch_to.default_content()
+                except Exception:
+                    self.driver.switch_to.default_content()
+                    continue
+            
+            return False
+        except Exception as e:
+            self.logger.error(f"Erro ao mudar para o iframe: {str(e)}")
+            return False
 
     def get_norm_details(self, norm_type, norm_number):
-        """Obtém todos os detalhes da norma"""
+        """Obtém detalhes da norma com tratamento robusto"""
         try:
             with self.browser_session():
-                # 1. Faz a pesquisa
-                search_url = f"{self.base_url}/search-results?q={norm_type}+{norm_number}"
-                self.driver.get(search_url)
+                search_url = f"{self.base_url}/search-results?q={urllib.parse.quote(norm_type)}+{urllib.parse.quote(norm_number)}"
                 
-                # 2. Aguarda e obtém todos os resultados
-                WebDriverWait(self.driver, 15).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, ".search-results"))
-                )
-                
-                results = self.driver.find_elements(By.CSS_SELECTOR, ".result-item")
-                
-                # 3. Procura a norma específica
-                clean_number = self._clean_number(norm_number)
-                for result in results:
-                    if self._is_matching_norm(result, norm_type, clean_number):
-                        return self._extract_norm_data(result)
-                
-                return None
-                
+                try:
+                    self.driver.get(search_url)
+                    time.sleep(3)  # Espera inicial para carregar a página
+                    
+                    # Verifica se a página carregou corretamente
+                    if "search-results" not in self.driver.current_url:
+                        self.logger.error("Redirecionamento inesperado")
+                        return None
+                    
+                    # Tenta mudar para o iframe que contém os resultados
+                    if not self._switch_to_results_frame():
+                        self.logger.warning("Não foi possível encontrar o iframe de resultados")
+                        return None
+                    
+                    # Aguarda os resultados aparecerem
+                    WebDriverWait(self.driver, 15).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "body"))
+                    )
+                    
+                    # Obtém o HTML do iframe
+                    frame_html = self.driver.page_source
+                    soup = BeautifulSoup(frame_html, 'html.parser')
+                    
+                    # Procura a norma específica
+                    clean_number = self._clean_number(norm_number)
+                    results = soup.select(".result-item, .search-result, .resultado")
+                    
+                    for result in results:
+                        snippet = result.select_one(".field-snippet, .snippet, .resumo")
+                        if snippet and self._is_matching_norm(snippet.get_text(), norm_type, clean_number):
+                            return self._extract_norm_data_soup(result)
+                    
+                    self.logger.warning("Norma não encontrada nos resultados")
+                    return None
+                    
+                except Exception as e:
+                    self.logger.error(f"Erro durante a pesquisa: {str(e)}")
+                    return None
+                finally:
+                    # Volta para o conteúdo principal
+                    self.driver.switch_to.default_content()
+                    
         except Exception as e:
-            self.logger.error(f"Erro ao obter detalhes: {str(e)}")
+            self.logger.error(f"Erro geral ao obter detalhes: {str(e)}")
             return None
-        
-    def _is_matching_norm(self, result_element, norm_type, clean_number):
-        """Verifica se o elemento corresponde à norma procurada"""
+
+    def _extract_norm_data_soup(self, soup_element):
+        """Extrai dados usando BeautifulSoup"""
         try:
-            title = result_element.find_element(By.CSS_SELECTOR, ".field-snippet").text
-            title_clean = self._clean_number(title)
-            return (norm_type.lower() in title.lower() and 
-                    clean_number in title_clean)
-        except NoSuchElementException:
-            return False
+            data = {
+                'resumo': self._get_text_soup(soup_element, '.field-snippet, .snippet, .resumo'),
+                'situacao': self._get_text_soup(soup_element, '.field-situacao, .situacao, .status'),
+                'data_assinatura': self._get_text_soup(soup_element, '.field-data_assinatura, .data-assinatura'),
+                'data_publicacao': self._get_text_soup(soup_element, '.field-data_publicacao, .data-publicacao'),
+                'instituicao': self._get_text_soup(soup_element, '.field-instituicao, .instituicao'),
+                'processo': self._get_text_soup(soup_element, '.field-processo, .processo'),
+                'sei': self._get_text_soup(soup_element, '.field-sei, .sei'),
+                'apelido': self._get_text_soup(soup_element, '.field-apelido, .apelido'),
+                'ementa': self._get_text_soup(soup_element, '.field-ementa, .ementa'),
+                'leis_alteradas': [a.get_text().strip() for a in soup_element.select('.field-alt a, .leis-alteradas a') if a.get_text().strip()],
+                'link_fonte': self._get_text_soup(soup_element, '.field-link_fonte a, .link-fonte'),
+                'link_fonte_url': self._get_attr_soup(soup_element, '.field-link_fonte a, .link-fonte', 'href')
+            }
+            return {k: v for k, v in data.items() if v is not None}
+        except Exception as e:
+            self.logger.error(f"Erro no BeautifulSoup: {str(e)}")
+            return None
 
-    def _determine_status_from_details(self, details):
-        """Determina o status com base nos detalhes coletados"""
-        status = details.get("situacao", "").lower()
-        
-        if "vigente" in status or "em vigor" in status:
-            return True
-        elif "revogado" in status or "cancelado" in status:
-            return False
-        elif "altera" in details or "legislacao alterada por" in details:
-            return True
-            
-        return None
+    def _get_text_soup(self, parent, selector):
+        """Obtém texto com BeautifulSoup"""
+        element = parent.select_one(selector)
+        return element.get_text().strip() if element else None
 
-    def _format_number(self, number):
-        """Padroniza o formato do número da norma"""
-        number = number.strip()
+    def _get_attr_soup(self, parent, selector, attr):
+        """Obtém atributo com BeautifulSoup"""
+        element = parent.select_one(selector)
+        return element.get(attr) if element else None
+
+    def _is_matching_norm(self, text, norm_type, clean_number):
+        """Verifica se o texto corresponde à norma"""
+        if not text:
+            return False
+        text_clean = self._clean_number(text)
+        return (norm_type.lower() in text.lower() and 
+                clean_number in text_clean)
+
+    def check_norm_status(self, norm_type, norm_number):
+        """Verifica o status da norma com tratamento robusto"""
+        details = self.get_norm_details(norm_type, norm_number)
+        if not details:
+            self.logger.warning(f"Norma {norm_type} {norm_number} não encontrada")
+            return False
         
-        if '/' in number:
-            num_parts = number.split('/')
-            if len(num_parts) == 2:
-                num, year = num_parts
-                if len(year) == 2:
-                    year_int = int(year)
-                    year = f"20{year}" if year_int < 30 else f"19{year}"
-                    number = f"{num}/{year}"
-                
-        return number
+        # Extrai e normaliza o status
+        situacao = details.get('situacao', '').strip().lower()
+        self.logger.info(f"Situação encontrada: '{situacao}'")  # Log para depuração
+        
+        # Lista de termos que indicam vigência
+        termos_vigentes = [
+            'vigente', 'em vigor', 'válida', 'valido', 'valida', 
+            'em execução', 'ativo', 'ativa', 'não revogada'
+        ]
+        
+        # Lista de termos que indicam não vigência
+        termos_revogados = [
+            'revogado', 'revogada', 'cancelado', 'cancelada',
+            'anulado', 'anulada', 'extinto', 'extinta',
+            'suspenso', 'suspensa', 'invalidado', 'invalidada'
+        ]
+        
+        # Verifica primeiro os termos de não vigência
+        for termo in termos_revogados:
+            if termo in situacao:
+                self.logger.info(f"Norma identificada como NÃO VIGENTE pelo termo: '{termo}'")
+                return False
+        
+        # Depois verifica os termos de vigência
+        for termo in termos_vigentes:
+            if termo in situacao:
+                self.logger.info(f"Norma identificada como VIGENTE pelo termo: '{termo}'")
+                return True
+        
+        # Fallback: verifica pela data de publicação
+        if details.get('data_publicacao'):
+            self.logger.info("Norma considerada VIGENTE por ter data de publicação")
+            return True
+        
+        self.logger.warning("Não foi possível determinar o status da norma")
+        return False
+
 
     def test_connection(self):
-        """Testa a conexão com o portal"""
+        """Testa conexão com o portal"""
         try:
+            # Teste HTTP simples
+            try:
+                response = requests.get(self.base_url, timeout=10)
+                if response.status_code != 200:
+                    return False
+            except requests.RequestException:
+                return False
+            
+            # Teste com navegador
             with self.browser_session():
                 self.driver.get(self.base_url)
-                WebDriverWait(self.driver, 15).until(
-                    EC.presence_of_element_located((By.TAG_NAME, "body"))
-                )
-                
-                checks = [
-                    "sefaz" in self.driver.title.lower(),
-                    "portaldalegislacao" in self.driver.current_url.lower(),
-                    len(self.driver.page_source) > 1000
-                ]
-                
-                return all(checks)
-        except Exception as e:
-            logger.error(f"Connection test failed: {str(e)}")
+                return "sefaz" in self.driver.title.lower()
+        except Exception:
             return False
