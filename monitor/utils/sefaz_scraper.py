@@ -1,5 +1,6 @@
 from selenium.webdriver.common.keys import Keys
 import re
+from selenium.webdriver.support import expected_conditions as EC
 import time
 import logging
 import urllib.parse
@@ -256,93 +257,115 @@ class SEFAZScraper:
             return None
 
     def _verificar_via_pesquisa_avancada(self, tipo, numero):
-        """Versão corrigida com espera inteligente e melhor manipulação de resultados"""
+        """Versão reformulada que abre o detalhe da norma e coleta dados completos"""
         try:
-            # Formata a consulta de diferentes maneiras
-            queries = [
-                f"{tipo} {numero}",
-                f"{tipo} N° {numero}",
-                # Não use símbolo + diretamente na string de consulta
-                f"{tipo} {numero.replace('/', '-')}"
-            ]
+            # Formata a consulta mantendo a formatação original
+            query = f"{tipo.upper()} {numero}"
+            url = f"{self.search_url}?q={urllib.parse.quote_plus(query)}"
+            self.driver.get(url)
             
-            for query in queries:
-                logger.info(f"Tentando busca com query: {query}")
+            # Aguarda o carregamento dos resultados
+            WebDriverWait(self.driver, 15).until(
+                lambda d: "resultado" in d.page_source.lower() or "busca" in d.page_source.lower()
+            )
+            
+            # Captura evidência para análise
+            self._capturar_evidencias(f"pesquisa_{tipo}_{numero}")
+            
+            # Verifica se há mensagem de "nenhum resultado"
+            if "nenhum resultado" in self.driver.page_source.lower():
+                return None
+            
+            # Analisa os resultados encontrados
+            resultados = self.driver.find_elements(By.CSS_SELECTOR, ".result-item, .search-result, .resultado")
+            
+            if not resultados:
+                return None
                 
-                # Formata URL de pesquisa
-                url = f"{self.search_url}?q={urllib.parse.quote_plus(query)}"
-                self.driver.get(url)
+            # Normaliza os números para comparação
+            numero_busca = numero.lower().replace(".", "").replace("/", "-")
+            
+            for resultado in resultados:
+                texto = resultado.text.lower()
                 
-                # Aguarda carregamento
-                try:
-                    WebDriverWait(self.driver, 10).until(
-                        lambda d: (
-                            len(d.page_source) > 1000 and  # Página carregou algo substancial
-                            ("resultado" in d.page_source.lower() or 
-                             "busca" in d.page_source.lower() or
-                             "pesquisa" in d.page_source.lower())
-                        )
+                # Verifica se é a norma que estamos buscando
+                if (tipo.lower() in texto and 
+                    (numero.lower() in texto or numero_busca in texto.replace("/", "-"))):
+                    
+                    # Tenta abrir o detalhe da norma clicando no resultado
+                    try:
+                        resultado.click()
+                    except Exception:
+                        # Se não conseguir clicar, tenta pegar link e navegar direto
+                        try:
+                            link = resultado.find_element(By.TAG_NAME, "a").get_attribute("href")
+                            if link:
+                                self.driver.get(link)
+                            else:
+                                # Se não conseguir abrir a página de detalhe, volta o resultado parcial
+                                return None
+                        except Exception:
+                            return None
+                    
+                    # Aguarda o carregamento do detalhe da norma
+                    WebDriverWait(self.driver, 15).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "div.document-wrapper.clearfix"))
                     )
-                except TimeoutException:
-                    logger.warning("Timeout ao aguardar resultados")
-                    continue
-
-                # Captura evidência
-                self._capturar_evidencias(f"pesquisa_{tipo}_{numero}")
-                
-                # Verifica se há mensagem de "nenhum resultado"
-                if any(termo in self.driver.page_source.lower() for termo in [
-                    "nenhum resultado", 
-                    "não encontrado", 
-                    "não foram encontrados",
-                    "resultado vazio"
-                ]):
-                    logger.info("Pesquisa retornou sem resultados")
-                    continue
-
-                # Extrai resultados com múltiplos seletores
-                resultados = self._extrair_resultados()
-                
-                if not resultados:
-                    logger.info("Nenhum resultado encontrado")
-                    continue
                     
-                logger.info(f"Encontrados {len(resultados)} resultados")
-                
-                # Filtra resultados para encontrar a norma específica
-                for resultado in resultados:
-                    texto_resultado = resultado.text.lower()
-                    numero_formatado = numero.lower().replace("/", "").replace("-", "")
+                    # Coleta os detalhes da norma
+                    detalhes = self._coletar_detalhes_norma()
                     
-                    # Verifica se o resultado corresponde ao tipo e número procurados
-                    if (tipo.lower() in texto_resultado and 
-                        (numero.lower() in texto_resultado or 
-                         numero_formatado in texto_resultado.replace("/", "").replace("-", ""))):
-                        
-                        # Analisa o status da norma
-                        logger.info(f"Encontrada norma correspondente: {texto_resultado[:100]}...")
-                        
-                        # Verifica revogação
-                        if any(termo in texto_resultado for termo in ["revogad", "cancelad", "anulad"]):
-                            logger.info("Norma está revogada")
-                            return False
-                            
-                        # Verifica vigência
-                        if any(termo in texto_resultado for termo in ["vigente", "em vigor", "válid"]):
-                            logger.info("Norma está vigente")
-                            return True
-                            
-                        # Se não tem informação explícita, assume vigente
-                        logger.info("Norma encontrada sem status - assumindo vigente")
+                    # Analisa o campo 'situacao' ou 'situação' para verificar status
+                    situacao = detalhes.get("situacao") or detalhes.get("situacao") or detalhes.get("field-situacao") or detalhes.get("situacao") or detalhes.get("field-situacao")
+                    situacao = situacao.lower() if situacao else ""
+                    
+                    if "vigente" in situacao or "em vigor" in situacao:
                         return True
+                    elif "revogado" in situacao or "cancelado" in situacao:
+                        return False
+                    
+                    # Caso não tenha situação explícita, verifica campos alternativos, por exemplo:
+                    # 'altera' ou 'legislacao alterada por'
+                    if "altera" in detalhes or "legislacao alterada por" in detalhes:
+                        # Pode implementar lógica extra se quiser
+                        return True
+                    
+                    # Se ainda não sabe, assume vigente
+                    return True
             
-            # Se chegou aqui, não encontrou por nenhuma pesquisa
             return None
             
+        except TimeoutException:
+            logger.warning("Timeout ao aguardar resultados da pesquisa")
+            return None
         except Exception as e:
             logger.error(f"Erro na pesquisa avançada: {str(e)}")
-            self._capturar_evidencias(f"erro_pesquisa_{tipo}_{numero}")
             return None
+
+
+
+    def _coletar_detalhes_norma(self):
+        """
+        Coleta os dados da norma no layout detalhado dentro do 'div.document-wrapper.clearfix'.
+        Extrai todas as divs com classe 'field field-xxxx' e retorna um dicionário
+        com as chaves sendo o sufixo da classe 'field-xxxx' e os valores o texto contido.
+        """
+        detalhes = {}
+        try:
+            wrapper = self.driver.find_element(By.CSS_SELECTOR, "div.document-wrapper.clearfix")
+            campos = wrapper.find_elements(By.CSS_SELECTOR, "div.field")
+            for campo in campos:
+                classes = campo.get_attribute("class").split()
+                # Procura a classe que começa com "field-" para usar como chave
+                chave = next((c.replace("field-", "") for c in classes if c.startswith("field-")), None)
+                if chave:
+                    valor = campo.text.strip()
+                    detalhes[chave] = valor
+            return detalhes
+        except Exception as e:
+            logger.debug(f"Erro ao coletar detalhes norma: {e}")
+            return {}
+
 
     def _extrair_resultados(self):
         """Tenta múltiplos seletores para encontrar resultados"""
