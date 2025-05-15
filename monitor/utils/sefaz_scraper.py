@@ -9,7 +9,6 @@ from django.utils import timezone
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 from selenium.common.exceptions import (TimeoutException, 
                                       NoSuchElementException, 
@@ -18,51 +17,59 @@ from selenium.webdriver.chrome.service import Service as ChromeService
 from contextlib import contextmanager
 import os
 from bs4 import BeautifulSoup
-import base64
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
+import logging
 
 logger = logging.getLogger(__name__)
 
 class SEFAZScraper:
     def __init__(self):
         self.base_url = "https://portaldalegislacao.sefaz.pi.gov.br"
-        self.search_url = f"{self.base_url}/search-results"
-        self.driver = None
         self.timeout = 30
-        self.max_retries = 2
-        self.chrome_service = ChromeService(
-            log_path='chromedriver.log',
-            service_args=['--silent', '--disable-logging']
-        )
+        self.driver = None
+        
+        # Configuração mais robusta do ChromeDriver
+        self.chrome_options = Options()
+        self.chrome_options.add_argument("--headless=new")
+        self.chrome_options.add_argument("--no-sandbox")
+        self.chrome_options.add_argument("--disable-dev-shm-usage")
+        self.chrome_options.add_argument("--disable-gpu")
+        self.chrome_options.add_argument("--window-size=1920,1080")
+        
+        # Configuração de logging
+        logging.basicConfig(level=logging.INFO)
+        self.logger = logging.getLogger(__name__)
 
-    # ================== CORE METHODS ==================
     @contextmanager
     def browser_session(self):
-        """Gerenciador de contexto para sessão do navegador"""
+        """Gerenciador de contexto mais robusto"""
         try:
-            if not self._iniciar_navegador():
-                raise WebDriverException("Não foi possível iniciar o navegador")
+            self.driver = webdriver.Chrome(
+                service=Service(ChromeDriverManager().install()),
+                options=self.chrome_options
+            )
+            self.driver.set_page_load_timeout(self.timeout)
             yield self.driver
         except Exception as e:
-            logger.error(f"Erro na sessão do navegador: {str(e)}")
+            self.logger.error(f"Erro na sessão do navegador: {str(e)}")
             raise
         finally:
-            self._fechar_navegador()
+            if self.driver:
+                self.driver.quit()
+                self.driver = None
 
-    def _iniciar_navegador(self):
-        """Configuração otimizada do navegador"""
+    def _start_browser(self):
+        """Configura e inicia o navegador"""
         try:
             chrome_options = Options()
             chrome_options.add_argument("--headless=new")
-            chrome_options.add_argument("--disable-gpu")
             chrome_options.add_argument("--no-sandbox")
             chrome_options.add_argument("--disable-dev-shm-usage")
-            chrome_options.add_argument("--disable-extensions")
-            chrome_options.add_argument("--log-level=3")
             chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-            chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-            chrome_options.add_experimental_option("useAutomationExtension", False)
-
+            
             self.driver = webdriver.Chrome(
                 service=self.chrome_service,
                 options=chrome_options
@@ -70,431 +77,227 @@ class SEFAZScraper:
             self.driver.set_page_load_timeout(self.timeout)
             return True
         except Exception as e:
-            logger.error(f"Erro ao iniciar navegador: {str(e)}")
+            logger.error(f"Browser start error: {str(e)}")
             return False
 
-    def _fechar_navegador(self):
+    def _close_browser(self):
         """Fecha o navegador corretamente"""
         if self.driver:
             try:
                 self.driver.quit()
             except Exception as e:
-                logger.warning(f"Erro ao fechar navegador: {str(e)}")
+                logger.warning(f"Error closing browser: {str(e)}")
             finally:
                 self.driver = None
 
-    # ================== MAIN FLOW METHODS ==================
-    def verificar_vigencia_norma(self, tipo, numero):
-        """Método principal simplificado e eficiente"""
-        tipo = tipo.upper().strip()
-        numero = self._formatar_numero(numero)
+    def _find_norm_item(self, norm_type, norm_number):
+        """Encontra o elemento HTML correto da norma"""
+        all_items = self.driver.find_elements(By.CSS_SELECTOR, ".search-results .result-item")
         
-        logger.info(f"Verificando vigência de {tipo} {numero}")
+        # Padroniza o número para comparação
+        clean_number = re.sub(r'[^\d/]', '', norm_number)
         
-        try:
-            with self.browser_session():
-                # Primeiro tenta via pesquisa avançada
-                logger.info("Tentando busca via pesquisa avançada...")
-                resultado = self._verificar_via_pesquisa_avancada(tipo, numero)
-                if resultado is not None:
-                    logger.info(f"Resultado via pesquisa: {'VIGENTE' if resultado else 'REVOGADA/NÃO ENCONTRADA'}")
-                    return resultado
-                
-                # Se não encontrou nada, tenta via URL direta
-                logger.info("Tentando busca via URL direta...")
-                resultado_url = self._verificar_via_url_direta(tipo, numero)
-                if resultado_url is not None:
-                    logger.info(f"Resultado via URL direta: {'VIGENTE' if resultado_url else 'REVOGADA/NÃO ENCONTRADA'}")
-                    return resultado_url
-                
-                # Se não encontrou por nenhum método, assume que não existe/não está vigente
-                logger.info("Norma não encontrada por nenhum método")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Erro na verificação: {str(e)}")
-            return False
-        
-
-
-    def coletar_normas_recentes(self, max_normas=10):
-        """Coleta as normas mais recentes do portal"""
-        try:
-            with self.browser_session():
-                self.driver.get(self.base_url)
-                
-                # Aguarda carregamento da página inicial
-                WebDriverWait(self.driver, self.timeout).until(
-                    EC.presence_of_element_located((By.TAG_NAME, "body"))
-                )
-                
-                # Busca por elementos recentes na página inicial
-                normas = []
-                selectors = [
-                    ".item-recente", 
-                    ".norma-recente", 
-                    ".documento-recente",
-                    ".ultimas-normas li"
-                ]
-                
-                for selector in selectors:
-                    try:
-                        elementos = self.driver.find_elements(By.CSS_SELECTOR, selector)
-                        if elementos:
-                            for item in elementos[:max_normas]:
-                                try:
-                                    normas.append(self._extrair_dados_norma(item.text))
-                                except Exception as e:
-                                    logger.warning(f"Erro ao processar item: {str(e)}")
-                            break
-                    except Exception:
-                        continue
-                
-                # Se não encontrou normas recentes, tenta via pesquisa
-                if not normas:
-                    logger.info("Tentando encontrar normas via pesquisa")
-                    self.driver.get(self.search_url)
-                    
-                    # Executa pesquisa genérica
-                    try:
-                        search_input = WebDriverWait(self.driver, self.timeout).until(
-                            EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='search'], input[type='text']"))
-                        )
-                        search_input.send_keys("norma")
-                        search_input.send_keys(Keys.RETURN)
-                        
-                        # Aguarda resultados
-                        time.sleep(3)
-                        
-                        # Processa resultados
-                        resultados = self._extrair_resultados()[:max_normas]
-                        
-                        for item in resultados:
-                            try:
-                                normas.append(self._extrair_dados_norma(item.text))
-                            except Exception as e:
-                                logger.warning(f"Erro ao processar item: {str(e)}")
-                    except Exception as e:
-                        logger.error(f"Erro na pesquisa de normas: {str(e)}")
-                        
-                return normas
-                
-        except Exception as e:
-            logger.error(f"Erro na coleta de normas: {str(e)}")
-            return []
-        
-
-    def _coletar_detalhes_norma(self):
-        """Extrai os dados da norma da página de detalhe"""
-        detalhes = {}
-        try:
-            soup = BeautifulSoup(self.driver.page_source, 'html.parser')
-            
-            # Normalmente os campos são organizados com <div class="field"> ou <div class="field--name-field-situacao">
-            campos = soup.select("div.field, div.field--item, div.field__item")
-            
-            for campo in campos:
-                try:
-                    label = campo.find("div", class_="field__label")
-                    valor = campo.find("div", class_="field__item")
-                    if not label or not valor:
-                        continue
-                    chave = label.text.strip().lower().replace(" ", "_")
-                    detalhes[chave] = valor.text.strip()
-                except Exception:
-                    continue
-            
-            return detalhes
-
-        except Exception as e:
-            logger.warning(f"Erro ao coletar detalhes da norma: {str(e)}")
-            return detalhes
-
-
-    # ================== SUPPORT METHODS ==================
-    def _formatar_numero(self, numero):
-        """Padroniza o formato do número da norma"""
-        # Remove espaços
-        numero = numero.strip()
-        
-        # Verifica se tem ano com 2 ou 4 dígitos
-        if '/' in numero:
-            num_parts = numero.split('/')
-            if len(num_parts) == 2:
-                num, ano = num_parts
-                # Se ano tem 2 dígitos, converte para 4 dígitos
-                if len(ano) == 2:
-                    # Assume que é 2000+ se o ano é menor que 30
-                    # caso contrário assume que é 1900+
-                    ano_int = int(ano)
-                    if ano_int < 30:
-                        ano = f"20{ano}"
-                    else:
-                        ano = f"19{ano}"
-                    numero = f"{num}/{ano}"
-                
-        return numero
+        for item in all_items:
+            # Verifica no snippet (campo que contém tipo e número)
+            snippet = item.find_element(By.CSS_SELECTOR, ".field-snippet").text
+            if (norm_type.lower() in snippet.lower() and 
+                clean_number in re.sub(r'[^\d/]', '', snippet)):
+                return item
+        return None
     
-    def _verificar_via_url_direta(self, tipo, numero):
-        """Tentativa de verificação via URL direta"""
-        try:
-            # Formata a URL conforme esperado pelo site
-            tipo_url = tipo.lower()
-            numero_url = numero.replace('/', '-')
+    def _extract_norm_data(self, norm_element):
+            """Extrai todos os campos da norma conforme a tabela fornecida"""
+            fields_map = {
+                'situacao': '.field-situacao',
+                'data_assinatura': '.field-data_assinatura',
+                'data_publicacao': '.field-data_publicacao',
+                'link_fonte': '.field-link_fonte a',
+                'instituicao': '.field-instituicao',
+                'processo': '.field-processo',
+                'sei': '.field-sei',
+                'apelido': '.field-apelido',
+                'ementa': '.field-ementa',
+                'alt': '.field-alt'
+            }
             
-            urls_para_tentar = [
-                f"{self.base_url}/{tipo_url}/{numero_url}",
-                f"{self.base_url}/{tipo_url.lower()}/{numero}",
-                f"{self.base_url}/{tipo_url.lower()}/{numero.replace('/', '')}"
-            ]
+            data = {}
+            for field, selector in fields_map.items():
+                try:
+                    element = norm_element.find_element(By.CSS_SELECTOR, selector)
+                    data[field] = element.text.strip()
+                    if field == 'link_fonte':  # Pega o href se for link
+                        data['link_fonte_url'] = element.get_attribute('href')
+                except NoSuchElementException:
+                    data[field] = None
             
-            for url in urls_para_tentar:
-                logger.info(f"Tentando URL: {url}")
-                self.driver.get(url)
-                time.sleep(2)
-                
-                # Captura evidência
-                self._capturar_evidencias(f"url_{tipo}_{numero}")
-                
-                # Verifica se a URL redirecionou para página de erro
-                if "error" in self.driver.current_url.lower() or "404" in self.driver.current_url:
-                    logger.info("URL resultou em erro 404")
-                    continue
-                
-                # Verifica o conteúdo da página
-                page_source = self.driver.page_source.lower()
-                
-                # Busca por indicações de revogação
-                if any(termo in page_source for termo in ["revogado", "revogada", "não vigente"]):
-                    logger.info("Norma encontrada mas está revogada")
-                    return False
-                
-                # Busca por indicações de vigência
-                if any(termo in page_source for termo in ["vigente", "em vigor"]):
-                    logger.info("Norma encontrada e está vigente")
-                    return True
-                
-                # Se encontrou a página da norma mas sem status claro
-                if tipo.lower() in page_source and numero.replace('/', '-') in page_source:
-                    logger.info("Norma encontrada sem status explícito - assumindo vigente")
-                    return True
-            
-            # Se chegou aqui, não encontrou por nenhuma URL
-            return None
-            
-        except Exception as e:
-            logger.warning(f"Falha na verificação por URL: {str(e)}")
-            return None
+            return data
 
-    def _verificar_via_pesquisa_avancada(self, tipo, numero):
-        """Versão reformulada que abre o detalhe da norma e coleta dados completos"""
+    
+
+    def check_norm_status(self, norm_type, norm_number):
+        """Verifica se a norma existe e está vigente"""
         try:
-            # Formata a consulta mantendo a formatação original
-            query = f"{tipo.upper()} {numero}"
-            url = f"{self.search_url}?q={urllib.parse.quote_plus(query)}"
-            self.driver.get(url)
+            details = self.get_norm_details(norm_type, norm_number)
+            return details is not None and details.get('situacao') == 'VIGENTE'
+        except Exception as e:
+            self.logger.error(f"Erro ao verificar status: {str(e)}")
+            return False
+
+    def _check_via_search(self, norm_type, norm_number):
+        """Verifica status via pesquisa avançada"""
+        try:
+            query = f"{norm_type.upper()} {norm_number}"
+            self.driver.get(f"{self.search_url}?q={urllib.parse.quote_plus(query)}")
             
-            # Aguarda o carregamento dos resultados
             WebDriverWait(self.driver, 15).until(
                 lambda d: "resultado" in d.page_source.lower() or "busca" in d.page_source.lower()
             )
             
-            # Captura evidência para análise
-            self._capturar_evidencias(f"pesquisa_{tipo}_{numero}")
-            
-            # Verifica se há mensagem de "nenhum resultado"
             if "nenhum resultado" in self.driver.page_source.lower():
                 return None
             
-            # Analisa os resultados encontrados
-            resultados = self.driver.find_elements(By.CSS_SELECTOR, ".result-item, .search-result, .resultado")
-            
-            if not resultados:
+            results = self.driver.find_elements(By.CSS_SELECTOR, ".result-item, .search-result")
+            if not results:
                 return None
                 
-            # Normaliza os números para comparação
-            numero_busca = numero.lower().replace(".", "").replace("/", "-")
+            norm_number_clean = norm_number.lower().replace(".", "").replace("/", "-")
             
-            for resultado in resultados:
-                texto = resultado.text.lower()
-                
-                # Verifica se é a norma que estamos buscando
-                if (tipo.lower() in texto and 
-                    (numero.lower() in texto or numero_busca in texto.replace("/", "-"))):
+            for result in results:
+                if (norm_type.lower() in result.text.lower() and 
+                    (norm_number.lower() in result.text.lower() or 
+                     norm_number_clean in result.text.lower().replace("/", "-"))):
                     
-                    # Tenta abrir o detalhe da norma clicando no resultado
                     try:
-                        resultado.click()
-                    except Exception:
-                        # Se não conseguir clicar, tenta pegar link e navegar direto
+                        result.click()
+                    except:
                         try:
-                            link = resultado.find_element(By.TAG_NAME, "a").get_attribute("href")
+                            link = result.find_element(By.TAG_NAME, "a").get_attribute("href")
                             if link:
                                 self.driver.get(link)
                             else:
-                                # Se não conseguir abrir a página de detalhe, volta o resultado parcial
                                 return None
-                        except Exception:
+                        except:
                             return None
                     
-                    # Aguarda o carregamento do detalhe da norma
                     WebDriverWait(self.driver, 15).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "div.document-wrapper.clearfix"))
-                    )
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "div.document-wrapper.clearfix")))
                     
-                    # Coleta os detalhes da norma
-                    detalhes = self._coletar_detalhes_norma()
-                    
-                    # Analisa o campo 'situacao' ou 'situação' para verificar status
-                    situacao = detalhes.get("situacao") or detalhes.get("situacao") or detalhes.get("field-situacao") or detalhes.get("situacao") or detalhes.get("field-situacao")
-                    situacao = situacao.lower() if situacao else ""
-                    
-                    if "vigente" in situacao or "em vigor" in situacao:
-                        return True
-                    elif "revogado" in situacao or "cancelado" in situacao:
-                        return False
-                    
-                    # Caso não tenha situação explícita, verifica campos alternativos, por exemplo:
-                    # 'altera' ou 'legislacao alterada por'
-                    if "altera" in detalhes or "legislacao alterada por" in detalhes:
-                        # Pode implementar lógica extra se quiser
-                        return True
-                    
-                    # Se ainda não sabe, assume vigente
-                    return True
+                    details = self._get_norm_details()
+                    status = self._determine_status_from_details(details)
+                    return status if status is not None else True
             
             return None
             
         except TimeoutException:
-            logger.warning("Timeout ao aguardar resultados da pesquisa")
+            logger.warning("Timeout waiting for search results")
             return None
         except Exception as e:
-            logger.error(f"Erro na pesquisa avançada: {str(e)}")
+            logger.error(f"Search error: {str(e)}")
             return None
 
-
-
-    def _coletar_detalhes_norma(self):
-        """
-        Coleta os dados da norma no layout detalhado dentro do 'div.document-wrapper.clearfix'.
-        Extrai todas as divs com classe 'field field-xxxx' e retorna um dicionário
-        com as chaves sendo o sufixo da classe 'field-xxxx' e os valores o texto contido.
-        """
-        detalhes = {}
+    def _check_via_direct_url(self, norm_type, norm_number):
+        """Tenta verificar status via URL direta"""
         try:
-            wrapper = self.driver.find_element(By.CSS_SELECTOR, "div.document-wrapper.clearfix")
-            campos = wrapper.find_elements(By.CSS_SELECTOR, "div.field")
-            for campo in campos:
-                classes = campo.get_attribute("class").split()
-                # Procura a classe que começa com "field-" para usar como chave
-                chave = next((c.replace("field-", "") for c in classes if c.startswith("field-")), None)
-                if chave:
-                    valor = campo.text.strip()
-                    detalhes[chave] = valor
-            return detalhes
-        except Exception as e:
-            logger.debug(f"Erro ao coletar detalhes norma: {e}")
-            return {}
-
-
-    def _extrair_resultados(self):
-        """Tenta múltiplos seletores para encontrar resultados"""
-        resultados = []
-        
-        # Lista de seletores para encontrar resultados (ordem de prioridade)
-        selectors = [
-            ("CSS", ".result-item"),
-            ("CSS", ".search-result"),
-            ("CSS", ".resultado-busca li"),
-            ("CSS", "ul.lista-resultados > li"),
-            ("CSS", ".resultado"),
-            ("XPATH", "//div[contains(@class,'resultado')]"),
-            ("XPATH", "//li[contains(@class,'resultado')]"),
-            ("XPATH", "//*[contains(text(),'Norma') or contains(text(),'Documento')]/ancestor::div[1]")
-        ]
-        
-        for selector_type, selector in selectors:
-            try:
-                if selector_type == "CSS":
-                    elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
-                else:
-                    elements = self.driver.find_elements(By.XPATH, selector)
-                    
-                if elements:
-                    logger.info(f"Encontrados {len(elements)} resultados com seletor {selector}")
-                    return elements
-            except Exception as e:
-                logger.debug(f"Erro com seletor {selector}: {str(e)}")
-                continue
+            norm_type_url = norm_type.lower()
+            norm_number_url = norm_number.replace('/', '-')
+            
+            urls_to_try = [
+                f"{self.base_url}/{norm_type_url}/{norm_number_url}",
+                f"{self.base_url}/{norm_type_url.lower()}/{norm_number}",
+                f"{self.base_url}/{norm_type_url.lower()}/{norm_number.replace('/', '')}"
+            ]
+            
+            for url in urls_to_try:
+                self.driver.get(url)
+                time.sleep(2)
                 
-        # Última tentativa: busca por texto genérico na página
-        try:
-            soup = BeautifulSoup(self.driver.page_source, 'html.parser')
+                if "error" in self.driver.current_url.lower() or "404" in self.driver.current_url:
+                    continue
+                
+                page_source = self.driver.page_source.lower()
+                
+                if any(term in page_source for term in ["revogado", "revogada", "não vigente"]):
+                    return False
+                
+                if any(term in page_source for term in ["vigente", "em vigor"]):
+                    return True
+                
+                if (norm_type.lower() in page_source and 
+                    norm_number.replace('/', '-') in page_source):
+                    return True
             
-            # Procura divs que possam conter resultados
-            for div in soup.find_all('div'):
-                texto = div.get_text().lower()
-                # Se a div tem texto relacionado a normas
-                if (len(texto) > 50 and 
-                    any(termo in texto for termo in ["norma", "decreto", "lei", "portaria"])):
-                    # Tenta encontrar o elemento no Selenium
-                    try:
-                        xpath = f"//div[contains(text(),'{div.get_text()[:30]}')]"
-                        elemento = self.driver.find_element(By.XPATH, xpath)
-                        resultados.append(elemento)
-                    except:
-                        continue
+            return None
+            
         except Exception as e:
-            logger.debug(f"Erro na busca por BeautifulSoup: {str(e)}")
-            
-        return resultados
+            logger.warning(f"Direct URL check failed: {str(e)}")
+            return None
 
-    def _capturar_evidencias(self, prefixo="debug"):
-        """Versão robusta para salvar arquivos de debug"""
-        if not self.driver:
-            logger.error("Tentativa de capturar evidências com driver fechado")
-            return None, None
-            
+    def get_norm_details(self, norm_type, norm_number):
+        """Obtém todos os detalhes da norma"""
         try:
-            # Remove caracteres inválidos do nome do arquivo
-            safe_prefix = re.sub(r'[\\/*?:"<>|]', "_", prefixo)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            
-            # Cria diretório se não existir
-            os.makedirs("debug", exist_ok=True)
-            
-            screenshot_path = f"debug/{safe_prefix}_{timestamp}.png"
-            html_path = f"debug/{safe_prefix}_{timestamp}.html"
-            
-            self.driver.save_screenshot(screenshot_path)
-            with open(html_path, "w", encoding="utf-8") as f:
-                f.write(self.driver.page_source)
-            
-            logger.info(f"Evidências salvas: {screenshot_path} e {html_path}")
-            return screenshot_path, html_path
+            with self.browser_session():
+                # 1. Faz a pesquisa
+                search_url = f"{self.base_url}/search-results?q={norm_type}+{norm_number}"
+                self.driver.get(search_url)
+                
+                # 2. Aguarda e obtém todos os resultados
+                WebDriverWait(self.driver, 15).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, ".search-results"))
+                )
+                
+                results = self.driver.find_elements(By.CSS_SELECTOR, ".result-item")
+                
+                # 3. Procura a norma específica
+                clean_number = self._clean_number(norm_number)
+                for result in results:
+                    if self._is_matching_norm(result, norm_type, clean_number):
+                        return self._extract_norm_data(result)
+                
+                return None
+                
         except Exception as e:
-            logger.error(f"Falha ao capturar evidências: {str(e)}")
-            return None, None
-
-    def _extrair_dados_norma(self, texto_item):
-        """Extrai dados estruturados de um item de norma"""
-        padrao_tipo = r'(LEI|DECRETO|PORTARIA|INSTRUÇÃO NORMATIVA)\s'
-        padrao_numero = r'(?:N[º°]?\s*)?(\d+[\/-]\d+)'
-        padrao_data = r'(\d{1,2}\/\d{1,2}\/\d{4})'
+            self.logger.error(f"Erro ao obter detalhes: {str(e)}")
+            return None
         
-        tipo = re.search(padrao_tipo, texto_item.upper())
-        numero = re.search(padrao_numero, texto_item)
-        data = re.search(padrao_data, texto_item)
-        
-        return {
-            'tipo': tipo.group(1) if tipo else None,
-            'numero': numero.group(1) if numero else None,
-            'data': datetime.strptime(data.group(1), '%d/%m/%Y').date() if data else None,
-            'texto': texto_item[:500] + "..." if len(texto_item) > 500 else texto_item
-        }
+    def _is_matching_norm(self, result_element, norm_type, clean_number):
+        """Verifica se o elemento corresponde à norma procurada"""
+        try:
+            title = result_element.find_element(By.CSS_SELECTOR, ".field-snippet").text
+            title_clean = self._clean_number(title)
+            return (norm_type.lower() in title.lower() and 
+                    clean_number in title_clean)
+        except NoSuchElementException:
+            return False
 
-    # ================== TEST METHODS ==================
-    def testar_conexao(self):
+    def _determine_status_from_details(self, details):
+        """Determina o status com base nos detalhes coletados"""
+        status = details.get("situacao", "").lower()
+        
+        if "vigente" in status or "em vigor" in status:
+            return True
+        elif "revogado" in status or "cancelado" in status:
+            return False
+        elif "altera" in details or "legislacao alterada por" in details:
+            return True
+            
+        return None
+
+    def _format_number(self, number):
+        """Padroniza o formato do número da norma"""
+        number = number.strip()
+        
+        if '/' in number:
+            num_parts = number.split('/')
+            if len(num_parts) == 2:
+                num, year = num_parts
+                if len(year) == 2:
+                    year_int = int(year)
+                    year = f"20{year}" if year_int < 30 else f"19{year}"
+                    number = f"{num}/{year}"
+                
+        return number
+
+    def test_connection(self):
         """Testa a conexão com o portal"""
         try:
             with self.browser_session():
@@ -503,79 +306,13 @@ class SEFAZScraper:
                     EC.presence_of_element_located((By.TAG_NAME, "body"))
                 )
                 
-                # Verificação robusta e case-insensitive
-                current_url = self.driver.current_url.lower()
-                page_source = self.driver.page_source.lower()
-                
                 checks = [
-                    "sefaz" in self.driver.title.lower() or "legislação" in self.driver.title.lower(),
-                    "portaldalegislacao" in current_url,
-                    any(termo in page_source for termo in ["sefaz", "fazenda", "legislação"]),
-                    len(page_source) > 1000
+                    "sefaz" in self.driver.title.lower(),
+                    "portaldalegislacao" in self.driver.current_url.lower(),
+                    len(self.driver.page_source) > 1000
                 ]
-                
-                logger.info(f"URL atual: {current_url}")
-                logger.info(f"Checks: {checks}")
                 
                 return all(checks)
         except Exception as e:
-            logger.error(f"Falha no teste de conexão: {str(e)}")
-            return False
-
-    def testar_fluxo_completo(self, tipo, numero):
-        """Teste completo do fluxo para uma norma específica"""
-        print(f"\n=== TESTE PARA {tipo} {numero} ===")
-        
-        print("\n1. Testando conexão...")
-        if not self.testar_conexao():
-            print("❌ Falha na conexão")
-            return False
-        print("✅ Conexão OK")
-        
-        print("\n2. Verificando vigência...")
-        resultado = self.verificar_vigencia(tipo, numero)
-        print(f"Resultado: {'VIGENTE' if resultado else 'REVOGADA/NÃO ENCONTRADA'}")
-        
-        print("\n3. Coletando normas relacionadas...")
-        normas = self.coletar_normas_recentes(3)
-        print(f"Encontradas {len(normas)} normas recentes")
-        
-        return resultado
-
-    def testar_conexao_manual(self):
-        """Versão corrigida do teste de conexão que NÃO fecha o navegador"""
-        try:
-            if self.driver is None:
-                self._iniciar_navegador()
-                
-            self.driver.get(self.base_url)
-            
-            # Aguarda carregamento da página
-            WebDriverWait(self.driver, 15).until(
-                EC.presence_of_element_located((By.TAG_NAME, "body"))
-            )
-            
-            # Verificação robusta e case-insensitive
-            current_url = self.driver.current_url.lower()
-            page_source = self.driver.page_source.lower()
-            
-            checks = [
-                "sefaz" in self.driver.title.lower() or "legislação" in self.driver.title.lower(),
-                "portaldalegislacao" in current_url,
-                any(termo in page_source for termo in ["sefaz", "fazenda", "legislação"]),
-                len(page_source) > 1000
-            ]
-            
-            # Salva evidência
-            self.driver.save_screenshot('debug/conexao_manual.png')
-            with open('debug/conexao_page.html', 'w', encoding='utf-8') as f:
-                f.write(self.driver.page_source)
-                
-            logger.info(f"URL atual: {current_url}")
-            logger.info(f"Checks: {checks}")
-            
-            return all(checks)
-            
-        except Exception as e:
-            logger.error(f"Erro no teste: {str(e)}")
+            logger.error(f"Connection test failed: {str(e)}")
             return False

@@ -1,5 +1,7 @@
 from django.core.management.base import BaseCommand
 
+from monitor.utils.sefaz_scraper import SEFAZScraper
+
 def teste_rapido_shell():
     """
     Teste rápido para verificar apenas a busca via pesquisa avançada
@@ -118,3 +120,31 @@ if norma:
     print(f"Detalhes salvos: {norma.detalhes_completos}")
 else:
     print("\nNorma não foi salva no banco - verifique os logs")
+
+
+
+
+
+def testar_lei_8558_2024():
+    print("=== TESTE ESPECÍFICO PARA LEI 8.558/2024 ===")
+    
+    scraper = SEFAZScraper()
+    
+    # Configuração exata como pesquisou no site
+    tipo = "Lei"  # Mesmo case que você usou
+    numero = "8.558/2024"  # Formato exato
+    
+    print(f"\nVerificando: {tipo} {numero}")
+    
+    if scraper.check_norm_status(tipo, numero):
+        print("✅ NORMA ENCONTRADA E VIGENTE")
+    else:
+        print("❌ NORMA NÃO ENCONTRADA")
+        
+        # Sugere verificação manual
+        print("\nSugestões:")
+        print(f"1. Acesse manualmente: {scraper.base_url}")
+        print(f"2. Pesquise exatamente: '{tipo} {numero}'")
+        print("3. Verifique se a norma aparece nos resultados")
+
+testar_lei_8558_2024()
