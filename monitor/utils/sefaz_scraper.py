@@ -1,3 +1,4 @@
+from selenium.webdriver.common.keys import Keys
 import re
 import time
 import logging
@@ -83,52 +84,95 @@ class SEFAZScraper:
 
     # ================== MAIN FLOW METHODS ==================
     def verificar_vigencia(self, tipo, numero):
-        """Método principal totalmente reformulado"""
+        """Método principal simplificado e eficiente"""
         tipo = tipo.upper().strip()
-        numero = numero.strip()
+        numero = self._formatar_numero(numero)
         
-        # Tentamos 3 estratégias diferentes
-        estrategias = [
-            self._verificar_via_pesquisa_avancada,
-            self._verificar_via_api_oculta,
-            self._verificar_via_url_direta
-        ]
+        logger.info(f"Verificando vigência de {tipo} {numero}")
         
-        for estrategia in estrategias:
-            try:
-                resultado = estrategia(tipo, numero)
+        try:
+            with self.browser_session():
+                # Primeiro tenta via pesquisa avançada
+                logger.info("Tentando busca via pesquisa avançada...")
+                resultado = self._verificar_via_pesquisa_avancada(tipo, numero)
                 if resultado is not None:
+                    logger.info(f"Resultado via pesquisa: {'VIGENTE' if resultado else 'REVOGADA/NÃO ENCONTRADA'}")
                     return resultado
-            except Exception as e:
-                logger.warning(f"Falha na estratégia {estrategia.__name__}: {str(e)}")
-        
-        return False
+                
+                # Se não encontrou nada, tenta via URL direta
+                logger.info("Tentando busca via URL direta...")
+                resultado_url = self._verificar_via_url_direta(tipo, numero)
+                if resultado_url is not None:
+                    logger.info(f"Resultado via URL direta: {'VIGENTE' if resultado_url else 'REVOGADA/NÃO ENCONTRADA'}")
+                    return resultado_url
+                
+                # Se não encontrou por nenhum método, assume que não existe/não está vigente
+                logger.info("Norma não encontrada por nenhum método")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Erro na verificação: {str(e)}")
+            return False
 
     def coletar_normas_recentes(self, max_normas=10):
         """Coleta as normas mais recentes do portal"""
         try:
             with self.browser_session():
-                self.driver.get(self.search_url)
+                self.driver.get(self.base_url)
                 
-                # Executa pesquisa genérica
-                search_input = WebDriverWait(self.driver, self.timeout).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='search']"))
+                # Aguarda carregamento da página inicial
+                WebDriverWait(self.driver, self.timeout).until(
+                    EC.presence_of_element_located((By.TAG_NAME, "body"))
                 )
-                search_input.send_keys("norma")
-                self.driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
                 
-                # Processa resultados
-                resultados = WebDriverWait(self.driver, self.timeout).until(
-                    EC.presence_of_all_elements_located((By.CSS_SELECTOR, ".result-item"))
-                )[:max_normas]
-                
+                # Busca por elementos recentes na página inicial
                 normas = []
-                for item in resultados:
+                selectors = [
+                    ".item-recente", 
+                    ".norma-recente", 
+                    ".documento-recente",
+                    ".ultimas-normas li"
+                ]
+                
+                for selector in selectors:
                     try:
-                        normas.append(self._extrair_dados_norma(item.text))
-                    except Exception as e:
-                        logger.warning(f"Erro ao processar item: {str(e)}")
+                        elementos = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                        if elementos:
+                            for item in elementos[:max_normas]:
+                                try:
+                                    normas.append(self._extrair_dados_norma(item.text))
+                                except Exception as e:
+                                    logger.warning(f"Erro ao processar item: {str(e)}")
+                            break
+                    except Exception:
                         continue
+                
+                # Se não encontrou normas recentes, tenta via pesquisa
+                if not normas:
+                    logger.info("Tentando encontrar normas via pesquisa")
+                    self.driver.get(self.search_url)
+                    
+                    # Executa pesquisa genérica
+                    try:
+                        search_input = WebDriverWait(self.driver, self.timeout).until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='search'], input[type='text']"))
+                        )
+                        search_input.send_keys("norma")
+                        search_input.send_keys(Keys.RETURN)
+                        
+                        # Aguarda resultados
+                        time.sleep(3)
+                        
+                        # Processa resultados
+                        resultados = self._extrair_resultados()[:max_normas]
+                        
+                        for item in resultados:
+                            try:
+                                normas.append(self._extrair_dados_norma(item.text))
+                            except Exception as e:
+                                logger.warning(f"Erro ao processar item: {str(e)}")
+                    except Exception as e:
+                        logger.error(f"Erro na pesquisa de normas: {str(e)}")
                         
                 return normas
                 
@@ -137,57 +181,182 @@ class SEFAZScraper:
             return []
 
     # ================== SUPPORT METHODS ==================
+    def _formatar_numero(self, numero):
+        """Padroniza o formato do número da norma"""
+        # Remove espaços
+        numero = numero.strip()
+        
+        # Verifica se tem ano com 2 ou 4 dígitos
+        if '/' in numero:
+            num_parts = numero.split('/')
+            if len(num_parts) == 2:
+                num, ano = num_parts
+                # Se ano tem 2 dígitos, converte para 4 dígitos
+                if len(ano) == 2:
+                    # Assume que é 2000+ se o ano é menor que 30
+                    # caso contrário assume que é 1900+
+                    ano_int = int(ano)
+                    if ano_int < 30:
+                        ano = f"20{ano}"
+                    else:
+                        ano = f"19{ano}"
+                    numero = f"{num}/{ano}"
+                
+        return numero
+    
     def _verificar_via_url_direta(self, tipo, numero):
         """Tentativa de verificação via URL direta"""
         try:
-            url = f"{self.base_url}/{tipo.lower()}/{numero}"
-            self.driver.get(url)
+            # Formata a URL conforme esperado pelo site
+            tipo_url = tipo.lower()
+            numero_url = numero.replace('/', '-')
             
-            if "revogado" in self.driver.page_source.lower():
-                return False
-            if "vigente" in self.driver.page_source.lower():
-                return True
+            urls_para_tentar = [
+                f"{self.base_url}/{tipo_url}/{numero_url}",
+                f"{self.base_url}/{tipo_url.lower()}/{numero}",
+                f"{self.base_url}/{tipo_url.lower()}/{numero.replace('/', '')}"
+            ]
+            
+            for url in urls_para_tentar:
+                logger.info(f"Tentando URL: {url}")
+                self.driver.get(url)
+                time.sleep(2)
                 
+                # Captura evidência
+                self._capturar_evidencias(f"url_{tipo}_{numero}")
+                
+                # Verifica se a URL redirecionou para página de erro
+                if "error" in self.driver.current_url.lower() or "404" in self.driver.current_url:
+                    logger.info("URL resultou em erro 404")
+                    continue
+                
+                # Verifica o conteúdo da página
+                page_source = self.driver.page_source.lower()
+                
+                # Busca por indicações de revogação
+                if any(termo in page_source for termo in ["revogado", "revogada", "não vigente"]):
+                    logger.info("Norma encontrada mas está revogada")
+                    return False
+                
+                # Busca por indicações de vigência
+                if any(termo in page_source for termo in ["vigente", "em vigor"]):
+                    logger.info("Norma encontrada e está vigente")
+                    return True
+                
+                # Se encontrou a página da norma mas sem status claro
+                if tipo.lower() in page_source and numero.replace('/', '-') in page_source:
+                    logger.info("Norma encontrada sem status explícito - assumindo vigente")
+                    return True
+            
+            # Se chegou aqui, não encontrou por nenhuma URL
             return None
+            
         except Exception as e:
             logger.warning(f"Falha na verificação por URL: {str(e)}")
             return None
 
     def _verificar_via_pesquisa_avancada(self, tipo, numero):
-        """Estratégia 1: Pesquisa avançada com espera inteligente"""
+        """Versão corrigida com espera inteligente e melhor manipulação de resultados"""
         try:
-            query = f"{tipo} {numero}"
-            url = f"{self.search_url}?q={urllib.parse.quote_plus(query)}"
-            self.driver.get(url)
+            # Formata a consulta de diferentes maneiras
+            queries = [
+                f"{tipo} {numero}",
+                f"{tipo} N° {numero}",
+                # Não use símbolo + diretamente na string de consulta
+                f"{tipo} {numero.replace('/', '-')}"
+            ]
             
-            # Espera por elementos-chave ou conteúdo específico
-            WebDriverWait(self.driver, 20).until(
-                lambda d: (
-                    "resultado" in d.page_source.lower() or 
-                    "consulta" in d.page_source.lower() or
-                    "norma" in d.page_source.lower()
-                )
-            )
-            
-            # Extrai resultados usando vários padrões de seletores
-            resultados = self._extrair_resultados()
-            
-            if not resultados:
-                return None
+            for query in queries:
+                logger.info(f"Tentando busca com query: {query}")
                 
-            # Análise semântica do primeiro resultado
-            return self._analisar_resultado(resultados[0].text)
+                # Formata URL de pesquisa
+                url = f"{self.search_url}?q={urllib.parse.quote_plus(query)}"
+                self.driver.get(url)
+                
+                # Aguarda carregamento
+                try:
+                    WebDriverWait(self.driver, 10).until(
+                        lambda d: (
+                            len(d.page_source) > 1000 and  # Página carregou algo substancial
+                            ("resultado" in d.page_source.lower() or 
+                             "busca" in d.page_source.lower() or
+                             "pesquisa" in d.page_source.lower())
+                        )
+                    )
+                except TimeoutException:
+                    logger.warning("Timeout ao aguardar resultados")
+                    continue
+
+                # Captura evidência
+                self._capturar_evidencias(f"pesquisa_{tipo}_{numero}")
+                
+                # Verifica se há mensagem de "nenhum resultado"
+                if any(termo in self.driver.page_source.lower() for termo in [
+                    "nenhum resultado", 
+                    "não encontrado", 
+                    "não foram encontrados",
+                    "resultado vazio"
+                ]):
+                    logger.info("Pesquisa retornou sem resultados")
+                    continue
+
+                # Extrai resultados com múltiplos seletores
+                resultados = self._extrair_resultados()
+                
+                if not resultados:
+                    logger.info("Nenhum resultado encontrado")
+                    continue
+                    
+                logger.info(f"Encontrados {len(resultados)} resultados")
+                
+                # Filtra resultados para encontrar a norma específica
+                for resultado in resultados:
+                    texto_resultado = resultado.text.lower()
+                    numero_formatado = numero.lower().replace("/", "").replace("-", "")
+                    
+                    # Verifica se o resultado corresponde ao tipo e número procurados
+                    if (tipo.lower() in texto_resultado and 
+                        (numero.lower() in texto_resultado or 
+                         numero_formatado in texto_resultado.replace("/", "").replace("-", ""))):
+                        
+                        # Analisa o status da norma
+                        logger.info(f"Encontrada norma correspondente: {texto_resultado[:100]}...")
+                        
+                        # Verifica revogação
+                        if any(termo in texto_resultado for termo in ["revogad", "cancelad", "anulad"]):
+                            logger.info("Norma está revogada")
+                            return False
+                            
+                        # Verifica vigência
+                        if any(termo in texto_resultado for termo in ["vigente", "em vigor", "válid"]):
+                            logger.info("Norma está vigente")
+                            return True
+                            
+                        # Se não tem informação explícita, assume vigente
+                        logger.info("Norma encontrada sem status - assumindo vigente")
+                        return True
+            
+            # Se chegou aqui, não encontrou por nenhuma pesquisa
+            return None
             
         except Exception as e:
-            logger.warning(f"Falha na pesquisa avançada: {str(e)}")
+            logger.error(f"Erro na pesquisa avançada: {str(e)}")
+            self._capturar_evidencias(f"erro_pesquisa_{tipo}_{numero}")
             return None
 
     def _extrair_resultados(self):
         """Tenta múltiplos seletores para encontrar resultados"""
+        resultados = []
+        
+        # Lista de seletores para encontrar resultados (ordem de prioridade)
         selectors = [
+            ("CSS", ".result-item"),
+            ("CSS", ".search-result"),
             ("CSS", ".resultado-busca li"),
-            ("CSS", "div.search-result-item"),
+            ("CSS", "ul.lista-resultados > li"),
+            ("CSS", ".resultado"),
             ("XPATH", "//div[contains(@class,'resultado')]"),
+            ("XPATH", "//li[contains(@class,'resultado')]"),
             ("XPATH", "//*[contains(text(),'Norma') or contains(text(),'Documento')]/ancestor::div[1]")
         ]
         
@@ -199,52 +368,40 @@ class SEFAZScraper:
                     elements = self.driver.find_elements(By.XPATH, selector)
                     
                 if elements:
+                    logger.info(f"Encontrados {len(elements)} resultados com seletor {selector}")
                     return elements
-            except:
+            except Exception as e:
+                logger.debug(f"Erro com seletor {selector}: {str(e)}")
                 continue
                 
-        return []
-
-    def _analisar_resultado(self, texto):
-        """Análise inteligente do conteúdo do resultado"""
-        texto = texto.lower()
-        
-        palavras_revogacao = ["revogado", "cancelado", "anulado", "extinto"]
-        palavras_vigencia = ["vigente", "válido", "ativo", "em vigor"]
-        
-        if any(palavra in texto for palavra in palavras_revogacao):
-            return False
-        elif any(palavra in texto for palavra in palavras_vigencia):
-            return True
-            
-        # Fallback: Se não encontrar palavras-chave, considera como encontrado
-        return True
-        
-    #DEBUG DE PESQUISA
-    def _debug_pesquisa(self, tipo, numero):
-        self._iniciar_navegador()
+        # Última tentativa: busca por texto genérico na página
         try:
-            query = f"{tipo} {numero}"
-            url = f"{self.search_url}?q={urllib.parse.quote_plus(query)}"
-            self.driver.get(url)
+            soup = BeautifulSoup(self.driver.page_source, 'html.parser')
             
-            # Salva recursos para análise
-            with open("debug_page.html", "w", encoding="utf-8") as f:
-                f.write(self.driver.page_source)
-                
-            self.driver.save_screenshot("debug_search.png")
+            # Procura divs que possam conter resultados
+            for div in soup.find_all('div'):
+                texto = div.get_text().lower()
+                # Se a div tem texto relacionado a normas
+                if (len(texto) > 50 and 
+                    any(termo in texto for termo in ["norma", "decreto", "lei", "portaria"])):
+                    # Tenta encontrar o elemento no Selenium
+                    try:
+                        xpath = f"//div[contains(text(),'{div.get_text()[:30]}')]"
+                        elemento = self.driver.find_element(By.XPATH, xpath)
+                        resultados.append(elemento)
+                    except:
+                        continue
+        except Exception as e:
+            logger.debug(f"Erro na busca por BeautifulSoup: {str(e)}")
             
-            print("\n=== DEBUG INFO ===")
-            print("URL da pesquisa:", url)
-            print("Título da página:", self.driver.title)
-            print("HTML salvo em debug_page.html")
-            print("Screenshot salvo em debug_search.png")
-            
-        finally:
-            self._fechar_navegador()
+        return resultados
 
     def _capturar_evidencias(self, prefixo="debug"):
         """Versão robusta para salvar arquivos de debug"""
+        if not self.driver:
+            logger.error("Tentativa de capturar evidências com driver fechado")
+            return None, None
+            
         try:
             # Remove caracteres inválidos do nome do arquivo
             safe_prefix = re.sub(r'[\\/*?:"<>|]', "_", prefixo)
@@ -260,6 +417,7 @@ class SEFAZScraper:
             with open(html_path, "w", encoding="utf-8") as f:
                 f.write(self.driver.page_source)
             
+            logger.info(f"Evidências salvas: {screenshot_path} e {html_path}")
             return screenshot_path, html_path
         except Exception as e:
             logger.error(f"Falha ao capturar evidências: {str(e)}")
@@ -268,10 +426,10 @@ class SEFAZScraper:
     def _extrair_dados_norma(self, texto_item):
         """Extrai dados estruturados de um item de norma"""
         padrao_tipo = r'(LEI|DECRETO|PORTARIA|INSTRUÇÃO NORMATIVA)\s'
-        padrao_numero = r'N[º°]\s*([\d\/-]+)'
-        padrao_data = r'(\d{2}\/\d{2}\/\d{4})'
+        padrao_numero = r'(?:N[º°]?\s*)?(\d+[\/-]\d+)'
+        padrao_data = r'(\d{1,2}\/\d{1,2}\/\d{4})'
         
-        tipo = re.search(padrao_tipo, texto_item, re.IGNORECASE)
+        tipo = re.search(padrao_tipo, texto_item.upper())
         numero = re.search(padrao_numero, texto_item)
         data = re.search(padrao_data, texto_item)
         
@@ -291,7 +449,22 @@ class SEFAZScraper:
                 WebDriverWait(self.driver, 15).until(
                     EC.presence_of_element_located((By.TAG_NAME, "body"))
                 )
-                return "SEFAZ" in self.driver.title
+                
+                # Verificação robusta e case-insensitive
+                current_url = self.driver.current_url.lower()
+                page_source = self.driver.page_source.lower()
+                
+                checks = [
+                    "sefaz" in self.driver.title.lower() or "legislação" in self.driver.title.lower(),
+                    "portaldalegislacao" in current_url,
+                    any(termo in page_source for termo in ["sefaz", "fazenda", "legislação"]),
+                    len(page_source) > 1000
+                ]
+                
+                logger.info(f"URL atual: {current_url}")
+                logger.info(f"Checks: {checks}")
+                
+                return all(checks)
         except Exception as e:
             logger.error(f"Falha no teste de conexão: {str(e)}")
             return False
@@ -315,29 +488,36 @@ class SEFAZScraper:
         print(f"Encontradas {len(normas)} normas recentes")
         
         return resultado
-    
 
-
-
-    #TESTE MANUAL
     def testar_conexao_manual(self):
-        """Versão corrigida do teste de conexão"""
+        """Versão corrigida do teste de conexão que NÃO fecha o navegador"""
         try:
-            self._iniciar_navegador()
+            if self.driver is None:
+                self._iniciar_navegador()
+                
             self.driver.get(self.base_url)
+            
+            # Aguarda carregamento da página
+            WebDriverWait(self.driver, 15).until(
+                EC.presence_of_element_located((By.TAG_NAME, "body"))
+            )
             
             # Verificação robusta e case-insensitive
             current_url = self.driver.current_url.lower()
             page_source = self.driver.page_source.lower()
             
             checks = [
-                "sefaz" in self.driver.title.lower(),
+                "sefaz" in self.driver.title.lower() or "legislação" in self.driver.title.lower(),
                 "portaldalegislacao" in current_url,
-                "fazenda" in page_source,
-                len(page_source) > 5000  # Limite reduzido
+                any(termo in page_source for termo in ["sefaz", "fazenda", "legislação"]),
+                len(page_source) > 1000
             ]
             
-            self.driver.save_screenshot('conexao_manual.png')
+            # Salva evidência
+            self.driver.save_screenshot('debug/conexao_manual.png')
+            with open('debug/conexao_page.html', 'w', encoding='utf-8') as f:
+                f.write(self.driver.page_source)
+                
             logger.info(f"URL atual: {current_url}")
             logger.info(f"Checks: {checks}")
             
@@ -346,5 +526,3 @@ class SEFAZScraper:
         except Exception as e:
             logger.error(f"Erro no teste: {str(e)}")
             return False
-        finally:
-            self._fechar_navegador()
