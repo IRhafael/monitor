@@ -74,6 +74,16 @@ class NormaVigente(models.Model):
         blank=True,
         help_text="Padrão usado para extrair esta norma"
     )
+    detalhes_completos = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Detalhes completos coletados do portal"
+    )
+    data_detalhes = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Data da coleta de detalhes"
+    )
 
 
     class Meta:

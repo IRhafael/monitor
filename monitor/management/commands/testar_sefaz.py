@@ -65,6 +65,20 @@ def teste_rapido_shell():
             
     print("\n=== TESTE CONCLUÍDO ===")
 
+
+    for tipo, numero in normas_teste:
+        print(f"\n▶ Testando pesquisa para {tipo} {numero}:")
+        
+        try:
+            vigente, detalhes = scraper.verificar_vigencia_com_detalhes(tipo, numero)
+            print(f"Status: {'VIGENTE' if vigente else 'REVOGADA'}")
+            print("Detalhes encontrados:")
+            for chave, valor in detalhes.items():
+                print(f"- {chave}: {valor[:100]}{'...' if len(valor) > 100 else ''}")
+                
+        except Exception as e:
+            print(f"💣 ERRO: {str(e)}")
+
 # Adiciona o comando Django
 class Command(BaseCommand):
     help = 'Executa teste rápido de pesquisa de normas na SEFAZ'
@@ -74,3 +88,33 @@ class Command(BaseCommand):
 
 
 
+
+
+
+from monitor.utils.sefaz_integracao import IntegradorSEFAZ
+
+# 1. Teste básico de conexão
+integrador = IntegradorSEFAZ()
+print("Testando conexão...")
+print("Conexão OK" if integrador.scraper.testar_conexao() else "Falha na conexão")
+
+# 2. Teste com norma específica (substitua por uma norma real do seu sistema)
+tipo = "LEI"
+numero = "8.558/2024"  # Substitua por um número real
+
+print(f"\nVerificando {tipo} {numero}...")
+vigente, detalhes = integrador.verificar_vigencia_com_detalhes(tipo, numero)
+
+print(f"Resultado: {'VIGENTE' if vigente else 'REVOGADA/NÃO ENCONTRADA'}")
+print("\nDetalhes completos:")
+for chave, valor in detalhes.items():
+    print(f"{chave}: {valor}")
+
+# 3. Verifique se salvou no banco de dados
+from monitor.models import NormaVigente
+norma = NormaVigente.objects.filter(tipo=tipo, numero=numero).first()
+if norma:
+    print(f"\nNorma salva no banco (ID: {norma.id})")
+    print(f"Detalhes salvos: {norma.detalhes_completos}")
+else:
+    print("\nNorma não foi salva no banco - verifique os logs")

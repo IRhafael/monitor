@@ -84,7 +84,7 @@ class SEFAZScraper:
                 self.driver = None
 
     # ================== MAIN FLOW METHODS ==================
-    def verificar_vigencia(self, tipo, numero):
+    def verificar_vigencia_norma(self, tipo, numero):
         """Método principal simplificado e eficiente"""
         tipo = tipo.upper().strip()
         numero = self._formatar_numero(numero)
@@ -114,6 +114,8 @@ class SEFAZScraper:
         except Exception as e:
             logger.error(f"Erro na verificação: {str(e)}")
             return False
+        
+
 
     def coletar_normas_recentes(self, max_normas=10):
         """Coleta as normas mais recentes do portal"""
@@ -180,6 +182,34 @@ class SEFAZScraper:
         except Exception as e:
             logger.error(f"Erro na coleta de normas: {str(e)}")
             return []
+        
+
+    def _coletar_detalhes_norma(self):
+        """Extrai os dados da norma da página de detalhe"""
+        detalhes = {}
+        try:
+            soup = BeautifulSoup(self.driver.page_source, 'html.parser')
+            
+            # Normalmente os campos são organizados com <div class="field"> ou <div class="field--name-field-situacao">
+            campos = soup.select("div.field, div.field--item, div.field__item")
+            
+            for campo in campos:
+                try:
+                    label = campo.find("div", class_="field__label")
+                    valor = campo.find("div", class_="field__item")
+                    if not label or not valor:
+                        continue
+                    chave = label.text.strip().lower().replace(" ", "_")
+                    detalhes[chave] = valor.text.strip()
+                except Exception:
+                    continue
+            
+            return detalhes
+
+        except Exception as e:
+            logger.warning(f"Erro ao coletar detalhes da norma: {str(e)}")
+            return detalhes
+
 
     # ================== SUPPORT METHODS ==================
     def _formatar_numero(self, numero):

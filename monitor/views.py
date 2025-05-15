@@ -166,3 +166,27 @@ def dashboard_vigencia(request):
         'alertas': normas.filter(dias_desde_verificacao__gt=timedelta(days=90))
     }
     return render(request, 'monitor/vigencia.html', context)
+
+
+@login_required
+def verificar_norma(request, tipo, numero):
+    integrador = IntegradorSEFAZ()
+    vigente, detalhes = integrador.verificar_vigencia_com_detalhes(tipo, numero)
+    
+    # Atualiza ou cria a norma no banco de dados
+    norma, created = NormaVigente.objects.update_or_create(
+        tipo=tipo,
+        numero=numero,
+        defaults={
+            'situacao': 'VIGENTE' if vigente else 'REVOGADA',
+            'detalhes_completos': detalhes,
+            'data_detalhes': timezone.now(),
+            'data_verificacao': timezone.now()
+        }
+    )
+    
+    return JsonResponse({
+        'vigente': vigente,
+        'detalhes': detalhes,
+        'norma_id': norma.id
+    })

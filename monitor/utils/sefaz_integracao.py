@@ -324,3 +324,32 @@ class IntegradorSEFAZ:
         if len(partes) != 2:
             return False
         return partes[0].isdigit() and partes[1].isdigit()
+    
+
+    # Adicione este método à classe IntegradorSEFAZ:
+    def verificar_vigencia_com_detalhes(self, tipo, numero):
+        """Versão que retorna tanto o status de vigência quanto os detalhes completos"""
+        try:
+            resultado = self.buscar_norma_especifica(tipo, numero)
+            if isinstance(resultado, dict) and 'vigente' in resultado:
+                # Se já temos os detalhes no cache
+                return resultado['vigente'], resultado.get('detalhes', {})
+            
+            # Caso contrário, faz uma nova verificação detalhada
+            with self.scraper.browser_session():
+                vigente = self.scraper.verificar_vigencia(tipo, numero)
+                detalhes = self.scraper._coletar_detalhes_norma() if vigente else {}
+                
+                # Atualiza o cache com os detalhes
+                cache_key = f"sefaz_{tipo}_{numero}"
+                cache.set(cache_key, {
+                    'vigente': vigente,
+                    'detalhes': detalhes,
+                    'data_consulta': timezone.now()
+                }, 86400)  # 24 horas
+                
+                return vigente, detalhes
+                
+        except Exception as e:
+            logger.error(f"Erro ao verificar vigência com detalhes: {str(e)}")
+            return False, {}
