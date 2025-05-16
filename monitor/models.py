@@ -7,7 +7,6 @@ class Documento(models.Model):
     """
     Modelo para armazenar informações sobre documentos do Diário Oficial
     """
-    
     titulo = models.CharField(max_length=255, verbose_name="Título")
     data_publicacao = models.DateField(verbose_name="Data de Publicação")
     url_original = models.URLField(verbose_name="URL Original")
@@ -16,36 +15,32 @@ class Documento(models.Model):
     texto_completo = models.TextField(verbose_name="Texto Completo", blank=True)
     data_coleta = models.DateTimeField(default=timezone.now, verbose_name="Data da Coleta")
     processado = models.BooleanField(default=False, verbose_name="Processado")
-    normas_relacionadas = models.ManyToManyField('NormaVigente', blank=True)
-    verificado_sefaz = models.BooleanField(default=False, verbose_name="Verificado na SEFAZ")
-    relevante_contabil = models.BooleanField(default=False)
-    assunto = models.CharField(max_length=100, blank=True, null=True)
-    normas_relacionadas = models.ManyToManyField('NormaVigente', blank=True)
-    processamento_metadata = models.JSONField(
-        default=dict,
-        blank=True,
-        help_text="Metadados do processamento com spaCy"
-    )
-    
+    relevante_contabil = models.BooleanField(default=False, verbose_name="Relevante para Contabilidade")
+    normas_relacionadas = models.ManyToManyField('NormaVigente', blank=True, related_name='documentos')
+
     class Meta:
         verbose_name = "Documento"
         verbose_name_plural = "Documentos"
         ordering = ['-data_publicacao']
+        indexes = [
+            models.Index(fields=['data_publicacao']),
+            models.Index(fields=['processado']),
+            models.Index(fields=['relevante_contabil']),
+        ]
 
     def __str__(self):
-        return f"{self.titulo} ({self.data_publicacao})"
+        return f"{self.titulo} ({self.data_publicacao.strftime('%d/%m/%Y')})"
     
     def delete(self, *args, **kwargs):
-        # Remover o arquivo PDF quando o documento for excluído
-        if self.arquivo_pdf:
-            if os.path.isfile(self.arquivo_pdf.path):
-                os.remove(self.arquivo_pdf.path)
+        """Remove o arquivo PDF associado ao deletar o documento"""
+        if self.arquivo_pdf and os.path.isfile(self.arquivo_pdf.path):
+            os.remove(self.arquivo_pdf.path)
         super().delete(*args, **kwargs)
 
 
 class NormaVigente(models.Model):
     """
-    Modelo para armazenar informações sobre normas vigentes da SEFAZ
+    Modelo para armazenar informações sobre normas vigentes
     """
     TIPO_CHOICES = [
         ('LEI', 'Lei'),
@@ -56,68 +51,54 @@ class NormaVigente(models.Model):
         ('OUTROS', 'Outros'),
     ]
 
-    data_verificacao = models.DateTimeField(null=True, blank=True)  
-    tipo = models.CharField(max_length=20, choices=TIPO_CHOICES, verbose_name="Tipo")
-    numero = models.CharField(max_length=50, verbose_name="Número")
-    data = models.DateField(verbose_name="Data", null=True, blank=True)
-    situacao = models.CharField(max_length=50, default="Vigente", verbose_name="Situação")
-    url = models.URLField(verbose_name="URL", blank=True)
-    descricao = models.TextField(verbose_name="Descrição", blank=True)
-    data_coleta = models.DateTimeField(default=timezone.now, verbose_name="Data da Coleta")
-    ultima_menção = models.ForeignKey('Documento', null=True, on_delete=models.SET_NULL)
-    fonte = models.CharField(max_length=50, choices=[
-        ('SEFAZ', 'SEFAZ'),
-        ('DIARIO_OFICIAL', 'Diário Oficial')
-    ], default='SEFAZ')
-    padrao_extração = models.CharField(
-        max_length=50,
-        blank=True,
-        help_text="Padrão usado para extrair esta norma"
-    )
-    detalhes_completos = models.JSONField(
-        default=dict,
-        blank=True,
-        help_text="Detalhes completos coletados do portal"
-    )
-    data_detalhes = models.DateTimeField(
-        null=True,
-        blank=True,
-        verbose_name="Data da coleta de detalhes"
-    )
+    SITUACAO_CHOICES = [
+        ('VIGENTE', 'Vigente'),
+        ('REVOGADA', 'Revogada'),
+        ('ALTERADA', 'Alterada'),
+    ]
 
+    tipo = models.CharField(max_length=20, choices=TIPO_CHOICES)
+    numero = models.CharField(max_length=50)
+    situacao = models.CharField(max_length=20, choices=SITUACAO_CHOICES, default='VIGENTE')
+    data_verificacao = models.DateTimeField(null=True, blank=True)
+    url = models.URLField(blank=True)
+    descricao = models.TextField(blank=True)
+    data_coleta = models.DateTimeField(default=timezone.now)
 
     class Meta:
         verbose_name = "Norma Vigente"
         verbose_name_plural = "Normas Vigentes"
-        ordering = ['-data', 'tipo', 'numero']
-        unique_together = ['tipo', 'numero']  # Evitar duplicações
-        
+        ordering = ['tipo', 'numero']
+        unique_together = ['tipo', 'numero']
+        indexes = [
+            models.Index(fields=['tipo', 'numero']),
+            models.Index(fields=['situacao']),
+        ]
+
     def __str__(self):
-        return f"{self.get_tipo_display()} {self.numero} ({self.data})"
+        return f"{self.get_tipo_display()} {self.numero}"
 
 
 class ConfiguracaoColeta(models.Model):
     """
-    Modelo para armazenar configurações da coleta automática
+    Configurações para a coleta automática
     """
-    ativa = models.BooleanField(default=True, verbose_name="Coleta Ativa")
-    intervalo_horas = models.PositiveIntegerField(default=24, verbose_name="Intervalo (horas)")
-    max_documentos = models.PositiveIntegerField(default=5, verbose_name="Máximo de Documentos")
-    ultima_execucao = models.DateTimeField(null=True, blank=True, verbose_name="Última Execução")
-    proxima_execucao = models.DateTimeField(null=True, blank=True, verbose_name="Próxima Execução")
-    
-    email_notificacao = models.EmailField(blank=True, verbose_name="Email para Notificação")
-    notificar_erros = models.BooleanField(default=True, verbose_name="Notificar Erros")
-    
+    ativa = models.BooleanField(default=True)
+    intervalo_horas = models.PositiveIntegerField(default=24)
+    max_documentos = models.PositiveIntegerField(default=10)
+    ultima_execucao = models.DateTimeField(null=True, blank=True)
+    proxima_execucao = models.DateTimeField(null=True, blank=True)
+    email_notificacao = models.EmailField(blank=True)
+
     class Meta:
         verbose_name = "Configuração de Coleta"
         verbose_name_plural = "Configurações de Coleta"
-    
+
     def __str__(self):
-        return f"Configuração - Intervalo: {self.intervalo_horas}h"
-    
+        return f"Configuração de Coleta (Intervalo: {self.intervalo_horas}h)"
+
     def save(self, *args, **kwargs):
-        # Garantir que só exista uma instância de configuração
+        """Garante que só exista uma instância de configuração"""
         if not self.pk and ConfiguracaoColeta.objects.exists():
             return
         super().save(*args, **kwargs)
@@ -125,7 +106,7 @@ class ConfiguracaoColeta(models.Model):
 
 class LogExecucao(models.Model):
     """
-    Modelo para armazenar logs de execução das coletas
+    Registro de execuções do sistema
     """
     TIPO_CHOICES = [
         ('DIARIO', 'Diário Oficial'),
@@ -139,49 +120,47 @@ class LogExecucao(models.Model):
         ('PARCIAL', 'Sucesso Parcial'),
     ]
     
-    data_inicio = models.DateTimeField(auto_now_add=True, verbose_name="Data de Início")
-    data_fim = models.DateTimeField(null=True, blank=True, verbose_name="Data de Conclusão")
-    tipo_execucao = models.CharField(max_length=10, choices=TIPO_CHOICES, verbose_name="Tipo de Execução")
-    status = models.CharField(max_length=10, choices=STATUS_CHOICES, verbose_name="Status")
-    documentos_coletados = models.IntegerField(default=0, verbose_name="Documentos Coletados")
-    normas_coletadas = models.IntegerField(default=0, verbose_name="Normas Coletadas")
-    mensagem = models.TextField(blank=True, verbose_name="Mensagem")
-    erro_detalhado = models.TextField(blank=True, verbose_name="Erro Detalhado")
-    normas_salvas = models.IntegerField(null=True, blank=True)
-    
+    data_inicio = models.DateTimeField(auto_now_add=True)
+    data_fim = models.DateTimeField(null=True, blank=True)
+    tipo_execucao = models.CharField(max_length=10, choices=TIPO_CHOICES)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES)
+    documentos_coletados = models.PositiveIntegerField(default=0)
+    normas_coletadas = models.PositiveIntegerField(default=0)
+    mensagem = models.TextField(blank=True)
+
     class Meta:
         verbose_name = "Log de Execução"
         verbose_name_plural = "Logs de Execução"
         ordering = ['-data_inicio']
-    
+        indexes = [
+            models.Index(fields=['tipo_execucao']),
+            models.Index(fields=['status']),
+            models.Index(fields=['data_inicio']),
+        ]
+
     def __str__(self):
-        return f"{self.get_tipo_execucao_display()} - {self.data_inicio.strftime('%d/%m/%Y %H:%M')} - {self.get_status_display()}"
+        return f"{self.get_tipo_execucao_display()} - {self.data_inicio.strftime('%d/%m/%Y %H:%M')}"
 
 
-    data_fim = models.DateTimeField(null=True, blank=True)
-    
-    def save(self, *args, **kwargs):
-        if not self.data_fim:
-            self.data_fim = timezone.now()
-        super().save(*args, **kwargs)
-
-
-class Norma(models.Model):
-    TIPOS_NORMA = [
-        ('LEI', 'Lei'),
-        ('PORTARIA', 'Portaria'),
-        ('DECRETO', 'Decreto'),
+class TermoMonitorado(models.Model):
+    """
+    Termos específicos para monitoramento no conteúdo dos documentos
+    """
+    TIPO_CHOICES = [
+        ('TEXTO', 'Texto Exato'),
+        ('NORMA', 'Norma Específica'),
+        ('REGEX', 'Expressão Regular'),
     ]
-    
-    tipo = models.CharField(max_length=20, choices=TIPOS_NORMA)
-    numero = models.CharField(max_length=50)
-    data = models.DateField()
-    conteudo = models.TextField(blank=True, null=True)
-    arquivo = models.FileField(upload_to='normas/', blank=True, null=True)
+
+    termo = models.CharField(max_length=255, unique=True)
+    tipo = models.CharField(max_length=5, choices=TIPO_CHOICES)
+    ativo = models.BooleanField(default=True)
     data_cadastro = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ['tipo', 'numero']  # Evita duplicatas
+        verbose_name = "Termo Monitorado"
+        verbose_name_plural = "Termos Monitorados"
+        ordering = ['termo']
 
     def __str__(self):
-        return f"{self.tipo} {self.numero}"
+        return f"{self.termo} ({self.get_tipo_display()})"

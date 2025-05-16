@@ -25,17 +25,22 @@ class DiarioOficialScraper:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         })
 
-        # Atualize a lista de termos contábeis
+        # Atualizar a lista de termos contábeis
         self.termos_contabeis = [
-            b'contabil', b'tribut', b'imposto', b'icms', b'ipi', b'iss',
-            b'fiscal', b'receita', b'declaracao', b'darf', b'sped',
-            b'efd', b'pis', b'cofins', b'csll', b'irpj', b'simples nacional',
-            b'lucro real', b'mei', b'escrituracao', b'balanco', b'demonstrativo',
-            b'nota fiscal', b'nfe', b'nfce', b'cte', b'mdfe', b'dacte',
-            b'certificado digital', b'sefaz', b'secretaria da fazenda',
-            b'obrigacao acessoria', b'regime tributario'
+            b'icms', 
+            b'decreto 21.866',
+            b'unatri',
+            b'unifis',
+            b'lei 4.257',
+            b'ato normativo 25/21',
+            b'ato normativo 26/21', 
+            b'ato normativo 27/21',
+            b'secretaria de fazenda do estado do piau\xc3\xad',
+            b'sefaz-pi',
+            b'sefaz',
+            b'substitui\xc3\xa7\xc3\xa3o tribut\xc3\xa1ria',
+            # ... (outros termos existentes)
         ]
-
     # Modifique o método configurar_navegador
     def configurar_navegador(self):
         """Configura o navegador Chrome em modo headless"""

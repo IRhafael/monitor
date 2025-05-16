@@ -49,13 +49,17 @@ class PDFProcessor:
         # Matcher para termos contábeis
         self.termo_matcher = Matcher(self.nlp.vocab)
         patterns = [
-            [{"LOWER": {"IN": ["icms", "ipi", "iss", "pis", "cofins", "csll", "irpj"]}}],
-            [{"LOWER": {"IN": ["sped", "efd", "dctf", "dirf", "das", "darf"]}}],
-            [{"LEMMA": {"IN": ["tributário", "fiscal", "tributo", "fiscalização"]}}],
-            [{"LOWER": "receita"}, {"LOWER": "federal"}],
-            [{"LOWER": "balanço"}, {"LOWER": "patrimonial"}],
-            [{"LOWER": "simples"}, {"LOWER": "nacional"}],
-            [{"LOWER": "obrigação"}, {"LOWER": "acessória"}]
+            # Padrões existentes...
+            [{"LOWER": {"IN": ["icms", "unatri", "unifis", "sefaz", "sefaz-pi"]}}],
+            [{"LOWER": "decreto"}, {"TEXT": {"REGEX": r"21\.?866"}}],
+            [{"LOWER": "lei"}, {"TEXT": {"REGEX": r"4\.?257"}}],
+            [{"LOWER": "substituição"}, {"LOWER": "tributária"}],
+            [{"LOWER": "ato"}, {"LOWER": "normativo"}, 
+            {"TEXT": {"REGEX": r"2[5-7]/21"}}],
+            [{"LOWER": "secretaria"}, {"LOWER": "de"}, 
+            {"LOWER": "fazenda"}, {"LOWER": "do"}, 
+            {"LOWER": "estado"}, {"LOWER": "do"}, 
+            {"LOWER": "piauí"}]
         ]
         for pattern in patterns:
             self.termo_matcher.add("TERMO_CONTABIL", [pattern])
@@ -184,7 +188,9 @@ class PDFProcessor:
         return texto.strip()
 
     def analisar_relevancia(self, texto: str) -> Tuple[bool, Dict]:
-        """Analisa a relevância contábil com spaCy"""
+        """Versão atualizada para usar termos do banco de dados"""
+        from monitor.models import TermoMonitorado
+        
         if not texto:
             return False, {}
             
@@ -194,21 +200,25 @@ class PDFProcessor:
             'termos': {},
             'normas': []
         }
-
-        # Encontrar termos contábeis
-        matches = self.termo_matcher(doc)
-        for match_id, start, end in matches:
-            termo = doc[start:end].text
-            peso = 3 if termo in ["icms", "ipi", "iss"] else 2  # Exemplo de pesos
-            
-            detalhes['termos'][termo] = detalhes['termos'].get(termo, 0) + 1
-            detalhes['pontuacao'] += peso
-
-        # Extrair normas
-        normas = self._extrair_normas_com_spacy(doc)
-        detalhes['normas'] = normas
-        detalhes['pontuacao'] += len(normas) * 2
-
+        
+        # Carrega termos ativos do banco de dados
+        termos_monitorados = TermoMonitorado.objects.filter(ativo=True)
+        
+        for termo_obj in termos_monitorados:
+            try:
+                if termo_obj.tipo == 'TEXTO':
+                    if termo_obj.termo.lower() in texto.lower():
+                        detalhes['termos'][termo_obj.termo] = detalhes['termos'].get(termo_obj.termo, 0) + 1
+                        detalhes['pontuacao'] += 3
+                        
+                elif termo_obj.tipo == 'NORMA':
+                    normas = self._extrair_normas_especificas(texto, termo_obj.termo)
+                    detalhes['normas'].extend(normas)
+                    detalhes['pontuacao'] += len(normas) * 2
+            except Exception as e:
+                print(f"Erro ao processar termo {termo_obj}: {str(e)}")
+                continue
+        
         relevante = detalhes['pontuacao'] >= self.limite_relevancia
         return relevante, detalhes
 
@@ -255,22 +265,23 @@ class PDFProcessor:
             documento.resumo = self._gerar_resumo(texto, detalhes)
             documento.relevante_contabil = True
             documento.processado = True
-            
+
             for tipo, numero in detalhes.get('normas', []):
                 norma, _ = NormaVigente.objects.get_or_create(
                     tipo=tipo,
                     numero=numero,
-                    defaults={'situacao': 'A VERIFICAR', 'fonte': 'DIARIO_OFICIAL'}
+                    defaults={'situacao': 'A VERIFICAR'}
                 )
                 documento.normas_relacionadas.add(norma)
-            
+
             documento.save()
             logger.info(f"Documento ID {documento.id} processado com sucesso")
             return True
-            
+
         except Exception as e:
             logger.error(f"Falha ao processar documento relevante ID {documento.id}: {str(e)}")
             return False
+
 
     def _gerar_resumo(self, texto: str, detalhes: Dict) -> str:
         """Gera um resumo simplificado do documento"""
@@ -338,3 +349,62 @@ class PDFProcessor:
             f"{resultados['falhas']} falhas"
         )
         return resultados
+    
+    
+    def _inferir_tipo_norma(self, texto: str) -> str:
+        texto = texto.lower()
+        if "lei complementar" in texto:
+            return "LC"
+        elif "medida provisória" in texto:
+            return "MP"
+        elif "portaria" in texto:
+            return "PORTARIA"
+        elif "decreto" in texto:
+            return "DECRETO"
+        elif "lei" in texto:
+            return "LEI"
+        elif "ato normativo" in texto:
+            return "ATO NORMATIVO"
+        return "OUTRO"
+    
+
+    def _padronizar_numero_norma(self, numero: str) -> str:
+        """Padroniza o formato do número da norma, preservando pontos, barras e hífens"""
+        if not numero:
+            return None
+        # Remove espaços em branco extras
+        numero = numero.strip()
+        # Permite dígitos, pontos, barras, hífens
+        numero = re.sub(r'[^0-9./-]', '', numero)
+        # Remove zeros à esquerda de cada segmento numérico separado por / ou -
+        partes = re.split(r'([./-])', numero)  # mantém separadores
+        resultado = []
+        for parte in partes:
+            if parte in ['.', '/', '-']:
+                resultado.append(parte)
+            else:
+                # Remove zeros à esquerda e mantém '0' se ficar vazio
+                resultado.append(parte.lstrip('0') or '0')
+        return ''.join(resultado)
+
+    def _extrair_normas_especificas(self, texto: str, padrao_norma: str) -> List[Tuple[str, str]]:
+        """Extrai normas específicas baseadas nos termos monitorados, capturando número completo"""
+        normas = []
+        tipo = None
+        
+        # Tenta extrair o tipo (ex: LEI, DECRETO, ATO NORMATIVO)
+        tipo_match = re.match(r'^([A-ZÁÉÍÓÚÃÕÇ\s]+)', padrao_norma, re.IGNORECASE)
+        if tipo_match:
+            tipo = tipo_match.group(1).strip().upper()
+            tipo = self._determinar_tipo_norma(tipo) or tipo
+        
+        # Regex melhorada para capturar número completo, incluindo pontos e barras
+        numero_match = re.search(r'(\d{1,5}(?:[./-]\d{1,5})*)', padrao_norma)
+        if numero_match:
+            numero_raw = numero_match.group(1)
+            numero = self._padronizar_numero_norma(numero_raw)
+            if tipo and numero and (tipo, numero) not in normas:
+                normas.append((tipo, numero))
+        
+        return normas
+

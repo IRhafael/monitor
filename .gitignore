@@ -5,3 +5,6 @@ venv311/
 __pycache__/
 *.pyc
 /debug
+*.pdf
+*.pdf
+/media/pdfs

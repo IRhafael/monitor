@@ -231,12 +231,13 @@ class IntegradorSEFAZ:
             return []
 
         padroes = [
-            r'(?i)(Lei Complementar|LC)\s+(?:n?[º°]?\s*)?(\d+)',
-            r'(?i)(Lei|Decreto|Portaria)\s+(?:n?[º°]?\s*)?(\d+[/-]\d{2,4})'
+            # Padrões existentes...
+            r'(?i)(Decreto)\s+(?:n?[º°]?\s*)?(21\.?866)',
+            r'(?i)(Lei)\s+(?:n?[º°]?\s*)?(4\.?257)',
+            r'(?i)(Ato Normativo)\s+(?:n?[º°]?\s*)?(2[5-7]/21)'
         ]
         
         normas = set()
-        
         for padrao in padroes:
             for match in re.finditer(padrao, texto):
                 try:

@@ -43,7 +43,7 @@ def documentos_list(request):
 
 @login_required
 def normas_list(request):
-    normas = NormaVigente.objects.order_by('-data')
+    normas = NormaVigente.objects.order_by('-data_verificacao')
     return render(request, 'monitor/normas_list.html', {'normas': normas})
 
 
