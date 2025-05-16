@@ -98,8 +98,15 @@ class SEFAZScraper:
         return cleaned.lower()
 
     def _padronizar_numero(self, numero):
-        """Remove pontos e formata números de norma"""
-        return re.sub(r'[^\d/]', '', str(numero))
+        """Padroniza para formato ANO/NÚMERO (ex: 2023/22033)"""
+        numero = re.sub(r'[^\d/]', '', str(numero))  # Remove não-dígitos exceto /
+        
+        # Casos como 22.033 → assume ano atual se não tiver /
+        if '/' not in numero:
+            current_year = datetime.now().year
+            numero = f"{current_year}/{numero}"
+        
+        return numero
 
     def _pesquisar_norma(self, norm_type, norm_number):
         """Executa a pesquisa no portal SEM o asterisco no final"""
@@ -307,10 +314,14 @@ class SEFAZScraper:
             return False
 
     def check_norm_status(self, norm_type, norm_number):
+        norm_type = norm_type.upper().strip()
+        norm_number_clean = self._padronizar_numero(norm_number)
+
         details = self.get_norm_details(norm_type, norm_number)
         if not details:
             return False
-            
+        
+    
         # Adicione esta verificação
         situacao = details.get('situacao')
         if not situacao:  # Caso o campo situacao seja None

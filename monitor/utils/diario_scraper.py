@@ -13,6 +13,7 @@ from bs4 import BeautifulSoup
 import logging
 from django.core.files.base import ContentFile
 from monitor.models import Documento
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -155,23 +156,15 @@ class DiarioOficialScraper:
             return None
 
     def verificar_conteudo_contabil(self, conteudo):
-        """Verifica se o conteúdo do PDF é relevante para contabilidade"""
-        # Verifica os primeiros 20KB do PDF (onde geralmente está o índice/sumário)
-        sample = conteudo[:20000]
+        sample = conteudo[:5000]  # Verifica o início (cabeçalho)
+        if any(termo.lower() in sample.decode('utf-8', errors='ignore').lower() 
+            for termo in self.termos_contabeis):
+            return True
         
-        # Verifica cada termo contábil
-        for termo in self.termos_contabeis:
-            if termo in sample.lower():
-                return True
-                
-        # Se não encontrou nos primeiros 20KB, verifica uma amostra do meio
-        if len(conteudo) > 50000:
-            sample = conteudo[25000:45000]
-            for termo in self.termos_contabeis:
-                if termo in sample.lower():
-                    return True
-                    
-        return False
+        # Verifica o final (assinaturas/seções importantes)
+        sample = conteudo[-10000:]
+        return any(termo.lower() in sample.decode('utf-8', errors='ignore').lower() 
+                for termo in self.termos_contabeis)
 
     def gerar_nome_arquivo(self, pdf_url, data_referencia):
         """Gera um nome de arquivo consistente para o PDF"""
@@ -216,3 +209,20 @@ class DiarioOficialScraper:
         except Exception as e:
             logger.error(f"Erro ao extrair links de {url}: {str(e)}")
             return []
+        
+
+    def extrair_norma(texto):
+        padrao = r'(?i)(lei complementar|lc|lei|decreto[\- ]?lei|decreto|ato normativo|portaria)' \
+                r'[\s:]*(n[º°o.]?\s*)?(\d+[\.,\/]?\d*)'
+        
+        match = re.search(padrao, texto)
+        if match:
+            tipo = match.group(1).upper()
+            numero = match.group(3).replace('.', '').replace(',', '')
+            return tipo, numero
+        return None, None
+
+    # Exemplo:
+    tipo, numero = extrair_norma("Decreto nº 22.033/2023")
+    print(tipo)  # "DECRETO"
+    print(numero)  # "22033/2023"
