@@ -339,3 +339,20 @@ class IntegradorSEFAZ:
         except Exception as e:
             logger.error(f"Erro ao verificar vigência com detalhes: {str(e)}")
             return False, {}
+        
+    def verificar_normas_em_lote(self, normas, batch_size=3):
+        """Verifica um lote de normas de forma mais eficiente"""
+        with self.scraper.browser_session():
+            resultados = []
+            for i in range(0, len(normas), batch_size):
+                batch = normas[i:i + batch_size]
+                for norma in batch:
+                    try:
+                        vigente = self.scraper.check_norm_status(norma.tipo, norma.numero)
+                        norma.situacao = "VIGENTE" if vigente else "REVOGADA"
+                        norma.data_verificacao = timezone.now()
+                        norma.save()
+                        resultados.append(norma)
+                    except Exception as e:
+                        logger.error(f"Erro na norma {norma}: {str(e)}")
+            return resultados

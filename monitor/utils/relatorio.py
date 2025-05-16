@@ -140,13 +140,13 @@ class RelatorioGenerator:
         for norma in normas:
             # Obtém documentos relacionados
             docs_relacionados = ", ".join([
-                f"{doc.id} ({doc.data_publicacao.strftime('%d/%m/%Y')})" 
-                for doc in norma.documento_set.all()[:5]  # Limita a 5 documentos para não sobrecarregar
-            ])
-            
-            if norma.documento_set.count() > 5:
-                docs_relacionados += f" e mais {norma.documento_set.count() - 5} documento(s)"
-            
+            f"{doc.id} ({doc.data_publicacao.strftime('%d/%m/%Y')})" 
+            for doc in norma.documentos.all()[:5]  # Alterado de documento_set para documentos
+        ])
+
+        if norma.documentos.count() > 5:  # Alterado aqui também
+            docs_relacionados += f" e mais {norma.documentos.count() - 5} documento(s)"  # E aqui
+
             worksheet.append([
                 norma.tipo,
                 norma.numero,

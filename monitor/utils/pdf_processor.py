@@ -45,46 +45,25 @@ class PDFProcessor:
             raise
 
     def _configure_matchers(self):
-        """Configura os matchers corretamente"""
-        # Matcher para termos contábeis
-        self.termo_matcher = Matcher(self.nlp.vocab)
-        patterns = [
-            # Padrões existentes...
-            [{"LOWER": {"IN": ["icms", "unatri", "unifis", "sefaz", "sefaz-pi"]}}],
-            [{"LOWER": "decreto"}, {"TEXT": {"REGEX": r"21\.?866"}}],
-            [{"LOWER": "lei"}, {"TEXT": {"REGEX": r"4\.?257"}}],
-            [{"LOWER": "substituição"}, {"LOWER": "tributária"}],
-            [{"LOWER": "ato"}, {"LOWER": "normativo"}, 
-            {"TEXT": {"REGEX": r"2[5-7]/21"}}],
-            [{"LOWER": "secretaria"}, {"LOWER": "de"}, 
-            {"LOWER": "fazenda"}, {"LOWER": "do"}, 
-            {"LOWER": "estado"}, {"LOWER": "do"}, 
-            {"LOWER": "piauí"}]
-        ]
-        for pattern in patterns:
-            self.termo_matcher.add("TERMO_CONTABIL", [pattern])
-
-        # Matcher para normas
+        """Padrões atualizados para capturar números completos"""
         self.norma_matcher = Matcher(self.nlp.vocab)
-        norma_patterns = [
-            [{"LOWER": {"IN": ["lei", "decreto", "portaria"]}}, 
-            {"IS_PUNCT": True, "OP": "?"}, 
-            {"TEXT": {"REGEX": r"n?[º°]?"}}, 
-            {"IS_PUNCT": True, "OP": "?"}, 
-            {"TEXT": {"REGEX": r"\d+[/-]?\d*"}}],
-            [{"LOWER": "lei"}, {"LOWER": "complementar"}, 
-            {"TEXT": {"REGEX": r"n?[º°]?"}, "OP": "?"}, 
-            {"TEXT": {"REGEX": r"\d+"}}],
-            {"TEXT": {"REGEX": r"[Ll]ei"}}, {"TEXT": {"REGEX": r"n?[º°]?"}}, 
-            {"TEXT": {"REGEX": r"\d+\.?\d*/\d+"}},
-            {"TEXT": {"REGEX": r"[Dd]ecreto"}}, {"TEXT": {"REGEX": r"n?[º°]?"}}, 
-            {"TEXT": {"REGEX": r"\d+\.?\d*/\d+"}},
-            # Adicione para Lei Complementar
-            [{"LOWER": "lei"}, {"LOWER": "complementar"}, 
-            {"TEXT": {"REGEX": r"n?[º°]?"}}, {"TEXT": {"REGEX": r"\d+"}}]
+        
+        patterns = [
+            # Padrão para Leis (ex: Lei nº 8.558/2024)
+            [
+                {"TEXT": {"REGEX": r"[Ll]ei"}},
+                {"TEXT": {"REGEX": r"n?[º°]?"}, "OP": "?"},
+                {"TEXT": {"REGEX": r"\d+[\.\/-]?\d*[\/-]?\d*"}}
+            ],
+            # Padrão para Decretos (ex: Decreto nº 21.866/2023)
+            [
+                {"TEXT": {"REGEX": r"[Dd]ecreto"}},
+                {"TEXT": {"REGEX": r"n?[º°]?"}, "OP": "?"},
+                {"TEXT": {"REGEX": r"\d+[\.\/-]?\d*[\/-]?\d*"}}
+            ]
         ]
-
-        for i, pattern in enumerate(norma_patterns):
+        
+        for i, pattern in enumerate(patterns):
             self.norma_matcher.add(f"NORMA_{i}", [pattern])
 
     def processar_documento(self, documento: Documento) -> bool:
@@ -204,8 +183,9 @@ class PDFProcessor:
         detalhes = {
             'pontuacao': 0,
             'termos': {},
-            'normas': []
+            'normas': self._extrair_normas_com_spacy(doc)  # Adiciona as normas encontradas
         }
+
         
         # Carrega termos ativos do banco de dados
         termos_monitorados = TermoMonitorado.objects.filter(ativo=True)
@@ -229,19 +209,22 @@ class PDFProcessor:
         return relevante, detalhes
 
     def _extrair_normas_com_spacy(self, doc) -> List[Tuple[str, str]]:
-        """Extrai normas usando spaCy Matcher"""
+        """Versão com logs detalhados"""
         matches = self.norma_matcher(doc)
         normas = []
         
         for match_id, start, end in matches:
-            span = doc[start:end]
-            tipo = self._determinar_tipo_norma(span.text)
-            numero = self._extrair_numero_norma(span.text)
+            span = doc[start:end].text
+            print(f"Match encontrado: {span}")  # Log
+            
+            tipo = self._determinar_tipo_norma(span)
+            numero = self._extrair_numero_norma(span)
             
             if tipo and numero:
+                print(f"Norma identificada: {tipo} {numero}")  # Log
                 normas.append((tipo, numero))
-                
-        return list(set(normas))
+        
+        return normas
 
     def _determinar_tipo_norma(self, texto: str) -> str:
         """Determina o tipo da norma"""
@@ -260,32 +243,46 @@ class PDFProcessor:
         return None
 
     def _extrair_numero_norma(self, texto: str) -> str:
-        """Extrai o número da norma"""
-        match = re.search(r'(\d+[/-]?\d*)', texto)
-        return re.sub(r'[^\d/]', '', match.group(1)) if match else None
+        """Extrai o número completo da norma com validação"""
+        # Padrão para capturar números válidos (ex: 8.558/2024, 21.866, 25/2021)
+        match = re.search(r'(\d{1,4}[\.\/-]\d{1,4}(?:[\/-]\d{2,4})?', texto)
+        if not match:
+            return None
+            
+        numero = match.group(1)
+        # Validação adicional - deve ter pelo menos 3 dígitos no total
+        if len(re.sub(r'[^\d]', '', numero)) < 3:
+            return None
+            
+        # Padronização
+        if '/' in numero:  # Se tem ano, remove pontos
+            return numero.replace('.', '')
+        return numero
 
-    def _processar_documento_relevante(self, documento: Documento, texto: str, detalhes: Dict) -> bool:
-        """Processa um documento considerado relevante"""
+    def _processar_documento_relevante(self, documento, texto, detalhes):
         try:
             documento.texto_completo = texto
             documento.resumo = self._gerar_resumo(texto, detalhes)
             documento.relevante_contabil = True
             documento.processado = True
 
-            for tipo, numero in detalhes.get('normas', []):
+            # Adicione este log para debug
+            normas_encontradas = detalhes.get('normas', [])
+            print(f"Normas encontradas no texto: {normas_encontradas}")
+            
+            for tipo, numero in normas_encontradas:
+                print(f"Processando norma: {tipo} {numero}")  # Log adicional
                 norma, _ = NormaVigente.objects.get_or_create(
                     tipo=tipo,
-                    numero=numero,
+                    numero=numero,  # Note que é 'numero' aqui também
                     defaults={'situacao': 'A VERIFICAR'}
                 )
                 documento.normas_relacionadas.add(norma)
 
             documento.save()
-            logger.info(f"Documento ID {documento.id} processado com sucesso")
             return True
-
         except Exception as e:
-            logger.error(f"Falha ao processar documento relevante ID {documento.id}: {str(e)}")
+            print(f"Erro ao processar documento: {str(e)}")  # Log de erro
             return False
 
 
