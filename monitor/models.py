@@ -17,7 +17,8 @@ class Documento(models.Model):
     processado = models.BooleanField(default=False, verbose_name="Processado")
     relevante_contabil = models.BooleanField(default=False, verbose_name="Relevante para Contabilidade")
     normas_relacionadas = models.ManyToManyField('NormaVigente', blank=True, related_name='documentos')
-
+    assunto = models.CharField(max_length=255, verbose_name="Assunto", blank=True, null=True)
+    
     class Meta:
         verbose_name = "Documento"
         verbose_name_plural = "Documentos"
@@ -64,6 +65,7 @@ class NormaVigente(models.Model):
     url = models.URLField(blank=True)
     descricao = models.TextField(blank=True)
     data_coleta = models.DateTimeField(default=timezone.now)
+    fonte = models.CharField(max_length=50, default='SEFAZ', choices=[('SEFAZ', 'SEFAZ'), ('DIARIO', 'Diário Oficial')])
 
     class Meta:
         verbose_name = "Norma Vigente"

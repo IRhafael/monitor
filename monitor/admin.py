@@ -10,7 +10,7 @@ class DocumentoAdmin(admin.ModelAdmin):
     search_fields = ['titulo', 'resumo', 'texto_completo']
     list_filter = ['processado', 'relevante_contabil', 'data_publicacao']
     filter_horizontal = ['normas_relacionadas']
-    date_hierarchy = 'data_publicacao'
+    #date_hierarchy = 'data_publicacao'
     ordering = ['-data_publicacao']
 
 @admin.register(NormaVigente)

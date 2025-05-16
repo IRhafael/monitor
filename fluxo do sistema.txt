@@ -1,25 +1,31 @@
-Fluxo Completo do Sistema
+Coleta de Documentos (diario\_scraper.py):
 
-1-Coleta Automática (diariamente ou conforme agendamento)
-Baixa os PDFs do Diário Oficial
+Acessa o Diário Oficial
+Baixa PDFs relevantes
+Filtra por termos contábeis/fiscais
+Salva no banco de dados
 
-Baixa as normas da SEFAZ
+Processamento de PDFs (pdf\_processor.py):
 
-2-Processamento:
-*Extrai texto dos PDFs
+Extrai texto dos PDFs
+Identifica termos relevantes
+Extrai normas mencionadas
+Gera resumos
+Marca documentos como processados
 
-*Identifica documentos relevantes para contabilidade
+Integração com SEFAZ (sefaz\_integracao.py e sefaz\_scraper.py):
 
-*Gera resumos dos documentos relevantes
+Verifica vigência das normas encontradas
+Atualiza status das normas
+Identifica mudanças (novas normas/revogações)
 
-3-Integração:
-*Compara normas mencionadas no Diário com as da SEFAZ
+Geração de Relatórios (relatorio.py):
+Relatório contábil completo
+Relatório de mudanças
+Estatísticas do sistema
 
-*Identifica novas normas, alterações e revogações
-
-4-Geração de Relatórios:
-*Relatório de documentos contábeis relevantes
-
-*Relatório de mudanças na legislação
-
-*Disponibiliza para download
+Interface (views.py):
+Dashboard com resumo
+Listagem de documentos
+Execução manual de coletas
+Download de relatórios
