@@ -91,12 +91,20 @@ class SEFAZScraper:
             self.logger.warning(f"Elemento não encontrado: {value}")
             return None
 
+    # Em sefaz_scraper.py, adicione no método _clean_number:
     def _clean_number(self, number):
-        """Padroniza números para comparação"""
-        return re.sub(r'[^\d/]', '', number).lower()
+        # Remove pontos antes de comparar
+        cleaned = re.sub(r'[^\d]', '', str(number))
+        return cleaned.lower()
+
+    def _padronizar_numero(self, numero):
+        """Remove pontos e formata números de norma"""
+        return re.sub(r'[^\d/]', '', str(numero))
 
     def _pesquisar_norma(self, norm_type, norm_number):
-        """Executa a pesquisa no portal"""
+        """Executa a pesquisa no portal SEM o asterisco no final"""
+        norm_number = self._padronizar_numero(norm_number)
+        termo_busca = f"{norm_type} {norm_number}" 
         try:
             search_input = self._wait_for_element(
                 By.CSS_SELECTOR, "input[formcontrolname='searchQuery']")
@@ -105,13 +113,13 @@ class SEFAZScraper:
                 self.logger.error("Campo de busca não encontrado")
                 return False
             
-            # Preenche o campo de busca com wildcard no final
-            termo_busca = f"{norm_type} {norm_number}*"
+            # REMOVER O ASTERISCO DA BUSCA
+            termo_busca = f"{norm_type} {norm_number}"  # Sem o * no final
             search_input.clear()
             search_input.send_keys(termo_busca)
             self._save_debug_info("02_campo_preenchido")
             
-            # Clica no botão de busca (melhor que usar Keys.RETURN)
+            # Clica no botão de busca
             search_button = self.driver.find_element(By.CSS_SELECTOR, "img[alt='search']")
             search_button.click()
             
@@ -126,16 +134,22 @@ class SEFAZScraper:
             self.logger.error(f"Erro ao pesquisar: {str(e)}")
             self._save_debug_info("99_erro_pesquisa")
             return False
+    def _extrair_situacao(self, doc_body):
+        """Extrai situação com fallback"""
+        situacao = self._extract_field(doc_body, "field-situacao")
+        if not situacao:
+            # Fallback para outros padrões
+            situacao = self._extract_field(doc_body, "field-status") or "NÃO ENCONTRADA"
+        return situacao.lower()
 
     def get_norm_details(self, norm_type, norm_number):
-        """Busca detalhes da norma com base na estrutura HTML fornecida"""
+        """Busca detalhes da norma com a pesquisa corrigida"""
         try:
             with self.browser_session():
-                # 1. Acessa a página principal
                 self.driver.get(self.base_url)
                 self._save_debug_info("01_pagina_inicial")
                 
-                # 2. Executa a pesquisa
+                # Usa a versão corrigida sem asterisco
                 if not self._pesquisar_norma(norm_type, norm_number):
                     return None
                 
@@ -293,15 +307,30 @@ class SEFAZScraper:
             return False
 
     def check_norm_status(self, norm_type, norm_number):
-        """Verifica status da norma"""
         details = self.get_norm_details(norm_type, norm_number)
         if not details:
             return False
+            
+        # Adicione esta verificação
+        situacao = details.get('situacao')
+        if not situacao:  # Caso o campo situacao seja None
+            return False
+            
+        situacao = situacao.lower()
+
+        norm_type = norm_type.upper().strip()
+        norm_number = self._clean_number(norm_number)
         
+        details = self.get_norm_details(norm_type, norm_number)
+        if not details:
+            return False
+            
         situacao = details.get('situacao', '').lower()
-        if 'vigente' in situacao:
+        
+        # Lógica mais robusta para determinar status
+        if any(s in situacao for s in ['vigente', 'ativo', 'valido']):
             return True
-        elif 'revogado' in situacao or 'cancelado' in situacao:
+        elif any(s in situacao for s in ['revogado', 'cancelado', 'expirado']):
             return False
         return bool(details.get('data_publicacao'))
 
@@ -322,3 +351,8 @@ class SEFAZScraper:
                 return "sefaz" in self.driver.title.lower()
         except Exception:
             return False
+        
+    # Adicione este método à classe SEFAZScraper
+    def verificar_vigencia_norma(self, norm_type, norm_number):
+        """Método alternativo para verificação de vigência"""
+        return self.check_norm_status(norm_type, norm_number)

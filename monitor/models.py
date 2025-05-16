@@ -158,6 +158,7 @@ class TermoMonitorado(models.Model):
     tipo = models.CharField(max_length=5, choices=TIPO_CHOICES)
     ativo = models.BooleanField(default=True)
     data_cadastro = models.DateTimeField(auto_now_add=True)
+    variacoes = models.TextField(blank=True, null=True, help_text="Variações do termo, separadas por vírgula")
 
     class Meta:
         verbose_name = "Termo Monitorado"

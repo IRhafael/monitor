@@ -27,20 +27,22 @@ class IntegradorSEFAZ:
         self.timeout = 40  # Timeout reduzido
 
 
+    # Modifique o método buscar_norma_especifica para usar check_norm_status diretamente
     def buscar_norma_especifica(self, tipo, numero):
-        """Verifica se uma norma específica está vigente na SEFAZ"""
+        """Versão simplificada que usa check_norm_status diretamente"""
         try:
             tipo = tipo.upper().strip()
             numero = self._padronizar_numero_norma(numero)
             logger.info(f"Verificando vigência de {tipo} {numero}")
             
-            # Verifica cache primeiro (usando Django cache)
+            # Verifica cache primeiro
             cache_key = f"sefaz_{tipo}_{numero}"
             cached_result = cache.get(cache_key)
             if cached_result:
                 return cached_result
                 
-            vigente = self.scraper.verificar_vigencia_norma(tipo, numero)
+            # Chama o método correto do scraper
+            vigente = self.scraper.check_norm_status(tipo, numero)
             
             resultado = {
                 'tipo': tipo,
@@ -49,29 +51,12 @@ class IntegradorSEFAZ:
                 'data_consulta': timezone.now()
             }
             
-            # Armazena no cache por 24 horas
-            cache.set(cache_key, resultado, 86400)  # 24 horas em segundos
+            # Armazena no cache
+            cache.set(cache_key, resultado, 86400)
             return resultado
             
-        except WebDriverException as e:
-            logger.error(f"Erro de navegador ao buscar norma {tipo} {numero}: {str(e)}")
-            return {
-                'tipo': tipo,
-                'numero': numero,
-                'vigente': False,
-                'erro': "Erro de conexão com o portal"
-            }
         except Exception as e:
-            logger.error(f"Erro inesperado ao buscar norma {tipo} {numero}: {str(e)}")
-            return {
-                'tipo': tipo,
-                'numero': numero,
-                'vigente': False,
-                'erro': str(e)
-            }
-            
-        except Exception as e:
-            logger.error(f"Erro ao buscar norma {tipo} {numero}: {str(e)}")
+            logger.error(f"Erro ao buscar norma: {str(e)}")
             return {
                 'tipo': tipo,
                 'numero': numero,

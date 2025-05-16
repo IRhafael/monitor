@@ -74,8 +74,16 @@ class PDFProcessor:
             {"TEXT": {"REGEX": r"\d+[/-]?\d*"}}],
             [{"LOWER": "lei"}, {"LOWER": "complementar"}, 
             {"TEXT": {"REGEX": r"n?[º°]?"}, "OP": "?"}, 
-            {"TEXT": {"REGEX": r"\d+"}}]
+            {"TEXT": {"REGEX": r"\d+"}}],
+            {"TEXT": {"REGEX": r"[Ll]ei"}}, {"TEXT": {"REGEX": r"n?[º°]?"}}, 
+            {"TEXT": {"REGEX": r"\d+\.?\d*/\d+"}},
+            {"TEXT": {"REGEX": r"[Dd]ecreto"}}, {"TEXT": {"REGEX": r"n?[º°]?"}}, 
+            {"TEXT": {"REGEX": r"\d+\.?\d*/\d+"}},
+            # Adicione para Lei Complementar
+            [{"LOWER": "lei"}, {"LOWER": "complementar"}, 
+            {"TEXT": {"REGEX": r"n?[º°]?"}}, {"TEXT": {"REGEX": r"\d+"}}]
         ]
+
         for i, pattern in enumerate(norma_patterns):
             self.norma_matcher.add(f"NORMA_{i}", [pattern])
 
@@ -177,15 +185,13 @@ class PDFProcessor:
                 
         return None
 
-    def _limpar_texto(self, texto: str) -> str:
-        """Normaliza o texto extraído"""
-        if not texto:
-            return ""
-            
-        texto = re.sub(r'\s+', ' ', texto)
-        texto = re.sub(r'-\n', '', texto)
-        texto = re.sub(r'[^\w\sáéíóúâêîôûãõçÁÉÍÓÚÂÊÎÔÛÃÕÇ.,;:!?()\-º°%$]', '', texto)
-        return texto.strip()
+    def _limpar_texto(self, texto):
+        """Melhoria na limpeza do texto"""
+        # Preserva quebras de linha entre artigos
+        texto = re.sub(r'(Art\. \d+º)', r'\n\1', texto)
+        # Corrige junções indevidas
+        texto = re.sub(r'([a-z])([A-Z])', r'\1 \2', texto)
+        return texto
 
     def analisar_relevancia(self, texto: str) -> Tuple[bool, Dict]:
         """Versão atualizada para usar termos do banco de dados"""

@@ -46,9 +46,9 @@ class RelatorioGenerator:
             
             # Dados de normas com contagem agrupada e otimização
             normas = NormaVigente.objects.filter(
-                documento__relevante_contabil=True
+                documentos__relevante_contabil=True  # Use 'documentos' em vez de 'documento'
             ).annotate(
-                qtd_docs=Count('documento')
+                qtd_docs=Count('documentos')
             ).order_by('-qtd_docs', 'tipo', 'numero')
             
             RelatorioGenerator._preencher_planilha_normas(ws_normas, normas)
