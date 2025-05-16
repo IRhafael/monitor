@@ -28,22 +28,9 @@ class DiarioOficialScraper:
 
         # Atualizar a lista de termos contábeis
         self.termos_contabeis = [
-                b'icms',
-                b'decreto 21.866',
-                b'decreto 21866',
-                b'unatri',
-                b'unifis',
-                b'lei 4.257',
-                b'ato normativo 25/21',
-                b'ato normativo 26/21', 
-                b'ato normativo 27/21',
-                b'secretaria de fazenda',
-                b'sefaz-pi',
-                b'sefaz',
-                b'substitui\xc3\xa7\xc3\xa3o tribut\xc3\xa1ria',
-                b'st',
-                b'regime especial'
-            ]
+            'icms', 'decreto 21.866', 'unatri', 
+            'substituição tributária', 'regime especial'
+        ]
     # Modifique o método configurar_navegador
     def configurar_navegador(self):
         """Configura o navegador Chrome em modo headless"""
@@ -212,8 +199,7 @@ class DiarioOficialScraper:
         
 
     def extrair_norma(texto):
-        padrao = r'(?i)(lei complementar|lc|lei|decreto[\- ]?lei|decreto|ato normativo|portaria)' \
-                r'[\s:]*(n[º°o.]?\s*)?(\d+[\.,\/]?\d*)'
+        padrao = r'(?i)(lei complementar|lc|lei|decreto[\- ]?lei|decreto|ato normativo|portaria)[\s:]*(n[º°o.]?\s*)?(\d+[\.,\/]?\d*)'
         
         match = re.search(padrao, texto)
         if match:

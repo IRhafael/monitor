@@ -14,7 +14,6 @@ from webdriver_manager.chrome import ChromeDriverManager
 import requests
 from bs4 import BeautifulSoup
 from contextlib import contextmanager
-from selenium.common.exceptions import TimeoutException
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -26,7 +25,8 @@ logger = logging.getLogger(__name__)
 class SEFAZScraper:
     def __init__(self):
         self.base_url = "https://portaldalegislacao.sefaz.pi.gov.br"
-        self.timeout = 30
+        self.timeout = 90  # Aumente para 90 segundos
+        self.max_retries = 3  # Adicione esta linha
         self.debug_dir = r"C:\Users\RRCONTAS\Documents\GitHub\monitor\debug"
         self.driver = None
         
@@ -98,15 +98,11 @@ class SEFAZScraper:
         return cleaned.lower()
 
     def _padronizar_numero(self, numero):
-        """Padroniza para formato ANO/NÚMERO (ex: 2023/22033)"""
-        numero = re.sub(r'[^\d/]', '', str(numero))  # Remove não-dígitos exceto /
-        
-        # Casos como 22.033 → assume ano atual se não tiver /
-        if '/' not in numero:
-            current_year = datetime.now().year
-            numero = f"{current_year}/{numero}"
-        
-        return numero
+        # Converter 5.138 para 5138 e 5/41 para 1941/5
+        if '/' in numero:
+            parts = numero.split('/')
+            return f"19{parts[1].zfill(2)}/{parts[0]}" if len(parts[1]) == 2 else f"{parts[1]}/{parts[0]}"
+        return re.sub(r'[^\d]', '', numero)
 
     def _pesquisar_norma(self, norm_type, norm_number):
         """Executa a pesquisa no portal SEM o asterisco no final"""
@@ -265,31 +261,21 @@ class SEFAZScraper:
             return None
 
     def _switch_to_results_frame(self):
-        """Versão aprimorada para localizar iframe de resultados"""
+        """Versão melhorada com wait dinâmico"""
         try:
-            # Tenta encontrar o iframe principal
-            iframe = self._wait_for_element(By.CSS_SELECTOR, "iframe")
+            # Espera pelo iframe principal
+            iframe = WebDriverWait(self.driver, 60).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "iframe")))
             
-            if iframe:
-                self.driver.switch_to.frame(iframe)
-                return True
-                
-            # Fallback para outros iframes
-            iframes = self.driver.find_elements(By.TAG_NAME, "iframe")
-            for iframe in iframes:
-                try:
-                    self.driver.switch_to.frame(iframe)
-                    if self._wait_for_element(By.CSS_SELECTOR, ".resultado-busca", timeout=3):
-                        return True
-                    self.driver.switch_to.default_content()
-                except:
-                    self.driver.switch_to.default_content()
-                    continue
-                
-            return False
+            self.driver.switch_to.frame(iframe)
             
+            # Espera pelo conteúdo
+            WebDriverWait(self.driver, 30).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, "div.document-body")))
+            
+            return True
         except Exception as e:
-            self.logger.error(f"Erro ao mudar para iframe: {str(e)}")
+            self.logger.error(f"Falha ao acessar iframe: {str(e)}")
             return False
 
     def _is_matching_norm(self, text, norm_type, clean_number):
@@ -314,36 +300,42 @@ class SEFAZScraper:
             return False
 
     def check_norm_status(self, norm_type, norm_number):
-        norm_type = norm_type.upper().strip()
-        norm_number_clean = self._padronizar_numero(norm_number)
-
-        details = self.get_norm_details(norm_type, norm_number)
-        if not details:
-            return False
-        
-    
-        # Adicione esta verificação
-        situacao = details.get('situacao')
-        if not situacao:  # Caso o campo situacao seja None
-            return False
+        """Versão melhorada com tratamento de timeout e validação rigorosa"""
+        try:
+            # Padronização robusta
+            norm_type = norm_type.upper().strip()
+            norm_number = self._padronizar_numero(norm_number)
             
-        situacao = situacao.lower()
+            # Tentativa com timeout maior
+            for attempt in range(3):  # 3 tentativas
+                try:
+                    details = self.get_norm_details(norm_type, norm_number)
+                    if not details:
+                        continue
+                        
+                    # Validação rigorosa do match
+                    if not self._is_exact_match(details['norma'], norm_type, norm_number):
+                        return False
+                    
+                    situacao = details.get('situacao', '').lower()
+                    return 'vigente' in situacao
+                    
+                except TimeoutException:
+                    self.logger.warning(f"Tentativa {attempt+1}/3: Timeout")
+                    continue
+            return False
+                    
+        except Exception as e:
+            logger.error(f"Erro crítico: {str(e)}")
+            return False
 
-        norm_type = norm_type.upper().strip()
-        norm_number = self._clean_number(norm_number)
-        
-        details = self.get_norm_details(norm_type, norm_number)
-        if not details:
-            return False
-            
-        situacao = details.get('situacao', '').lower()
-        
-        # Lógica mais robusta para determinar status
-        if any(s in situacao for s in ['vigente', 'ativo', 'valido']):
-            return True
-        elif any(s in situacao for s in ['revogado', 'cancelado', 'expirado']):
-            return False
-        return bool(details.get('data_publicacao'))
+    def _is_exact_match(self, found_text, search_type, search_number):
+        """Verifica se o texto encontrado corresponde exatamente à norma buscada"""
+        patterns = [
+            rf"{search_type}\s+{search_number}",
+            rf"{search_type}\s+N[°º]?\s+{search_number}"
+        ]
+        return any(re.search(p, found_text, re.IGNORECASE) for p in patterns)
 
     def test_connection(self):
         """Testa conexão com o portal"""
