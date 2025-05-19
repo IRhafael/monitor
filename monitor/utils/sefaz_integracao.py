@@ -9,6 +9,7 @@ from django.db.models import Q
 from monitor.models import Documento, NormaVigente
 from .sefaz_scraper import SEFAZScraper
 from selenium.common.exceptions import WebDriverException
+from monitor.models import NormaVigente
 import urllib.parse
 from django.core.cache import cache
 from django.conf import settings
@@ -87,6 +88,27 @@ class IntegradorSEFAZ:
                 continue
                 
         return normas_verificadas
+    
+    def verificar_vigencia_normas_em_lote(self, lista_numeros):
+
+        resultados = {}
+
+        # Busca todas as normas vigentes no banco de dados cujo número esteja na lista
+        normas = NormaVigente.objects.filter(numero__in=lista_numeros)
+
+        for norma in normas:
+            # Chamada ao método de verificação individual
+            status = self.verificar_vigencia(norma.numero)
+            resultados[norma.numero] = status
+
+        # Considera como não vigentes os números não encontrados no banco
+        numeros_encontrados = set(normas.values_list('numero', flat=True))
+        numeros_nao_encontrados = set(lista_numeros) - numeros_encontrados
+        for num in numeros_nao_encontrados:
+            resultados[num] = False
+
+        return resultados
+
 
 
     def verificar_documentos_nao_verificados(self):
@@ -342,8 +364,8 @@ class IntegradorSEFAZ:
         
     def verificar_normas_em_lote(self, normas, batch_size=3):
         """Verifica um lote de normas de forma mais eficiente"""
+        resultados = []
         with self.scraper.browser_session():
-            resultados = []
             for i in range(0, len(normas), batch_size):
                 batch = normas[i:i + batch_size]
                 for norma in batch:
@@ -354,5 +376,5 @@ class IntegradorSEFAZ:
                         norma.save()
                         resultados.append(norma)
                     except Exception as e:
-                        logger.error(f"Erro na norma {norma}: {str(e)}")
-            return resultados
+                        logger.error(f"Erro na norma {norma}: {e}", exc_info=True)
+        return resultados

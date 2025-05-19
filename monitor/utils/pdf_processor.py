@@ -16,6 +16,7 @@ from django.conf import settings
 from django.core.exceptions import SuspiciousFileOperation
 from django.db import transaction
 from monitor.models import Documento, NormaVigente
+from django.db import transaction
 
 logger = logging.getLogger(__name__)
 
@@ -173,7 +174,7 @@ class PDFProcessor:
         return texto
 
     def analisar_relevancia(self, texto: str) -> Tuple[bool, Dict]:
-        """Versão atualizada para usar termos do banco de dados"""
+        import re
         from monitor.models import TermoMonitorado
         
         if not texto:
@@ -183,11 +184,9 @@ class PDFProcessor:
         detalhes = {
             'pontuacao': 0,
             'termos': {},
-            'normas': self._extrair_normas_com_spacy(doc)  # Adiciona as normas encontradas
+            'normas': self._extrair_normas_com_spacy(doc)
         }
 
-        
-        # Carrega termos ativos do banco de dados
         termos_monitorados = TermoMonitorado.objects.filter(ativo=True)
         
         for termo_obj in termos_monitorados:
@@ -198,33 +197,40 @@ class PDFProcessor:
                         detalhes['pontuacao'] += 3
                         
                 elif termo_obj.tipo == 'NORMA':
-                    normas = self._extrair_normas_especificas(texto, termo_obj.termo)
-                    detalhes['normas'].extend(normas)
+                    termo_escapado = re.escape(termo_obj.termo)
+                    normas = self._extrair_normas_especificas(texto, termo_escapado)
+                    # Evita duplicação de normas
+                    for norma in normas:
+                        if norma not in detalhes['normas']:
+                            detalhes['normas'].append(norma)
                     detalhes['pontuacao'] += len(normas) * 2
             except Exception as e:
-                print(f"Erro ao processar termo {termo_obj}: {str(e)}")
+                logger.error(f"Erro ao processar termo {termo_obj}: {str(e)}")
                 continue
         
         relevante = detalhes['pontuacao'] >= self.limite_relevancia
         return relevante, detalhes
 
+
+
     def _extrair_normas_com_spacy(self, doc) -> List[Tuple[str, str]]:
-        """Versão com logs detalhados"""
+        """Extrai normas usando spaCy matcher, sem duplicatas e com logs via logger"""
         matches = self.norma_matcher(doc)
-        normas = []
+        normas = set()
         
         for match_id, start, end in matches:
             span = doc[start:end].text
-            print(f"Match encontrado: {span}")  # Log
+            logger.debug(f"Match encontrado: {span}")
             
             tipo = self._determinar_tipo_norma(span)
             numero = self._extrair_numero_norma(span)
             
             if tipo and numero:
-                print(f"Norma identificada: {tipo} {numero}")  # Log
-                normas.append((tipo, numero))
+                logger.debug(f"Norma identificada: {tipo} {numero}")
+                normas.add((tipo, numero))
         
-        return normas
+        return list(normas)
+
 
     def _determinar_tipo_norma(self, texto: str) -> str:
         """Determina o tipo da norma"""
@@ -242,48 +248,75 @@ class PDFProcessor:
             return "LEI"
         return None
 
-    def _extrair_numero_norma(self, texto: str) -> str:
+    def _extrair_numero_norma(self, texto: str) -> Optional[str]:
         """Extrai o número completo da norma com validação"""
-        # Padrão para capturar números válidos (ex: 8.558/2024, 21.866, 25/2021)
-        match = re.search(r'(\d{1,4}[\.\/-]\d{1,4}(?:[\/-]\d{2,4})?', texto)
+        # Regex atualizado para capturar números simples e com separadores, ex: 8558, 8.558/2024, 21866, 25/2021
+        match = re.search(r'(\d{1,5}(?:[\.\/-]\d{1,4})?(?:[\/-]\d{2,4})?)', texto)
         if not match:
             return None
-            
+
         numero = match.group(1)
-        # Validação adicional - deve ter pelo menos 3 dígitos no total
+        # Validação: ao menos 3 dígitos numéricos no total
         if len(re.sub(r'[^\d]', '', numero)) < 3:
             return None
-            
-        # Padronização
-        if '/' in numero:  # Se tem ano, remove pontos
+
+        # Padronização: remove pontos se tem barras
+        if '/' in numero or '-' in numero:
             return numero.replace('.', '')
         return numero
 
+
+    def processar_documento(self, documento: Documento) -> bool:
+        try:
+            if not self._validar_documento(documento):
+                logger.warning(f"Documento inválido ou com problema: ID {documento.id}")
+                return False
+
+            texto = self._extrair_texto_com_fallback(documento.arquivo_pdf.path)
+            if not texto or len(texto.strip()) < 50:
+                logger.warning(f"Texto extraído vazio ou muito pequeno para Documento ID {documento.id}")
+                return False
+
+            relevante, detalhes = self.analisar_relevancia(texto)
+            if not relevante:
+                logger.info(f"Documento ID {documento.id} não é relevante")
+                self._handle_documento_nao_relevante(documento)
+                return False
+
+            return self._processar_documento_relevante(documento, texto, detalhes)
+
+        except Exception as e:
+            logger.error(f"Erro ao processar documento ID {documento.id}: {traceback.format_exc()}")
+            return False
+
+
     def _processar_documento_relevante(self, documento, texto, detalhes):
         try:
-            documento.texto_completo = texto
-            documento.resumo = self._gerar_resumo(texto, detalhes)
-            documento.relevante_contabil = True
-            documento.processado = True
+            with transaction.atomic():
+                documento.texto_completo = texto
+                documento.resumo = self._gerar_resumo(texto, detalhes)
+                documento.relevante_contabil = True
+                documento.processado = True
 
-            # Adicione este log para debug
-            normas_encontradas = detalhes.get('normas', [])
-            print(f"Normas encontradas no texto: {normas_encontradas}")
-            
-            for tipo, numero in normas_encontradas:
-                print(f"Processando norma: {tipo} {numero}")  # Log adicional
-                norma, _ = NormaVigente.objects.get_or_create(
-                    tipo=tipo,
-                    numero=numero,  # Note que é 'numero' aqui também
-                    defaults={'situacao': 'A VERIFICAR'}
-                )
-                documento.normas_relacionadas.add(norma)
+                normas_encontradas = detalhes.get('normas', [])
+                logger.debug(f"Normas encontradas no texto: {normas_encontradas}")
+                
+                for tipo, numero in normas_encontradas:
+                    logger.debug(f"Processando norma: {tipo} {numero}")
+                    norma, _ = NormaVigente.objects.get_or_create(
+                        tipo=tipo,
+                        numero=numero,
+                        defaults={'situacao': 'A VERIFICAR'}
+                    )
+                    documento.normas_relacionadas.add(norma)
 
-            documento.save()
+                documento.save()
             return True
         except Exception as e:
-            print(f"Erro ao processar documento: {str(e)}")  # Log de erro
+            logger.error(f"Erro ao processar documento ID {documento.id}: {traceback.format_exc()}")
             return False
+
+
 
 
     def _gerar_resumo(self, texto: str, detalhes: Dict) -> str:
@@ -324,7 +357,6 @@ class PDFProcessor:
             logger.error(f"Falha ao lidar com documento não relevante ID {documento.id}: {str(e)}")
 
     def processar_todos_documentos(self) -> Dict[str, int]:
-        """Processa todos os documentos não processados"""
         docs = Documento.objects.filter(processado=False)
         logger.info(f"Iniciando processamento em lote de {docs.count()} documentos")
         
@@ -341,17 +373,11 @@ class PDFProcessor:
                     resultados['sucesso'] += 1
                 else:
                     resultados['irrelevantes'] += 1
-            except Exception as e:
+            except Exception:
                 resultados['falhas'] += 1
-                logger.error(f"Falha no documento ID {doc.id}: {str(e)}")
-        
-        logger.info(
-            f"Processamento concluído: "
-            f"{resultados['sucesso']} sucessos, "
-            f"{resultados['irrelevantes']} irrelevantes, "
-            f"{resultados['falhas']} falhas"
-        )
+                logger.error(f"Falha no documento ID {doc.id}: {traceback.format_exc()}")
         return resultados
+
     
     
     def _inferir_tipo_norma(self, texto: str) -> str:
@@ -390,22 +416,25 @@ class PDFProcessor:
                 resultado.append(parte.lstrip('0') or '0')
         return ''.join(resultado)
 
-    def _extrair_normas_especificas(self, texto: str, padrao_norma: str) -> List[Tuple[str, str]]:
-        """Extrai normas específicas baseadas nos termos monitorados, capturando número completo"""
+
+    def _extrair_normas_especificas(self, texto: str, termo: str) -> List[Tuple[str, str]]:
+        """Extrai normas específicas baseadas no termo, capturando número completo."""
         normas = []
-        tipo = None
         
-        # Tenta extrair o tipo (ex: LEI, DECRETO, ATO NORMATIVO)
-        tipo_match = re.match(r'^([A-ZÁÉÍÓÚÃÕÇ\s]+)', padrao_norma, re.IGNORECASE)
-        if tipo_match:
-            tipo = tipo_match.group(1).strip().upper()
-            tipo = self._determinar_tipo_norma(tipo) or tipo
+        termo_escapado = re.escape(termo.strip())
         
-        # Regex melhorada para capturar número completo, incluindo pontos e barras
-        numero_match = re.search(r'(\d{1,5}(?:[./-]\d{1,5})*)', padrao_norma)
-        if numero_match:
-            numero_raw = numero_match.group(1)
+        # Monta regex para buscar o termo seguido de número (ex: DECRETO 21.866)
+        padrao_regex = re.compile(
+            rf'\b{termo_escapado}\b\s*(\d{{1,5}}(?:[./-]\d{{1,5}})*)', 
+            re.IGNORECASE
+        )
+
+        for match in padrao_regex.finditer(texto):
+            tipo = termo.upper()
+            numero_raw = match.group(1)
             numero = self._padronizar_numero_norma(numero_raw)
+            tipo = self._determinar_tipo_norma(tipo) or tipo
+            
             if tipo and numero and (tipo, numero) not in normas:
                 normas.append((tipo, numero))
         

@@ -1,9 +1,0 @@
-{% extends "monitor/base.html" %}
-
-{% block content %}
-<h2>Confirmar Coleta</h2>
-<form method="POST">  <!-- Certifique-se que é POST -->
-    {% csrf_token %}
-    <button type="submit" class="btn btn-primary">Executar Coleta</button>
-</form>
-{% endblock %}
