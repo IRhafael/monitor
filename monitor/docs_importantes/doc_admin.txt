@@ -1,0 +1,55 @@
+Visualização aprimorada:
+
+Cores para status (verde/vermelho/laranja)
+
+Formatação condicional dos dados
+
+Links entre modelos relacionados
+
+Funcionalidades adicionadas:
+
+Ação de download direto para relatórios
+
+Processamento de documentos direto do admin
+
+Visualização de metadados e parâmetros
+
+Ordenação e filtros:
+
+Filtros mais completos
+
+Ordenação personalizada
+
+Hierarquia por datas
+
+Ações em lote:
+
+Ativar/desativar termos
+
+Marcar normas como vigentes/revogadas
+
+Processar múltiplos documentos
+
+Segurança e controle:
+
+Impedir criação múltipla de configurações
+
+Bloquear exclusão de configurações
+
+Campos somente leitura quando apropriado
+
+Informações relacionadas:
+
+Contagem de documentos por norma
+
+Contagem de normas por documento
+
+Detalhes de usuário que executou ações
+
+Visualização de dados complexos:
+
+JSON pretty-print para metadados
+
+Formatação de durações
+
+Visualização de tracebacks

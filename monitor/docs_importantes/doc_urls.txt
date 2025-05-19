@@ -1,0 +1,35 @@
+Organização mais lógica:
+
+Agrupei as URLs por funcionalidade (documentos, normas, relatórios, etc.)
+
+Padronizei os padrões de URL
+
+Novas rotas adicionadas:
+
+Detalhes de documentos (documento_detail)
+
+Detalhes de normas (norma_detail)
+
+Página específica para relatórios (relatorio_detail)
+
+Dashboard de vigência (dashboard_vigencia)
+
+Estrutura mais RESTful:
+
+URLs mais intuitivas (ex: /documentos/1/ para detalhes do documento com ID 1)
+
+Uso consistente de IDs para recursos específicos
+
+Separação clara:
+
+Rotas de visualização separadas das rotas de ação (como verificação de normas)
+
+Compatibilidade com as views:
+
+Todas as URLs correspondem às views que criamos anteriormente
+
+Nomes de URLs mantidos para compatibilidade com templates
+
+Rotas para download:
+
+Caminho específico para download de relatórios mantendo a página de detalhes

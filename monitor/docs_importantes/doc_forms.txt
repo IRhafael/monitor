@@ -1,0 +1,11 @@
+DocumentoUploadForm: Para upload de novos documentos PDF
+
+TermoMonitoradoForm: Para cadastro e edição de termos monitorados
+
+ConfiguracaoColetaForm: Para configuração da coleta automática
+
+FiltroDocumentosForm: Para filtragem de documentos na lista
+
+FiltroNormasForm: Para filtragem de normas na lista
+
+RelatorioForm: Para geração de relatórios personalizados

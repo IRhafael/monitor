@@ -1,47 +1,47 @@
-# monitor/models.py
+from django.utils import timezone
 from django.db import models
 from django.utils import timezone
+from django.core.validators import MinValueValidator
 import os
 
-class Documento(models.Model):
+class TermoMonitorado(models.Model):
     """
-    Modelo para armazenar informações sobre documentos do Diário Oficial
+    Termos para identificar documentos relevantes
     """
-    titulo = models.CharField(max_length=255, verbose_name="Título")
-    data_publicacao = models.DateField(verbose_name="Data de Publicação")
-    url_original = models.URLField(verbose_name="URL Original")
-    arquivo_pdf = models.FileField(upload_to='pdfs/', verbose_name="Arquivo PDF", null=True, blank=True)
-    resumo = models.TextField(verbose_name="Resumo", blank=True)
-    texto_completo = models.TextField(verbose_name="Texto Completo", blank=True)
-    data_coleta = models.DateTimeField(default=timezone.now, verbose_name="Data da Coleta")
-    processado = models.BooleanField(default=False, verbose_name="Processado")
-    relevante_contabil = models.BooleanField(default=False, verbose_name="Relevante para Contabilidade")
-    normas_relacionadas = models.ManyToManyField('NormaVigente', blank=True, related_name='documentos')
-    assunto = models.CharField(max_length=255, verbose_name="Assunto", blank=True, null=True)
-    
+    TIPO_CHOICES = [
+        ('TEXTO', 'Texto Exato'),
+        ('NORMA', 'Norma Específica'),
+        ('REGEX', 'Expressão Regular'),
+    ]
+
+    termo = models.CharField(max_length=255, unique=True)
+    tipo = models.CharField(max_length=5, choices=TIPO_CHOICES)
+    ativo = models.BooleanField(default=True)
+    data_cadastro = models.DateTimeField(auto_now_add=True)
+    variacoes = models.TextField(blank=True, null=True, 
+                               help_text="Variações do termo, separadas por vírgula")
+    prioridade = models.PositiveSmallIntegerField(
+        default=1,
+        validators=[MinValueValidator(1)],
+        help_text="Prioridade na análise (1-5)"
+    )
+
     class Meta:
-        verbose_name = "Documento"
-        verbose_name_plural = "Documentos"
-        ordering = ['-data_publicacao']
+        verbose_name = "Termo Monitorado"
+        verbose_name_plural = "Termos Monitorados"
+        ordering = ['-prioridade', 'termo']
         indexes = [
-            models.Index(fields=['data_publicacao']),
-            models.Index(fields=['processado']),
-            models.Index(fields=['relevante_contabil']),
+            models.Index(fields=['ativo']),
+            models.Index(fields=['tipo']),
         ]
 
     def __str__(self):
-        return f"{self.titulo} ({self.data_publicacao.strftime('%d/%m/%Y')})"
-    
-    def delete(self, *args, **kwargs):
-        """Remove o arquivo PDF associado ao deletar o documento"""
-        if self.arquivo_pdf and os.path.isfile(self.arquivo_pdf.path):
-            os.remove(self.arquivo_pdf.path)
-        super().delete(*args, **kwargs)
+        return f"{self.termo} ({self.get_tipo_display()})"
 
 
 class NormaVigente(models.Model):
     """
-    Modelo para armazenar informações sobre normas vigentes
+    Normas legais monitoradas pelo sistema
     """
     TIPO_CHOICES = [
         ('LEI', 'Lei'),
@@ -56,16 +56,23 @@ class NormaVigente(models.Model):
         ('VIGENTE', 'Vigente'),
         ('REVOGADA', 'Revogada'),
         ('ALTERADA', 'Alterada'),
+        ('A_VERIFICAR', 'A Verificar'),
     ]
 
     tipo = models.CharField(max_length=20, choices=TIPO_CHOICES)
     numero = models.CharField(max_length=50)
-    situacao = models.CharField(max_length=20, choices=SITUACAO_CHOICES, default='VIGENTE')
+    situacao = models.CharField(max_length=20, choices=SITUACAO_CHOICES, default='A_VERIFICAR')
     data_verificacao = models.DateTimeField(null=True, blank=True)
-    url = models.URLField(blank=True)
-    descricao = models.TextField(blank=True)
-    data_coleta = models.DateTimeField(default=timezone.now)
-    fonte = models.CharField(max_length=50, default='SEFAZ', choices=[('SEFAZ', 'SEFAZ'), ('DIARIO', 'Diário Oficial')])
+    url = models.URLField(blank=True, verbose_name="URL da Norma")
+    descricao = models.TextField(blank=True, verbose_name="Descrição/Objeto")
+    detalhes = models.JSONField(blank=True, null=True, help_text="Detalhes da consulta na SEFAZ")
+    data_cadastro = models.DateTimeField(auto_now_add=True)
+    fonte = models.CharField(
+        max_length=50, 
+        default='SEFAZ', 
+        choices=[('SEFAZ', 'SEFAZ'), ('DIARIO', 'Diário Oficial')]
+    )
+    observacoes = models.TextField(blank=True)
 
     class Meta:
         verbose_name = "Norma Vigente"
@@ -75,22 +82,178 @@ class NormaVigente(models.Model):
         indexes = [
             models.Index(fields=['tipo', 'numero']),
             models.Index(fields=['situacao']),
+            models.Index(fields=['data_verificacao']),
         ]
 
     def __str__(self):
         return f"{self.get_tipo_display()} {self.numero}"
+
+    def status_style(self):
+        if self.situacao == 'VIGENTE':
+            return 'success'
+        elif self.situacao == 'REVOGADA':
+            return 'danger'
+        elif self.situacao == 'ALTERADA':
+            return 'warning'
+        return 'secondary'
+
+
+class Documento(models.Model):
+    """
+    Documentos coletados do Diário Oficial
+    """
+    titulo = models.CharField(max_length=255, verbose_name="Título")
+    data_publicacao = models.DateField(verbose_name="Data de Publicação")
+    url_original = models.URLField(verbose_name="URL Original", max_length=500)
+    arquivo_pdf = models.FileField(
+        upload_to='pdfs/',
+        verbose_name="Arquivo PDF",
+        null=True,
+        blank=True,
+        max_length=500
+    )
+    resumo = models.TextField(verbose_name="Resumo", blank=True)
+    texto_completo = models.TextField(verbose_name="Texto Completo", blank=True)
+    data_coleta = models.DateTimeField(default=timezone.now)
+    processado = models.BooleanField(default=False, verbose_name="Processado?")
+    relevante_contabil = models.BooleanField(
+        default=False,
+        verbose_name="Relevante para Contabilidade?"
+    )
+    normas_relacionadas = models.ManyToManyField(
+        NormaVigente,
+        blank=True,
+        related_name='documentos',
+        verbose_name="Normas Relacionadas"
+    )
+    assunto = models.CharField(max_length=255, blank=True, null=True)
+    metadata = models.JSONField(
+        blank=True,
+        null=True,
+        help_text="Metadados adicionais do documento"
+    )
+    arquivo_removido = models.BooleanField(
+        default=False,
+        help_text="Indica se o arquivo PDF foi removido por não ser relevante"
+    )
+
+    class Meta:
+        verbose_name = "Documento"
+        verbose_name_plural = "Documentos"
+        ordering = ['-data_publicacao']
+        indexes = [
+            models.Index(fields=['data_publicacao']),
+            models.Index(fields=['processado']),
+            models.Index(fields=['relevante_contabil']),
+            models.Index(fields=['arquivo_removido']),
+        ]
+
+    def __str__(self):
+        return f"{self.titulo} ({self.data_publicacao.strftime('%d/%m/%Y')})"
+    
+    def delete(self, *args, **kwargs):
+        """Remove o arquivo PDF associado ao deletar o documento"""
+        if self.arquivo_pdf and os.path.isfile(self.arquivo_pdf.path):
+            os.remove(self.arquivo_pdf.path)
+        super().delete(*args, **kwargs)
+
+    def process_status_style(self):
+        if self.processado:
+            return 'success' if self.relevante_contabil else 'info'
+        return 'warning'
+
+
+class RelatorioGerado(models.Model):
+    """
+    Relatórios gerados pelo sistema
+    """
+    TIPO_CHOICES = [
+        ('CONTABIL', 'Contábil Completo'),
+        ('MUDANCAS', 'Mudanças nas Normas'),
+        ('ESTATISTICAS', 'Estatísticas do Sistema'),
+    ]
+
+    FORMATO_CHOICES = [
+        ('XLSX', 'Excel (.xlsx)'),
+        ('PDF', 'PDF (.pdf)'),
+        ('HTML', 'HTML (.html)'),
+    ]
+
+    tipo = models.CharField(max_length=20, choices=TIPO_CHOICES)
+    caminho_arquivo = models.FileField(
+        upload_to='relatorios/',
+        verbose_name="Arquivo do Relatório"
+    )
+    formato = models.CharField(max_length=10, choices=FORMATO_CHOICES, default='XLSX')
+    parametros = models.JSONField(
+        blank=True,
+        null=True,
+        help_text="Parâmetros usados para gerar o relatório"
+    )
+    data_criacao = models.DateTimeField(auto_now_add=True)
+    gerado_por = models.ForeignKey(
+        'auth.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True
+    )
+    downloads = models.PositiveIntegerField(default=0, verbose_name="Número de Downloads")
+
+    class Meta:
+        verbose_name = "Relatório Gerado"
+        verbose_name_plural = "Relatórios Gerados"
+        ordering = ['-data_criacao']
+        indexes = [
+            models.Index(fields=['tipo']),
+            models.Index(fields=['data_criacao']),
+        ]
+
+    def __str__(self):
+        return f"{self.get_tipo_display()} - {self.data_criacao.strftime('%d/%m/%Y %H:%M')}"
+
+    def nome_arquivo(self):
+        return os.path.basename(self.caminho_arquivo.name)
 
 
 class ConfiguracaoColeta(models.Model):
     """
     Configurações para a coleta automática
     """
-    ativa = models.BooleanField(default=True)
-    intervalo_horas = models.PositiveIntegerField(default=24)
-    max_documentos = models.PositiveIntegerField(default=10)
-    ultima_execucao = models.DateTimeField(null=True, blank=True)
-    proxima_execucao = models.DateTimeField(null=True, blank=True)
-    email_notificacao = models.EmailField(blank=True)
+    ativa = models.BooleanField(
+        default=True,
+        verbose_name="Coleta Automática Ativa?"
+    )
+    intervalo_horas = models.PositiveIntegerField(
+        default=24,
+        validators=[MinValueValidator(1)],
+        verbose_name="Intervalo entre Coletas (horas)"
+    )
+    max_documentos = models.PositiveIntegerField(
+        default=10,
+        verbose_name="Máximo de Documentos por Coleta"
+    )
+    ultima_execucao = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Última Execução"
+    )
+    proxima_execucao = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Próxima Execução"
+    )
+    email_notificacao = models.EmailField(
+        blank=True,
+        verbose_name="E-mail para Notificações"
+    )
+    verificar_vigencias = models.BooleanField(
+        default=True,
+        verbose_name="Verificar Vigências Automaticamente?"
+    )
+    dias_retroativos = models.PositiveIntegerField(
+        default=30,
+        verbose_name="Dias Retroativos para Análise"
+    )
 
     class Meta:
         verbose_name = "Configuração de Coleta"
@@ -111,8 +274,10 @@ class LogExecucao(models.Model):
     Registro de execuções do sistema
     """
     TIPO_CHOICES = [
-        ('DIARIO', 'Diário Oficial'),
-        ('SEFAZ', 'SEFAZ'),
+        ('DIARIO', 'Coleta do Diário Oficial'),
+        ('SEFAZ', 'Verificação na SEFAZ'),
+        ('PROCESSAMENTO', 'Processamento de Documentos'),
+        ('RELATORIO', 'Geração de Relatório'),
         ('COMPLETO', 'Fluxo Completo'),
     ]
     
@@ -122,13 +287,23 @@ class LogExecucao(models.Model):
         ('PARCIAL', 'Sucesso Parcial'),
     ]
     
+    tipo_execucao = models.CharField(max_length=20, choices=TIPO_CHOICES)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES)
     data_inicio = models.DateTimeField(auto_now_add=True)
     data_fim = models.DateTimeField(null=True, blank=True)
-    tipo_execucao = models.CharField(max_length=10, choices=TIPO_CHOICES)
-    status = models.CharField(max_length=10, choices=STATUS_CHOICES)
+    duracao = models.DurationField(null=True, blank=True)
     documentos_coletados = models.PositiveIntegerField(default=0)
-    normas_coletadas = models.PositiveIntegerField(default=0)
+    normas_verificadas = models.PositiveIntegerField(default=0)
+    documentos_processados = models.PositiveIntegerField(default=0)
     mensagem = models.TextField(blank=True)
+    erro = models.TextField(blank=True)
+    traceback = models.TextField(blank=True)
+    usuario = models.ForeignKey(
+        'auth.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True
+    )
 
     class Meta:
         verbose_name = "Log de Execução"
@@ -141,29 +316,10 @@ class LogExecucao(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.get_tipo_execucao_display()} - {self.data_inicio.strftime('%d/%m/%Y %H:%M')}"
+        return f"{self.get_tipo_execucao_display()} - {self.status} ({self.data_inicio.strftime('%d/%m/%Y %H:%M')})"
 
-
-class TermoMonitorado(models.Model):
-    """
-    Termos específicos para monitoramento no conteúdo dos documentos
-    """
-    TIPO_CHOICES = [
-        ('TEXTO', 'Texto Exato'),
-        ('NORMA', 'Norma Específica'),
-        ('REGEX', 'Expressão Regular'),
-    ]
-
-    termo = models.CharField(max_length=255, unique=True)
-    tipo = models.CharField(max_length=5, choices=TIPO_CHOICES)
-    ativo = models.BooleanField(default=True)
-    data_cadastro = models.DateTimeField(auto_now_add=True)
-    variacoes = models.TextField(blank=True, null=True, help_text="Variações do termo, separadas por vírgula")
-
-    class Meta:
-        verbose_name = "Termo Monitorado"
-        verbose_name_plural = "Termos Monitorados"
-        ordering = ['termo']
-
-    def __str__(self):
-        return f"{self.termo} ({self.get_tipo_display()})"
+    def save(self, *args, **kwargs):
+        """Calcula a duração antes de salvar"""
+        if self.data_fim and self.data_inicio:
+            self.duracao = self.data_fim - self.data_inicio
+        super().save(*args, **kwargs)

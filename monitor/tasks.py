@@ -1,279 +1,429 @@
-# monitor/tasks.py
-from django.utils import timezone
+import os
+import logging
 from datetime import datetime, timedelta
-from django.utils import timezone
-from django.core.mail import send_mail
-from django.conf import settings
-
-from monitor.models import ConfiguracaoColeta, LogExecucao, Documento, NormaVigente
-from monitor.utils.diario_scraper import DiarioOficialScraper
-from monitor.utils.pdf_processor import PDFProcessor
-from monitor.utils.sefaz_integracao import IntegradorSEFAZ
-from monitor.utils.sefaz_scraper import SEFAZScraper 
 from celery import shared_task
-import logging 
+from django.conf import settings
+from django.core.mail import send_mail
+from django.utils import timezone
+from django.template.loader import render_to_string
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment
+from monitor.utils.diario_scraper import DiarioOficialScraper  # ✅ correto
+from monitor.utils.sefaz_integracao import IntegradorSEFAZ
+from monitor.utils.sefaz_scraper import  SEFAZScraper
+from monitor.utils import PDFProcessor
+
+
+from monitor.models import (
+    ConfiguracaoColeta, 
+    LogExecucao, 
+    Documento, 
+    NormaVigente,
+    RelatorioGerado
+)
+
 
 logger = logging.getLogger(__name__)
 
-from django.utils import timezone
-
-def executar_coleta_completa():
+@shared_task(bind=True)
+def executar_coleta_completa(self):
+    """
+    Tarefa principal que executa todo o fluxo de coleta e processamento
+    """
+    log_execucao = None
+    config = ConfiguracaoColeta.objects.first()
+    
     try:
-        logger.info("Iniciando coleta completa")
+        # Criar log de execução
+        log_execucao = LogExecucao.objects.create(
+            tipo_execucao='COMPLETO',
+            status='PROCESSANDO',
+            usuario=None,  # Pode ser substituído por usuário se autenticado
+            mensagem="Iniciando fluxo completo de coleta"
+        )
         
-        # Coleta Diário Oficial
-        scraper_diario = DiarioOficialScraper()
-        docs = scraper_diario.iniciar_coleta()
+        # 1. Coleta do Diário Oficial
+        logger.info("Iniciando coleta do Diário Oficial")
+        diario_scraper = DiarioOficialScraper(max_docs=config.max_documentos if config else 10)
+        documentos_coletados = diario_scraper.iniciar_coleta()
         
-        # Coleta SEFAZ
-        scraper_sefaz = SEFAZScraper()
-        normas = scraper_sefaz.iniciar_coleta()
-        
-        # Processa PDFs
+        # 2. Processamento dos documentos
+        logger.info("Iniciando processamento dos documentos")
         processor = PDFProcessor()
-        processados = processor.processar_todos_documentos()
+        resultado_processamento = processor.processar_todos_documentos()
+        
+        # 3. Verificação na SEFAZ
+        logger.info("Iniciando verificação na SEFAZ")
+        integrador = IntegradorSEFAZ()
+        normas_verificadas = integrador.verificar_documentos_nao_verificados()
+        
+        # Atualizar log com sucesso
+        log_execucao.status = 'SUCESSO'
+        log_execucao.data_fim = timezone.now()
+        log_execucao.documentos_coletados = len(documentos_coletados)
+        log_execucao.documentos_processados = resultado_processamento['sucesso']
+        log_execucao.normas_verificadas = len(normas_verificadas)
+        log_execucao.mensagem = "Fluxo completo executado com sucesso"
+        log_execucao.save()
+        
+        # Enviar notificação por e-mail se configurado
+        if config and config.email_notificacao:
+            enviar_notificacao.delay(
+                config.email_notificacao,
+                log_execucao.id,
+                'sucesso'
+            )
         
         return {
             'status': 'success',
-            'documentos': len(docs),
-            'normas': len(normas),
-            'processados': processados
+            'documentos_coletados': len(documentos_coletados),
+            'documentos_processados': resultado_processamento['sucesso'],
+            'normas_verificadas': len(normas_verificadas)
         }
         
     except Exception as e:
-        logger.error(f"Erro fatal: {str(e)}", exc_info=True)
+        logger.error(f"Erro na execução da coleta completa: {str(e)}", exc_info=True)
+        
+        if log_execucao:
+            log_execucao.status = 'ERRO'
+            log_execucao.data_fim = timezone.now()
+            log_execucao.erro = str(e)
+            log_execucao.traceback = self.request.get('traceback', '')
+            log_execucao.save()
+            
+            if config and config.email_notificacao:
+                enviar_notificacao.delay(
+                    config.email_notificacao,
+                    log_execucao.id,
+                    'erro'
+                )
+        
         return {
             'status': 'error',
             'message': str(e)
         }
 
+@shared_task
 def verificar_coletas_programadas():
     """
-    Verifica se há coletas programadas para execução
+    Verifica e executa coletas agendadas conforme configuração
     """
-    logger.info("Verificando coletas programadas")
-    
     try:
         config = ConfiguracaoColeta.objects.first()
         
-        if not config:
-            logger.warning("Configuração de coleta não encontrada")
-            return False
-        
-        if not config.ativa:
-            logger.info("Coleta desativada nas configurações")
+        if not config or not config.ativa:
+            logger.info("Coleta automática desativada ou não configurada")
             return False
         
         agora = timezone.now()
         
-        # Se não houver próxima execução definida ou se já passou o horário
         if not config.proxima_execucao or agora >= config.proxima_execucao:
-            logger.info(f"Executando coleta programada. Última execução: {config.ultima_execucao}")
-            return executar_coleta_completa()
-        else:
-            logger.info(f"Nenhuma coleta programada para agora. Próxima execução: {config.proxima_execucao}")
-            return False
-    
+            logger.info("Executando coleta programada")
+            
+            # Atualizar horários de execução
+            config.ultima_execucao = agora
+            config.proxima_execucao = agora + timedelta(hours=config.intervalo_horas)
+            config.save()
+            
+            # Executar coleta
+            resultado = executar_coleta_completa.delay()
+            
+            return {
+                'task_id': resultado.id,
+                'proxima_execucao': config.proxima_execucao
+            }
+        
+        logger.info(f"Próxima coleta programada para: {config.proxima_execucao}")
+        return False
+        
     except Exception as e:
-        logger.error(f"Erro ao verificar coletas programadas: {str(e)}")
+        logger.error(f"Erro ao verificar coletas programadas: {str(e)}", exc_info=True)
         return False
 
 @shared_task
-def gerar_relatorio_excel():
+def gerar_relatorio_contabil(data_inicio=None, data_fim=None, usuario_id=None):
     """
-    Gera relatórios Excel com os dados coletados
+    Gera relatório contábil completo com os dados coletados
     """
-    from openpyxl import Workbook
-    from django.core.files.base import ContentFile
-    import os
-    
-    logger.info("Gerando relatórios Excel")
-    
     try:
-        # Criar diretório para relatórios se não existir
-        relatorios_dir = os.path.join(settings.MEDIA_ROOT, 'relatorios')
-        os.makedirs(relatorios_dir, exist_ok=True)
+        # Preparar nome do arquivo
+        timestamp = timezone.now().strftime("%Y%m%d_%H%M%S")
+        nome_arquivo = f"relatorio_contabil_{timestamp}.xlsx"
+        caminho_arquivo = os.path.join(settings.MEDIA_ROOT, 'relatorios', nome_arquivo)
         
-        # Data para o nome do arquivo
-        data_atual = timezone.now().strftime("%Y%m%d_%H%M%S")
+        # Criar diretório se não existir
+        os.makedirs(os.path.dirname(caminho_arquivo), exist_ok=True)
         
-        # 1. Gerar relatório de documentos do Diário Oficial
-        wb_docs = Workbook()
-        ws_docs = wb_docs.active
+        # Criar workbook
+        wb = Workbook()
+        ws_docs = wb.active
         ws_docs.title = "Documentos"
         
-        # Adicionar cabeçalho
-        ws_docs.append(["Título", "Data de Publicação", "URL", "Resumo", "Data da Coleta"])
+        # Adicionar cabeçalhos
+        cabecalhos = [
+            "ID", "Título", "Data Publicação", "Assunto", 
+            "Processado", "Relevante", "Normas Relacionadas"
+        ]
+        ws_docs.append(cabecalhos)
+        
+        # Formatar cabeçalhos
+        for cell in ws_docs[1]:
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(horizontal='center')
+        
+        # Filtrar documentos
+        documentos = Documento.objects.all()
+        if data_inicio:
+            documentos = documentos.filter(data_publicacao__gte=data_inicio)
+        if data_fim:
+            documentos = documentos.filter(data_publicacao__lte=data_fim)
         
         # Adicionar dados
-        documentos = Documento.objects.all().order_by('-data_publicacao')
-        for doc in documentos:
+        for doc in documentos.order_by('-data_publicacao'):
             ws_docs.append([
+                doc.id,
                 doc.titulo,
                 doc.data_publicacao.strftime("%d/%m/%Y") if doc.data_publicacao else "",
-                doc.url_original,
-                doc.resumo,
-                doc.data_coleta.strftime("%d/%m/%Y %H:%M") if doc.data_coleta else ""
+                doc.assunto or "",
+                "Sim" if doc.processado else "Não",
+                "Sim" if doc.relevante_contabil else "Não",
+                ", ".join([str(n) for n in doc.normas_relacionadas.all()])
             ])
         
-        # Ajustar largura das colunas
-        for col in ws_docs.columns:
-            max_length = 0
-            column = col[0].column_letter
-            for cell in col:
-                try:
-                    if len(str(cell.value)) > max_length:
-                        max_length = min(len(str(cell.value)), 100)
-                except:
-                    pass
-            adjusted_width = max_length + 2
-            ws_docs.column_dimensions[column].width = adjusted_width
+        # Adicionar aba de normas
+        ws_normas = wb.create_sheet(title="Normas")
+        ws_normas.append([
+            "Tipo", "Número", "Situação", "Última Verificação", 
+            "Documentos Relacionados", "Fonte"
+        ])
         
-        # Salvar arquivo
-        arquivo_documentos = os.path.join(relatorios_dir, f"documentos_{data_atual}.xlsx")
-        wb_docs.save(arquivo_documentos)
+        # Formatar cabeçalhos
+        for cell in ws_normas[1]:
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(horizontal='center')
         
-        # 2. Gerar relatório de normas vigentes
-        wb_normas = Workbook()
-        ws_normas = wb_normas.active
-        ws_normas.title = "Normas Vigentes"
+        # Adicionar normas
+        normas = NormaVigente.objects.all().annotate(
+            num_docs=Count('documentos')
+        ).order_by('tipo', 'numero')
         
-        # Adicionar cabeçalho
-        ws_normas.append(["Tipo", "Número", "Data", "Situação", "URL", "Data da Coleta"])
-        
-        # Adicionar dados
-        normas = NormaVigente.objects.all().order_by('tipo', 'numero')
         for norma in normas:
             ws_normas.append([
                 norma.get_tipo_display(),
                 norma.numero,
-                norma.data.strftime("%d/%m/%Y") if norma.data else "",
-                norma.situacao,
-                norma.url,
-                norma.data_coleta.strftime("%d/%m/%Y %H:%M") if norma.data_coleta else ""
+                norma.get_situacao_display(),
+                norma.data_verificacao.strftime("%d/%m/%Y %H:%M") if norma.data_verificacao else "",
+                norma.num_docs,
+                norma.fonte
             ])
         
-        # Ajustar largura das colunas
-        for col in ws_normas.columns:
-            max_length = 0
-            column = col[0].column_letter
-            for cell in col:
-                try:
-                    if len(str(cell.value)) > max_length:
-                        max_length = min(len(str(cell.value)), 100)
-                except:
-                    pass
-            adjusted_width = max_length + 2
-            ws_normas.column_dimensions[column].width = adjusted_width
-        
         # Salvar arquivo
-        arquivo_normas = os.path.join(relatorios_dir, f"normas_vigentes_{data_atual}.xlsx")
-        wb_normas.save(arquivo_normas)
+        wb.save(caminho_arquivo)
         
-        logger.info(f"Relatórios gerados com sucesso: {arquivo_documentos}, {arquivo_normas}")
+        # Registrar no banco de dados
+        relatorio = RelatorioGerado.objects.create(
+            tipo='CONTABIL',
+            caminho_arquivo=caminho_arquivo.replace(settings.MEDIA_ROOT, ''),
+            formato='XLSX',
+            parametros={
+                'data_inicio': data_inicio.isoformat() if data_inicio else None,
+                'data_fim': data_fim.isoformat() if data_fim else None,
+            },
+            gerado_por_id=usuario_id
+        )
+        
+        logger.info(f"Relatório contábil gerado: {caminho_arquivo}")
         
         return {
-            "documentos": arquivo_documentos,
-            "normas": arquivo_normas
+            'status': 'success',
+            'relatorio_id': relatorio.id,
+            'caminho': relatorio.caminho_arquivo.url if hasattr(relatorio.caminho_arquivo, 'url') else relatorio.caminho_arquivo
         }
-    
+        
     except Exception as e:
-        logger.error(f"Erro ao gerar relatórios Excel: {str(e)}")
-        return None
+        logger.error(f"Erro ao gerar relatório contábil: {str(e)}", exc_info=True)
+        return {
+            'status': 'error',
+            'message': str(e)
+        }
 
-def enviar_email_notificacao(email, log_execucao):
+@shared_task
+def gerar_relatorio_mudancas(dias_retroativos=30, usuario_id=None):
     """
-    Envia e-mail de notificação sobre a execução bem-sucedida
+    Gera relatório de mudanças nas normas
     """
     try:
-        assunto = f"[Diário Oficial PI] Coleta concluída com sucesso - {timezone.now().strftime('%d/%m/%Y %H:%M')}"
+        integrador = IntegradorSEFAZ()
+        mudancas = integrador.comparar_mudancas(dias_retroativos)
         
-        mensagem = f"""
-        Olá,
+        # Preparar nome do arquivo
+        timestamp = timezone.now().strftime("%Y%m%d_%H%M%S")
+        nome_arquivo = f"relatorio_mudancas_{timestamp}.xlsx"
+        caminho_arquivo = os.path.join(settings.MEDIA_ROOT, 'relatorios', nome_arquivo)
         
-        A coleta de dados do Diário Oficial do Piauí e SEFAZ/PI foi concluída com sucesso.
+        # Criar workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Mudanças nas Normas"
         
-        Resumo da execução:
-        - Tipo de execução: {log_execucao.get_tipo_execucao_display()}
-        - Documentos coletados: {log_execucao.documentos_coletados}
-        - Normas coletadas: {log_execucao.normas_coletadas}
-        - Hora de início: {log_execucao.data_inicio.strftime('%d/%m/%Y %H:%M:%S')}
-        - Hora de conclusão: {log_execucao.data_fim.strftime('%d/%m/%Y %H:%M:%S')}
+        # Adicionar cabeçalhos
+        ws.append(["Tipo de Mudança", "Norma", "Detalhes"])
         
-        Acesse o sistema para visualizar os detalhes.
+        # Formatar cabeçalhos
+        for cell in ws[1]:
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(horizontal='center')
         
-        Atenciosamente,
-        Sistema de Monitoramento do Diário Oficial do Piauí
-        """
+        # Adicionar novas normas
+        if mudancas['novas_normas']:
+            ws.append(["Novas Normas Identificadas", "", ""])
+            for norma in mudancas['novas_normas']:
+                ws.append(["", norma, "Nova norma identificada no Diário Oficial"])
         
-        send_mail(
-            assunto,
-            mensagem,
-            settings.DEFAULT_FROM_EMAIL,
-            [email],
-            fail_silently=False,
+        # Adicionar normas revogadas
+        if mudancas['normas_revogadas']:
+            ws.append(["", "", ""])
+            ws.append(["Normas Potencialmente Revogadas", "", ""])
+            for item in mudancas['normas_revogadas']:
+                ws.append(["", item['norma'], f"Última menção: {item['ultima_menção']}"])
+        
+        # Salvar arquivo
+        wb.save(caminho_arquivo)
+        
+        # Registrar no banco de dados
+        relatorio = RelatorioGerado.objects.create(
+            tipo='MUDANCAS',
+            caminho_arquivo=caminho_arquivo.replace(settings.MEDIA_ROOT, ''),
+            formato='XLSX',
+            parametros={
+                'dias_retroativos': dias_retroativos,
+            },
+            gerado_por_id=usuario_id
         )
         
-        logger.info(f"E-mail de notificação enviado para {email}")
+        logger.info(f"Relatório de mudanças gerado: {caminho_arquivo}")
+        
+        return {
+            'status': 'success',
+            'relatorio_id': relatorio.id,
+            'caminho': relatorio.caminho_arquivo.url if hasattr(relatorio.caminho_arquivo, 'url') else relatorio.caminho_arquivo
+        }
         
     except Exception as e:
-        logger.error(f"Erro ao enviar e-mail de notificação: {str(e)}")
-
-def enviar_email_erro(email, log_execucao):
-    """
-    Envia e-mail de notificação sobre erros na execução
-    """
-    try:
-        assunto = f"[Diário Oficial PI] ERRO na coleta - {timezone.now().strftime('%d/%m/%Y %H:%M')}"
-        
-        mensagem = f"""
-        Olá,
-        
-        Ocorreu um erro durante a coleta de dados do Diário Oficial do Piauí e SEFAZ/PI.
-        
-        Detalhes do erro:
-        - Tipo de execução: {log_execucao.get_tipo_execucao_display()}
-        - Hora de início: {log_execucao.data_inicio.strftime('%d/%m/%Y %H:%M:%S')}
-        - Hora de conclusão: {log_execucao.data_fim.strftime('%d/%m/%Y %H:%M:%S')}
-        - Mensagem: {log_execucao.mensagem}
-        
-        Erro detalhado:
-        {log_execucao.erro_detalhado}
-        
-        Acesse o sistema para verificar o problema.
-        
-        Atenciosamente,
-        Sistema de Monitoramento do Diário Oficial do Piauí
-        """
-        
-        send_mail(
-            assunto,
-            mensagem,
-            settings.DEFAULT_FROM_EMAIL,
-            [email],
-            fail_silently=False,
-        )
-        
-        logger.info(f"E-mail de notificação de erro enviado para {email}")
-        
-    except Exception as e:
-        logger.error(f"Erro ao enviar e-mail de notificação de erro: {str(e)}")
-
-
+        logger.error(f"Erro ao gerar relatório de mudanças: {str(e)}", exc_info=True)
+        return {
+            'status': 'error',
+            'message': str(e)
+        }
 
 @shared_task
 def verificar_normas_sefaz():
     """
-    Tarefa para verificar normas não verificadas na SEFAZ
+    Verifica as normas junto à SEFAZ e atualiza seus status
     """
-    integrador = IntegradorSEFAZ()
-    resultados = integrador.verificar_documentos_nao_verificados()
-    
-    # Gerar relatório
-    relatorio = {
-        'total_documentos': len(resultados),
-        'documentos_com_normas': sum(1 for r in resultados if r['status'] == 'sucesso' and r['normas_encontradas'] > 0),
-        'erros': sum(1 for r in resultados if r['status'] == 'erro'),
-    }
-    
-    return relatorio
+    try:
+        integrador = IntegradorSEFAZ()
+        
+        # Verificar normas que nunca foram verificadas ou estão desatualizadas
+        normas = NormaVigente.objects.filter(
+            models.Q(data_verificacao__isnull=True) |
+            models.Q(data_verificacao__lt=timezone.now()-timedelta(days=30))
+        ).order_by('tipo', 'numero')
+        
+        total_normas = normas.count()
+        normas_atualizadas = 0
+        erros = 0
+        
+        for norma in normas:
+            try:
+                vigente, detalhes = integrador.verificar_vigencia_com_detalhes(norma.tipo, norma.numero)
+                
+                norma.situacao = 'VIGENTE' if vigente else 'REVOGADA'
+                norma.data_verificacao = timezone.now()
+                norma.detalhes = detalhes
+                norma.save()
+                
+                normas_atualizadas += 1
+            except Exception as e:
+                logger.error(f"Erro ao verificar norma {norma}: {str(e)}")
+                erros += 1
+                continue
+        
+        logger.info(f"Verificação de normas concluída: {normas_atualizadas} atualizadas, {erros} erros")
+        
+        return {
+            'status': 'success',
+            'total_normas': total_normas,
+            'normas_atualizadas': normas_atualizadas,
+            'erros': erros
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro na verificação de normas: {str(e)}", exc_info=True)
+        return {
+            'status': 'error',
+            'message': str(e)
+        }
+
+@shared_task
+def enviar_notificacao(email, log_execucao_id, tipo='sucesso'):
+    """
+    Envia e-mail de notificação sobre execuções do sistema
+    """
+    try:
+        log_execucao = LogExecucao.objects.get(id=log_execucao_id)
+        
+        if tipo == 'sucesso':
+            assunto = f"[Monitor] Coleta concluída - {log_execucao.data_inicio.strftime('%d/%m/%Y')}"
+            template = 'emails/notificacao_sucesso.html'
+        else:
+            assunto = f"[Monitor] ERRO na coleta - {log_execucao.data_inicio.strftime('%d/%m/%Y')}"
+            template = 'emails/notificacao_erro.html'
+        
+        contexto = {
+            'log': log_execucao,
+            'site_url': settings.SITE_URL,
+        }
+        
+        mensagem_html = render_to_string(template, contexto)
+        mensagem_texto = render_to_string(template.replace('.html', '.txt'), contexto)
+        
+        send_mail(
+            subject=assunto,
+            message=mensagem_texto,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[email],
+            html_message=mensagem_html,
+            fail_silently=False,
+        )
+        
+        logger.info(f"Notificação enviada para {email}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Erro ao enviar notificação: {str(e)}", exc_info=True)
+        return False
+
+@shared_task
+def processar_documento_individual(documento_id):
+    """
+    Processa um documento individual de forma assíncrona
+    """
+    try:
+        documento = Documento.objects.get(id=documento_id)
+        processor = PDFProcessor()
+        resultado = processor.processar_documento(documento)
+        
+        return {
+            'status': 'success',
+            'documento_id': documento.id,
+            'relevante': resultado,
+            'normas_relacionadas': documento.normas_relacionadas.count()
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro ao processar documento {documento_id}: {str(e)}", exc_info=True)
+        return {
+            'status': 'error',
+            'message': str(e)
+        }

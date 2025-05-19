@@ -1,0 +1,59 @@
+Fluxo lógico reorganizado:
+
+Modelos ordenados por importância no fluxo (Termos → Normas → Documentos → Relatórios → Configurações → Logs)
+
+Novos campos e relacionamentos:
+
+Adicionado RelatorioGerado para gerenciar relatórios
+
+Campos metadata e detalhes para armazenar informações adicionais
+
+Relacionamento com usuário em RelatorioGerado e LogExecucao
+
+Melhorias nos campos existentes:
+
+Validações adicionais (como MinValueValidator)
+
+Opções de status mais completas
+
+Help texts e verbose names mais descritivos
+
+Métodos auxiliares:
+
+status_style() para facilitar a exibição na interface
+
+nome_arquivo() para relatórios
+
+Cálculo automático de duração em logs
+
+Otimizações para performance:
+
+Índices adicionais para campos frequentemente filtrados
+
+JSONField para dados estruturados
+
+Controle mais fino:
+
+Configurações expandidas para coletas
+
+Logs mais detalhados das execuções
+
+Integridade de dados:
+
+unique_together para evitar duplicação de normas
+
+Validação de campos numéricos
+
+Esta estrutura agora suporta completamente:
+
+Upload e processamento manual de documentos
+
+Verificação manual de normas
+
+Geração e download de relatórios
+
+Controle fino das configurações do sistema
+
+Rastreamento detalhado de todas as execuções
+
+Armazenamento de metadados adicionais para análise posterior

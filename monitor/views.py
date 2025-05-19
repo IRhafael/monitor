@@ -1,4 +1,5 @@
 from datetime import timedelta, datetime
+from itertools import count
 from django.db.models import F, ExpressionWrapper
 from django.forms import DurationField
 from django.http import Http404, HttpResponse, FileResponse, JsonResponse
@@ -42,7 +43,7 @@ def dashboard(request):
         'normas_para_verificar': normas_para_verificar,
         'documentos_nao_processados': Documento.objects.filter(processado=False).count(),
     }
-    return render(request, 'monitor/dashboard.html', context)
+    return render(request, 'dashboard.html', context)
 
 @login_required
 def documentos_list(request):
@@ -60,7 +61,7 @@ def documentos_list(request):
         'documentos': documentos,
         'filtro_atual': status,
     }
-    return render(request, 'monitor/documentos_list.html', context)
+    return render(request, 'documentos/documentos_list.html', context)
 
 @login_required
 def documento_detail(request, documento_id):
@@ -78,7 +79,7 @@ def documento_detail(request, documento_id):
         'documento': documento,
         'normas': documento.normas_relacionadas.all(),
     }
-    return render(request, 'monitor/documento_detail.html', context)
+    return render(request, 'documentos/documento_detail.html', context)
 
 @login_required
 def documento_upload(request):
@@ -112,7 +113,7 @@ def documento_upload(request):
             'publication_date': timezone.now().date()
         })
     
-    return render(request, 'monitor/documento_upload.html', {'form': form})
+    return render(request, 'documentos/documento_upload.html', {'form': form})
 
 @login_required
 def normas_list(request):
@@ -120,7 +121,7 @@ def normas_list(request):
     status = request.GET.get('status', 'todos')
     
     normas = NormaVigente.objects.all().annotate(
-        num_documentos=Count('documentos')
+        num_documentos=count('documentos')
     ).order_by('-data_verificacao')
     
     if status == 'vigentes':
@@ -132,7 +133,7 @@ def normas_list(request):
         'normas': normas,
         'filtro_atual': status,
     }
-    return render(request, 'monitor/normas_list.html', context)
+    return render(request, 'normas/normas_list.html', context)
 
 @login_required
 def norma_detail(request, norma_id):
@@ -143,7 +144,7 @@ def norma_detail(request, norma_id):
         'norma': norma,
         'documentos': documentos,
     }
-    return render(request, 'monitor/norma_detail.html', context)
+    return render(request, 'normas/historico.html', context)
 
 @login_required
 def verificar_norma(request, tipo, numero):
