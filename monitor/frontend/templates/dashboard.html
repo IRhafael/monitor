@@ -1,0 +1,140 @@
+{% extends "monitor/base.html" %}
+
+{% block page_title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="row">
+    <!-- Cards de Resumo -->
+    <div class="col-md-4 mb-4">
+        <div class="card text-white bg-primary h-100">
+            <div class="card-body">
+                <h5 class="card-title">Documentos</h5>
+                <h2 class="card-text">{{ total_documentos }}</h2>
+                <p class="card-text">Total coletados</p>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-4 mb-4">
+        <div class="card text-white bg-success h-100">
+            <div class="card-body">
+                <h5 class="card-title">Normas</h5>
+                <h2 class="card-text">{{ total_normas }}</h2>
+                <p class="card-text">Total monitoradas</p>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-4 mb-4">
+        <div class="card text-white bg-info h-100">
+            <div class="card-body">
+                <h5 class="card-title">Última Execução</h5>
+                <h4 class="card-text">
+                    {% if ultima_execucao %}
+                        {{ ultima_execucao.data_inicio|date:"d/m/Y H:i" }}
+                    {% else %}
+                        Nunca executado
+                    {% endif %}
+                </h4>
+                <p class="card-text">Status: 
+                    {% if ultima_execucao %}
+                        {{ ultima_execucao.get_status_display }}
+                    {% endif %}
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Documentos Recentes -->
+<div class="card mb-4">
+    <div class="card-header">
+        <h5>Documentos Recentes</h5>
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        <th>Título</th>
+                        <th>Data Publicação</th>
+                        <th>Status</th>
+                        <th>Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for doc in documentos_recentes %}
+                    <tr>
+                        <td>{{ doc.titulo|truncatechars:50 }}</td>
+                        <td>{{ doc.data_publicacao|date:"d/m/Y" }}</td>
+                        <td>
+                            {% if doc.processado %}
+                                <span class="badge bg-success">Processado</span>
+                            {% else %}
+                                <span class="badge bg-warning text-dark">Pendente</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <a href="#" class="btn btn-sm btn-outline-primary">Ver</a>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="4">Nenhum documento encontrado</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Ações Rápidas -->
+<div class="card">
+    <div class="card-header">
+        <h5>Ações Rápidas</h5>
+    </div>
+    <div class="card-body">
+        <div class="d-grid gap-2 d-md-flex justify-content-md-start">
+            <a href="{% url 'executar_coleta' %}" class="btn btn-primary me-md-2">
+                <i class="bi bi-cloud-download"></i> Executar Coleta
+            </a>
+            <a href="{% url 'gerar_relatorio' %}" class="btn btn-success me-md-2">
+                <i class="bi bi-file-earmark-bar-graph"></i> Gerar Relatório
+            </a>
+            <button class="btn btn-info" data-bs-toggle="modal" data-bs-target="#uploadModal">
+                <i class="bi bi-upload"></i> Upload Manual
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Modal de Upload -->
+<div class="modal fade" id="uploadModal" tabindex="-1" aria-labelledby="uploadModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="uploadModalLabel">Upload Manual de Documento</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form method="post" enctype="multipart/form-data">
+                <div class="modal-body">
+                    {% csrf_token %}
+                    <div class="mb-3">
+                        <label for="pdfFile" class="form-label">Arquivo PDF</label>
+                        <input class="form-control" type="file" id="pdfFile" name="pdf_file" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="docDate" class="form-label">Data de Publicação</label>
+                        <input type="date" class="form-control" id="docDate" name="publication_date" required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Enviar e Processar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
