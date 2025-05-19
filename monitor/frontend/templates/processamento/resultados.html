@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2>Resultados da Análise</h2>
+    
+    <div class="card mt-4">
+        <div class="card-header">
+            <h5>Documentos Processados</h5>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Título</th>
+                            <th>Data</th>
+                            <th>Normas Encontradas</th>
+                            <th>Relevância</th>
+                            <th>Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for documento in documentos %}
+                        <tr>
+                            <td>{{ documento.titulo }}</td>
+                            <td>{{ documento.data_publicacao|date:"d/m/Y" }}</td>
+                            <td>{{ documento.normas_relacionadas.count }}</td>
+                            <td>
+                                <span class="badge bg-{% if documento.relevante_contabil %}success{% else %}secondary{% endif %}">
+                                    {% if documento.relevante_contabil %}Relevante{% else %}Irrelevante{% endif %}
+                                </span>
+                            </td>
+                            <td>
+                                <a href="{% url 'documento_detail' documento.id %}" class="btn btn-sm btn-primary">
+                                    Detalhes
+                                </a>
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="5">Nenhum documento processado</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

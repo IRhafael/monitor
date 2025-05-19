@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block title %}Executar Coleta{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2>Executar Coleta</h2>
+    
+    {% if messages %}
+        {% for message in messages %}
+            <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                {{ message }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+        {% endfor %}
+    {% endif %}
+
+    <div class="card">
+        <div class="card-body">
+            <h5 class="card-title">Informações da Última Execução</h5>
+            
+            {% if ultima_execucao %}
+                <div class="mb-3">
+                    <p><strong>Status:</strong> 
+                        <span class="badge bg-{% if ultima_execucao.status == 'SUCESSO' %}success{% elif ultima_execucao.status == 'ERRO' %}danger{% else %}warning{% endif %}">
+                            {{ ultima_execucao.get_status_display }}
+                        </span>
+                    </p>
+                    <p><strong>Data/Hora:</strong> {{ ultima_execucao.data_inicio|date:"d/m/Y H:i" }}</p>
+                    <p><strong>Duração:</strong> {{ ultima_execucao.duracao }}</p>
+                    <p><strong>Documentos Coletados:</strong> {{ ultima_execucao.documentos_coletados }}</p>
+                    <p><strong>Documentos Processados:</strong> {{ ultima_execucao.documentos_processados }}</p>
+                    <p><strong>Normas Verificadas:</strong> {{ ultima_execucao.normas_verificadas }}</p>
+                </div>
+            {% else %}
+                <p>Nenhuma execução registrada ainda.</p>
+            {% endif %}
+
+            <p class="text-muted">
+                <strong>Documentos não processados:</strong> {{ documentos_nao_processados }}
+            </p>
+        </div>
+    </div>
+
+    <form method="post" class="mt-4">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-primary">
+            <i class="bi bi-play-circle"></i> Executar Coleta Agora
+        </button>
+        <a href="{% url 'dashboard' %}" class="btn btn-secondary">
+            <i class="bi bi-arrow-left"></i> Voltar
+        </a>
+    </form>
+</div>
+{% endblock %}

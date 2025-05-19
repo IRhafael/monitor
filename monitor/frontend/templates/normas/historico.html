@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="card">
+        <div class="card-header">
+            <h2>{{ norma.tipo }} {{ norma.numero }}</h2>
+            <span class="badge bg-{% if norma.situacao == 'VIGENTE' %}success{% else %}danger{% endif %}">
+                {{ norma.get_situacao_display }}
+            </span>
+        </div>
+        <div class="card-body">
+            <p><strong>Última Verificação:</strong> 
+                {% if norma.data_verificacao %}
+                    {{ norma.data_verificacao|date:"d/m/Y H:i" }}
+                {% else %}
+                    Nunca verificada
+                {% endif %}
+            </p>
+
+            <div class="mt-4">
+                <h4>Documentos Relacionados</h4>
+                <div class="list-group">
+                    {% for doc in documentos %}
+                    <a href="{% url 'documento_detail' doc.id %}" class="list-group-item list-group-item-action">
+                        {{ doc.titulo }}
+                        <span class="text-muted float-end">{{ doc.data_publicacao|date:"d/m/Y" }}</span>
+                    </a>
+                    {% empty %}
+                    <div class="list-group-item">Nenhum documento relacionado</div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="mt-4">
+                <button class="btn btn-primary" id="verificarNormaBtn">
+                    Verificar Vigência
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.getElementById('verificarNormaBtn').addEventListener('click', function() {
+    fetch("{% url 'verificar_norma' norma.tipo norma.numero %}", {
+        headers: {
+            'X-Requested-With': 'XMLHttpRequest'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if(data.success) {
+            location.reload();
+        } else {
+            alert('Erro: ' + data.error);
+        }
+    });
+});
+</script>
+{% endblock %}

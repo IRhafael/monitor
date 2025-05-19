@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2>Validação de Normas</h2>
+    
+    <div class="card mt-4">
+        <div class="card-header">
+            <h5>Normas para Validação</h5>
+        </div>
+        <div class="card-body">
+            <table class="table table-striped">
+                <thead>
+                    <tr>
+                        <th>Norma</th>
+                        <th>Status</th>
+                        <th>Última Verificação</th>
+                        <th>Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for norma in normas %}
+                    <tr>
+                        <td>
+                            <a href="{% url 'norma_historico' norma.id %}">
+                                {{ norma.tipo }} {{ norma.numero }}
+                            </a>
+                        </td>
+                        <td>
+                            <span class="badge bg-{% if norma.situacao == 'VIGENTE' %}success{% elif norma.situacao == 'REVOGADA' %}danger{% else %}warning{% endif %}">
+                                {{ norma.get_situacao_display }}
+                            </span>
+                        </td>
+                        <td>
+                            {% if norma.data_verificacao %}
+                                {{ norma.data_verificacao|date:"d/m/Y H:i" }}
+                            {% else %}
+                                Nunca verificada
+                            {% endif %}
+                        </td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-primary verificar-btn" 
+                                    data-tipo="{{ norma.tipo }}" 
+                                    data-numero="{{ norma.numero }}">
+                                Verificar
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+document.querySelectorAll('.verificar-btn').forEach(btn => {
+    btn.addEventListener('click', function() {
+        const tipo = this.dataset.tipo;
+        const numero = this.dataset.numero;
+        
+        fetch(`/normas/${tipo}/${numero}/verificar/`, {
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if(data.success) {
+                location.reload();
+            } else {
+                alert('Erro: ' + data.error);
+            }
+        });
+    });
+});
+</script>
+{% endblock %}

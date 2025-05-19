@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="card">
+        <div class="card-header">
+            <h2>Relatório: {{ relatorio.get_tipo_display }}</h2>
+        </div>
+        <div class="card-body">
+            <div class="row mb-4">
+                <div class="col-md-6">
+                    <p><strong>Data de Criação:</strong> {{ relatorio.data_criacao|date:"d/m/Y H:i" }}</p>
+                    <p><strong>Formato:</strong> {{ relatorio.get_formato_display }}</p>
+                    <p><strong>Downloads:</strong> {{ relatorio.downloads }}</p>
+                </div>
+                <div class="col-md-6">
+                    <h5>Parâmetros:</h5>
+                    <ul>
+                        {% for key, value in relatorio.parametros.items %}
+                            {% if value %}
+                            <li><strong>{{ key|title }}:</strong> {{ value }}</li>
+                            {% endif %}
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+
+            <div class="d-grid gap-2 d-md-flex justify-content-md-start">
+                <a href="{% url 'download_relatorio' relatorio.id %}" class="btn btn-primary">
+                    Download
+                </a>
+                <a href="{% url 'gerar_relatorio' %}" class="btn btn-secondary">
+                    Voltar
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

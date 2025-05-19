@@ -14,6 +14,7 @@ urlpatterns = [
     path('normas/', views.normas_list, name='normas_list'),
     path('normas/<int:norma_id>/', views.norma_detail, name='norma_detail'),
     path('normas/<str:tipo>/<str:numero>/verificar/', views.verificar_norma, name='verificar_norma'),
+    path('normas/validacao/', views.validacao_normas, name='validacao_normas'),
     
     # Coleta e processamento
     path('executar-coleta/', views.executar_coleta_view, name='executar_coleta'),
@@ -25,4 +26,9 @@ urlpatterns = [
     
     # Vigência
     path('vigencia/', views.dashboard_vigencia, name='dashboard_vigencia'),
+
+    # Processamento
+    path('analise/', views.analise_documentos, name='analise_documentos'),
+    path('resultados/', views.resultados_analise, name='resultados_analise'),
+
 ]

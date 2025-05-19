@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2>Análise de Documentos</h2>
+    
+    <div class="card mt-4">
+        <div class="card-header">
+            <h5>Documentos para Análise</h5>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Título</th>
+                            <th>Data</th>
+                            <th>Status</th>
+                            <th>Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for documento in documentos %}
+                        <tr>
+                            <td>{{ documento.titulo }}</td>
+                            <td>{{ documento.data_publicacao|date:"d/m/Y" }}</td>
+                            <td>
+                                <span class="badge bg-{% if documento.processado %}success{% else %}warning{% endif %}">
+                                    {% if documento.processado %}Processado{% else %}Pendente{% endif %}
+                                </span>
+                            </td>
+                            <td>
+                                <a href="{% url 'documento_detail' documento.id %}" class="btn btn-sm btn-primary">
+                                    Detalhes
+                                </a>
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="4">Nenhum documento pendente</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

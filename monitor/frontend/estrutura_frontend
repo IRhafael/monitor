@@ -1,4 +1,4 @@
-frontend/
+ frontend/
 ├── static/
 │   ├── css/
 │   ├── js/
@@ -7,14 +7,14 @@ frontend/
     ├── base.html
     ├── dashboard.html
     ├── documentos/
-    │   ├── lista.html
-    │   ├── upload.html
-    │   └── detalhe.html
+    │   ├── documentos_lista.html
+    │   ├── documentos_upload.html
+    │   └── documentos_detail.html
     ├── processamento/
     │   ├── analise.html
     │   └── resultados.html
     ├── normas/
-    │   ├── lista.html
+    │   ├── normas_list.html
     │   ├── validacao.html
     │   └── historico.html
     └── relatorios/

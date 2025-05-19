@@ -205,7 +205,7 @@ def executar_coleta_view(request):
         'ultima_execucao': ultima_execucao,
         'documentos_nao_processados': documentos_nao_processados,
     }
-    return render(request, 'monitor/executar_coleta.html', context)
+    return render(request, 'executar_coleta.html', context)
 
 @login_required
 def gerar_relatorio(request):
@@ -280,7 +280,7 @@ def relatorio_detail(request, relatorio_id):
     context = {
         'relatorio': relatorio,
     }
-    return render(request, 'monitor/relatorio_detail.html', context)
+    return render(request, 'relatorios/visualizar.html', context)
 
 @login_required
 def download_relatorio(request, relatorio_id):
@@ -315,3 +315,31 @@ def dashboard_vigencia(request):
         'alertas': normas.filter(dias_desde_verificacao__gt=timedelta(days=90)),
     }
     return render(request, 'monitor/dashboard_vigencia.html', context)
+
+@login_required
+def analise_documentos(request):
+    documentos = Documento.objects.filter(processado=False).order_by('-data_publicacao')
+    context = {
+        'documentos': documentos
+    }
+    return render(request, 'processamento/analise.html', context)
+
+@login_required
+def resultados_analise(request):
+    documentos = Documento.objects.filter(processado=True).order_by('-data_publicacao')
+    context = {
+        'documentos': documentos
+    }
+    return render(request, 'processamento/resultados.html', context)
+
+@login_required
+def validacao_normas(request):
+    normas = NormaVigente.objects.filter(
+        Q(data_verificacao__isnull=True) | 
+        Q(data_verificacao__lt=timezone.now()-timedelta(days=30))
+    ).order_by('tipo', 'numero')
+    
+    context = {
+        'normas': normas
+    }
+    return render(request, 'normas/validacao.html', context)
