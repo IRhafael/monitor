@@ -57,53 +57,40 @@ class DiarioOficialScraper:
             return None
 
     def iniciar_coleta(self, data_inicio=None, data_fim=None):
-        """Inicia a coleta de documentos contábeis"""
-        logger.info("Iniciando coleta do Diário Oficial")
-        
-        # Ajusta o intervalo de datas padrão para 30 dias
-        if data_inicio is None:
-            data_inicio = datetime.now() - timedelta(days=30)
-        if data_fim is None:
-            data_fim = datetime.now()
-            
         try:
             driver = self.configurar_navegador()
+            if not driver:
+                return []
+                
             datas = self.gerar_datas_no_intervalo(data_inicio, data_fim)
             documentos_coletados = []
             
             for data in datas:
-                logger.info(f"Processando diário de {data.strftime('%d/%m/%Y')}")
                 url = self.construir_url_por_data(data)
+                pdf_links = self.extrair_links_pdf(driver, url)
                 
-                try:
-                    pdf_links = self.extrair_links_pdf(driver, url)
-                    if not pdf_links:
-                        logger.warning(f"Nenhum PDF encontrado para {data.strftime('%d/%m/%Y')}")
-                        continue
-                        
-                    for link in pdf_links[:self.max_docs]:
-                        pdf_url = self.normalizar_url(link)
-                        logger.info(f"Processando PDF: {pdf_url}")
-                        
-                        documento = self.processar_pdf(pdf_url, data)
+                for link in pdf_links:
+                    # Verifica se o link está acessível antes de processar
+                    if self.verificar_link_acessivel(link):
+                        documento = self.processar_pdf(link, data)
                         if documento:
                             documentos_coletados.append(documento)
-                            logger.info(f"Documento contábil encontrado e salvo: {documento.titulo}")
-                            
-                    time.sleep(1)  # Intervalo entre requisições
-                    
-                except Exception as e:
-                    logger.error(f"Erro ao processar data {data.strftime('%d/%m/%Y')}: {str(e)}")
-                    continue
-                    
+                    else:
+                        logger.warning(f"Link inacessível: {link}")
+                        
             return documentos_coletados
             
-        except Exception as e:
-            logger.error(f"Falha na coleta: {str(e)}", exc_info=True)
-            return []
         finally:
             if 'driver' in locals():
                 driver.quit()
+
+    def verificar_link_acessivel(self, url):
+        try:
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            response = self.session.head(url, headers=headers, timeout=10)
+            return response.status_code == 200
+        except Exception:
+            return False
 
     def normalizar_url(self, link):
         """Versão robusta para normalização de URLs"""
@@ -118,32 +105,23 @@ class DiarioOficialScraper:
         return f"{base}/{link.lstrip('/')}"
 
     def processar_pdf(self, pdf_url, data_referencia):
-        """Processa um PDF individual e verifica se é contábil"""
         try:
-            response = self.session.get(pdf_url, stream=True, timeout=60)
-            response.raise_for_status()
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
             
-            # Verificação inicial de conteúdo contábil
-            conteudo = response.content
-            if not self.verificar_conteudo_contabil(conteudo):
-                logger.info(f"PDF não contém termos contábeis relevantes: {pdf_url}")
+            response = self.session.get(pdf_url, headers=headers, stream=True, timeout=60)
+            response.raise_for_status()  # Lança exceção para status 4xx/5xx
+            
+            if not response.headers.get('Content-Type', '').lower() == 'application/pdf':
+                logger.warning(f"URL não é um PDF válido: {pdf_url}")
                 return None
+                
+            # Restante do seu código de processamento...
             
-            # Salva o documento
-            nome_arquivo = self.gerar_nome_arquivo(pdf_url, data_referencia)
-            titulo = f"Diário Oficial - {data_referencia.strftime('%d/%m/%Y')}"
-            
-            documento = Documento(
-                titulo=titulo,
-                data_publicacao=data_referencia,
-                url_original=pdf_url,
-                data_coleta=timezone.now(),
-                relevante_contabil=True  # Marca como contábil desde o início
-            )
-            
-            documento.arquivo_pdf.save(nome_arquivo, ContentFile(conteudo), save=True)
-            return documento
-            
+        except requests.HTTPError as e:
+            logger.error(f"Erro HTTP ao acessar {pdf_url}: {str(e)}")
+            return None
         except Exception as e:
             logger.error(f"Erro ao processar PDF {pdf_url}: {str(e)}")
             return None
@@ -182,22 +160,25 @@ class DiarioOficialScraper:
         return f"{self.BASE_URL}?data={data_formatada}"
 
     def extrair_links_pdf(self, driver, url):
-        """Extrai todos os links de PDFs de uma página específica"""
         try:
-            logger.debug(f"Acessando URL: {url}")
             driver.get(url)
-            
-            # Aguarda até que os links de PDF estejam presentes
             WebDriverWait(driver, 30).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "a[href*='.pdf']"))
+                EC.presence_of_element_located((By.TAG_NAME, "a"))
             )
             
-            # Extrai todos os links PDF da página
+            # Extrai todos os links e filtra apenas os PDFs válidos
             soup = BeautifulSoup(driver.page_source, 'html.parser')
-            links = [a['href'] for a in soup.find_all('a', href=lambda href: href and '.pdf' in href)]
+            links = []
             
-            logger.debug(f"Encontrados {len(links)} links PDF na página")
-            return links
+            for a in soup.find_all('a', href=True):
+                href = a['href']
+                if href.lower().endswith('.pdf'):
+                    # Normaliza a URL
+                    if not href.startswith('http'):
+                        href = urljoin(self.BASE_URL, href)
+                    links.append(href)
+            
+            return list(set(links))  # Remove duplicados
             
         except Exception as e:
             logger.error(f"Erro ao extrair links de {url}: {str(e)}")
@@ -213,8 +194,3 @@ class DiarioOficialScraper:
             numero = match.group(3).replace('.', '').replace(',', '')
             return tipo, numero
         return None, None
-
-    # Exemplo:
-    tipo, numero = extrair_norma("Decreto nº 22.033/2023")
-    print(tipo)  # "DECRETO"
-    print(numero)  # "22033/2023"

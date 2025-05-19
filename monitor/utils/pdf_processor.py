@@ -367,18 +367,22 @@ class PDFProcessor:
             'falhas': 0
         }
         
-        for doc in docs:
+        for i, doc in enumerate(docs, 1):
             try:
+                logger.info(f"Processando documento {i}/{resultados['total']} - ID: {doc.id}")
                 if self.processar_documento(doc):
                     resultados['sucesso'] += 1
+                    logger.info(f"Documento {doc.id} processado com sucesso")
                 else:
                     resultados['irrelevantes'] += 1
+                    logger.info(f"Documento {doc.id} marcado como irrelevante")
             except Exception:
                 resultados['falhas'] += 1
                 logger.error(f"Falha no documento ID {doc.id}: {traceback.format_exc()}")
+        
+        logger.info(f"Processamento concluído: {resultados}")
         return resultados
-
-    
+        
     
     def _inferir_tipo_norma(self, texto: str) -> str:
         texto = texto.lower()

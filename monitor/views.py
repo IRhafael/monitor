@@ -115,20 +115,21 @@ def documento_upload(request):
     
     return render(request, 'documentos/documento_upload.html', {'form': form})
 
+from django.db.models import Count
+
 @login_required
 def normas_list(request):
-    # Filtros
     status = request.GET.get('status', 'todos')
-    
+
     normas = NormaVigente.objects.all().annotate(
-        num_documentos=count('documentos')
+        num_documentos=Count('documentos')
     ).order_by('-data_verificacao')
-    
+
     if status == 'vigentes':
         normas = normas.filter(situacao='VIGENTE')
     elif status == 'revogadas':
         normas = normas.filter(situacao='REVOGADA')
-    
+
     context = {
         'normas': normas,
         'filtro_atual': status,
@@ -271,7 +272,7 @@ def gerar_relatorio(request):
     context = {
         'relatorios': relatorios,
     }
-    return render(request, 'monitor/gerar_relatorio.html', context)
+    return render(request, 'relatorios/gerar_relatorio.html', context)
 
 @login_required
 def relatorio_detail(request, relatorio_id):

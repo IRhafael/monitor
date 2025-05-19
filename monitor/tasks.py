@@ -12,6 +12,8 @@ from monitor.utils.diario_scraper import DiarioOficialScraper  # ✅ correto
 from monitor.utils.sefaz_integracao import IntegradorSEFAZ
 from monitor.utils.sefaz_scraper import  SEFAZScraper
 from monitor.utils import PDFProcessor
+import logging
+
 
 
 from monitor.models import (
@@ -139,6 +141,14 @@ def verificar_coletas_programadas():
     except Exception as e:
         logger.error(f"Erro ao verificar coletas programadas: {str(e)}", exc_info=True)
         return False
+    
+
+@shared_task(name='monitor.tasks.gerar_relatorio_excel')
+def gerar_relatorio_excel():
+    logger.info("Gerando relatório Excel...")
+    # Sua lógica de geração de relatório aqui
+    return "Relatório gerado com sucesso"
+    
 
 @shared_task
 def gerar_relatorio_contabil(data_inicio=None, data_fim=None, usuario_id=None):
