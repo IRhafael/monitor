@@ -29,3 +29,12 @@ Dashboard com resumo
 Listagem de documentos
 Execução manual de coletas
 Download de relatórios
+
+
+
+Visão Geral do Sistema
+O sistema é uma aplicação Django para monitoramento 
+de documentos oficiais (especificamente do Diário Oficial do Piauí)
+com foco em conteúdo contábil, que extrai,
+processa e analisa documentos PDF,
+identifica normas relevantes e verifica sua vigência junto à SEFAZ.

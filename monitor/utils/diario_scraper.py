@@ -106,10 +106,16 @@ class DiarioOficialScraper:
                 driver.quit()
 
     def normalizar_url(self, link):
-        """Normaliza a URL do PDF"""
+        """Versão robusta para normalização de URLs"""
         if link.startswith('http'):
             return link
-        return self.BASE_URL + link.lstrip('/')
+            
+        # Remove ../ e ./ da URL
+        link = re.sub(r'\.\./', '', link)
+        link = re.sub(r'\./', '', link)
+        
+        base = self.BASE_URL.rstrip('/')
+        return f"{base}/{link.lstrip('/')}"
 
     def processar_pdf(self, pdf_url, data_referencia):
         """Processa um PDF individual e verifica se é contábil"""
