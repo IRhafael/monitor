@@ -298,6 +298,7 @@ class LogExecucao(models.Model):
     mensagem = models.TextField(blank=True)
     erro = models.TextField(blank=True)
     traceback = models.TextField(blank=True)
+    detalhes = models.JSONField(blank=True, null=True)
     usuario = models.ForeignKey(
         'auth.User',
         on_delete=models.SET_NULL,

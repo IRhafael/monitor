@@ -15,7 +15,7 @@ import os
 import logging
 from .forms import DocumentoUploadForm
 from .models import Documento, NormaVigente, LogExecucao, RelatorioGerado
-from .utils import PDFProcessor
+from monitor.utils.pdf_processor import PDFProcessor
 from .utils.diario_scraper import DiarioOficialScraper
 from .utils.sefaz_integracao import IntegradorSEFAZ
 from .utils.relatorio import RelatorioGenerator

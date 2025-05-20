@@ -1,19 +1,35 @@
 # diario_scraper.py
+
 import os
+import re
 import time
+import logging
 import requests
+from pdfminer.high_level import extract_text
+from io import BytesIO
 from datetime import datetime, timedelta
+from urllib.parse import urljoin
+
 from django.utils import timezone
+from django.core.files.base import ContentFile
+
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+
 from bs4 import BeautifulSoup
-import logging
-from django.core.files.base import ContentFile
+
 from monitor.models import Documento
-import re
+import traceback
+import io
+import PyPDF2
+from pdfminer.high_level import extract_text as extract_text_pdfminer
+from pdfminer.layout import LAParams
+
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -58,36 +74,88 @@ class DiarioOficialScraper:
 
     def iniciar_coleta(self, data_inicio=None, data_fim=None):
         try:
+            logger.info("Iniciando coleta de documentos")
             driver = self.configurar_navegador()
             if not driver:
+                logger.error("Falha ao iniciar navegador")
                 return []
-                
+
+            # Define data_inicio e data_fim padrão para evitar erros
+            if data_inicio is None:
+                data_inicio = datetime.now() - timedelta(days=7)  # padrão 7 dias atrás
+                logger.info(f"data_inicio não fornecida. Usando padrão: {data_inicio}")
+            if data_fim is None:
+                data_fim = datetime.now()
+                logger.info(f"data_fim não fornecida. Usando padrão: {data_fim}")
+
             datas = self.gerar_datas_no_intervalo(data_inicio, data_fim)
+            logger.info(f"Datas a serem verificadas: {datas}")
+
             documentos_coletados = []
-            
+
             for data in datas:
                 url = self.construir_url_por_data(data)
+                logger.info(f"Acessando URL: {url}")
+
                 pdf_links = self.extrair_links_pdf(driver, url)
-                
+                logger.info(f"Encontrados {len(pdf_links)} links PDF para a data {data}")
+
                 for link in pdf_links:
-                    # Verifica se o link está acessível antes de processar
+                    logger.info(f"Verificando acessibilidade do link: {link}")
                     if self.verificar_link_acessivel(link):
+                        logger.info(f"Link acessível: {link} - Processando PDF")
                         documento = self.processar_pdf(link, data)
                         if documento:
                             documentos_coletados.append(documento)
+                            logger.info(f"Documento processado e coletado: {documento}")
+                        else:
+                            logger.warning(f"Falha ao processar documento no link: {link}")
                     else:
                         logger.warning(f"Link inacessível: {link}")
-                        
+
+            logger.info(f"Total de documentos coletados: {len(documentos_coletados)}")
             return documentos_coletados
-            
+
+        except Exception as e:
+            logger.error(f"Erro na coleta: {str(e)}", exc_info=True)
+            return []
+
         finally:
             if 'driver' in locals():
+                logger.info("Finalizando navegador")
                 driver.quit()
+
+    
+    def extrair_texto_pdf(self, pdf_bytes):
+        """
+        Extrai texto de um PDF usando múltiplas estratégias com fallback
+        """
+        # Tentativa 1: PyPDF2 (mais rápido para PDFs simples)
+        try:
+            texto = ""
+            with io.BytesIO(pdf_bytes) as pdf_file:
+                reader = PyPDF2.PdfReader(pdf_file)
+                for page in reader.pages:
+                    texto += page.extract_text() or ""
+            if len(texto.strip()) > 100:  # Verifica se extraiu conteúdo suficiente
+                return texto
+        except Exception as e:
+            print(f"PyPDF2 falhou: {str(e)}")
+
+        # Tentativa 2: pdfminer.six (melhor para PDFs complexos)
+        try:
+            laparams = LAParams()
+            with io.BytesIO(pdf_bytes) as pdf_file:
+                texto = extract_text_pdfminer(pdf_file, laparams=laparams)
+            return texto
+        except Exception as e:
+            print(f"PDFMiner falhou: {str(e)}")
+            return None
 
     def verificar_link_acessivel(self, url):
         try:
             headers = {'User-Agent': 'Mozilla/5.0'}
-            response = self.session.head(url, headers=headers, timeout=10)
+            response = self.session.get(url, headers=headers, timeout=10, stream=True)
             return response.status_code == 200
         except Exception:
             return False
@@ -106,24 +174,49 @@ class DiarioOficialScraper:
 
     def processar_pdf(self, pdf_url, data_referencia):
         try:
+            logger.info(f"Iniciando download do PDF: {pdf_url}")
+
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             }
             
             response = self.session.get(pdf_url, headers=headers, stream=True, timeout=60)
-            response.raise_for_status()  # Lança exceção para status 4xx/5xx
+            response.raise_for_status()
             
-            if not response.headers.get('Content-Type', '').lower() == 'application/pdf':
+            content_type = response.headers.get('Content-Type', '').lower()
+            logger.info(f"Content-Type recebido: {content_type}")
+            
+            if content_type != 'application/pdf':
                 logger.warning(f"URL não é um PDF válido: {pdf_url}")
                 return None
-                
-            # Restante do seu código de processamento...
             
+            # Aqui você deve processar o conteúdo do PDF
+            # Por exemplo, ler os bytes do PDF
+            pdf_bytes = response.content
+            logger.info(f"PDF baixado com sucesso. Tamanho: {len(pdf_bytes)} bytes")
+            
+            # Exemplo: extrair texto do PDF (ajuste para seu método real)
+            texto_extraido = self.extrair_texto_pdf(pdf_bytes)
+            logger.info(f"Texto extraído do PDF. Tamanho do texto: {len(texto_extraido)} caracteres")
+            
+            # Supondo que você crie um objeto documento
+            documento = {
+                'url': pdf_url,
+                'data_referencia': data_referencia,
+                'texto': texto_extraido,
+                # outros campos que você usa
+            }
+            
+            logger.info(f"Processamento do PDF concluído com sucesso: {pdf_url}")
+            return documento
+
         except requests.HTTPError as e:
             logger.error(f"Erro HTTP ao acessar {pdf_url}: {str(e)}")
+            logger.error(traceback.format_exc())
             return None
         except Exception as e:
             logger.error(f"Erro ao processar PDF {pdf_url}: {str(e)}")
+            logger.error(traceback.format_exc())
             return None
 
     def verificar_conteudo_contabil(self, conteudo):
@@ -159,38 +252,44 @@ class DiarioOficialScraper:
         data_formatada = data.strftime("%Y-%m-%d")
         return f"{self.BASE_URL}?data={data_formatada}"
 
-    def extrair_links_pdf(self, driver, url):
+    def extrair_links_pdf(self, driver, url): 
         try:
+            logger.info(f"Acessando URL para extrair PDFs: {url}")
             driver.get(url)
-            WebDriverWait(driver, 30).until(
-                EC.presence_of_element_located((By.TAG_NAME, "a"))
-            )
-            
-            # Extrai todos os links e filtra apenas os PDFs válidos
-            soup = BeautifulSoup(driver.page_source, 'html.parser')
-            links = []
-            
-            for a in soup.find_all('a', href=True):
-                href = a['href']
-                if href.lower().endswith('.pdf'):
-                    # Normaliza a URL
-                    if not href.startswith('http'):
-                        href = urljoin(self.BASE_URL, href)
-                    links.append(href)
-            
-            return list(set(links))  # Remove duplicados
-            
-        except Exception as e:
-            logger.error(f"Erro ao extrair links de {url}: {str(e)}")
-            return []
-        
 
-    def extrair_norma(texto):
+            # Espera até que pelo menos 1 link PDF esteja presente na página
+            WebDriverWait(driver, 30).until(
+                EC.presence_of_element_located((By.XPATH, "//a[contains(@href, '.pdf')]"))
+            )
+
+            logger.info("Página carregada, iniciando extração dos links PDF")
+            soup = BeautifulSoup(driver.page_source, 'html.parser')
+            
+            links_pdf = set()  # usar set direto evita duplicados
+
+            for a in soup.find_all('a', href=True):
+                href = a['href'].strip()
+                if href.lower().endswith('.pdf'):
+                    # Normaliza a URL absoluta se for relativa
+                    full_url = urljoin(self.BASE_URL, href)
+                    links_pdf.add(full_url)
+
+            links_pdf = list(links_pdf)
+            logger.info(f"{len(links_pdf)} links PDF encontrados em {url}")
+            logger.debug(f"Links encontrados: {links_pdf}")
+            return links_pdf
+
+        except Exception as e:
+            logger.error(f"Erro ao extrair links PDF de {url}: {str(e)}", exc_info=True)
+            return []
+
+    def extrair_norma(self, texto):
         padrao = r'(?i)(lei complementar|lc|lei|decreto[\- ]?lei|decreto|ato normativo|portaria)[\s:]*(n[º°o.]?\s*)?(\d+[\.,\/]?\d*)'
-        
         match = re.search(padrao, texto)
         if match:
             tipo = match.group(1).upper()
             numero = match.group(3).replace('.', '').replace(',', '')
             return tipo, numero
         return None, None
+    
+
