@@ -13,7 +13,7 @@ urlpatterns = [
     # Normas
     path('normas/', views.normas_list, name='normas_list'),
     path('normas/<int:norma_id>/', views.norma_detail, name='norma_detail'),
-    path('normas/<str:tipo>/<str:numero>/verificar/', views.verificar_norma, name='verificar_norma'),
+    path('verificar-normas/', views.verificar_normas_view, name='verificar_normas'),
     path('normas/validacao/', views.validacao_normas, name='validacao_normas'),
     
     # Coleta e processamento

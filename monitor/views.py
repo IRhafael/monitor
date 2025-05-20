@@ -1,5 +1,6 @@
 from datetime import timedelta, datetime
 from itertools import count
+from urllib import request
 from django.db.models import F, ExpressionWrapper
 from django.forms import DurationField
 from django.http import Http404, HttpResponse, FileResponse, JsonResponse
@@ -12,14 +13,13 @@ from django.urls import reverse
 from django.db import transaction
 import os
 import logging
-
 from .forms import DocumentoUploadForm
 from .models import Documento, NormaVigente, LogExecucao, RelatorioGerado
 from .utils import PDFProcessor
 from .utils.diario_scraper import DiarioOficialScraper
 from .utils.sefaz_integracao import IntegradorSEFAZ
 from .utils.relatorio import RelatorioGenerator
-from .tasks import executar_coleta_completa
+
 
 logger = logging.getLogger(__name__)
 
@@ -148,58 +148,106 @@ def norma_detail(request, norma_id):
     return render(request, 'normas/historico.html', context)
 
 @login_required
-def verificar_norma(request, tipo, numero):
-    if not request.headers.get('x-requested-with') == 'XMLHttpRequest':
-        return JsonResponse({'error': 'Requisição inválida'}, status=400)
+def verificar_normas_view(request):
+    if request.method == 'POST':
+        try:
+            integrador = IntegradorSEFAZ()
+            
+            # Verifica normas não verificadas ou com verificação antiga
+            normas = NormaVigente.objects.filter(
+                Q(data_verificacao__isnull=True) | 
+                Q(data_verificacao__lt=timezone.now()-timedelta(days=30))
+            )
+            
+            total = normas.count()
+            sucessos = 0
+            falhas = 0
+            
+            for norma in normas:
+                try:
+                    vigente, detalhes = integrador.verificar_vigencia_com_detalhes(norma.tipo, norma.numero)
+                    norma.situacao = 'VIGENTE' if vigente else 'REVOGADA'
+                    norma.data_verificacao = timezone.now()
+                    norma.detalhes = detalhes
+                    norma.save()
+                    sucessos += 1
+                except Exception as e:
+                    logger.error(f"Erro ao verificar norma {norma}: {str(e)}")
+                    falhas += 1
+            
+            # Registrar log
+            LogExecucao.objects.create(
+                tipo='VERIFICACAO',
+                status='SUCESSO' if falhas == 0 else 'PARCIAL',
+                detalhes={
+                    'total_normas': total,
+                    'sucessos': sucessos,
+                    'falhas': falhas
+                }
+            )
+            
+            messages.success(request, 
+                f"Verificação concluída! {sucessos} normas verificadas, {falhas} falhas."
+            )
+            return redirect('dashboard')
+            
+        except Exception as e:
+            logger.error(f"Erro na verificação em massa: {str(e)}", exc_info=True)
+            LogExecucao.objects.create(
+                tipo='VERIFICACAO',
+                status='ERRO',
+                detalhes={'erro': str(e)}
+            )
+            messages.error(request, f"Erro na verificação: {str(e)}")
+            return redirect('validacao_normas')
     
-    try:
-        integrador = IntegradorSEFAZ()
-        vigente, detalhes = integrador.verificar_vigencia_com_detalhes(tipo, numero)
-        
-        norma, created = NormaVigente.objects.update_or_create(
-            tipo=tipo,
-            numero=numero,
-            defaults={
-                'situacao': 'VIGENTE' if vigente else 'REVOGADA',
-                'data_verificacao': timezone.now(),
-                'detalhes': detalhes,
-            }
-        )
-        
-        return JsonResponse({
-            'success': True,
-            'vigente': vigente,
-            'norma_id': norma.id,
-            'situacao': norma.get_situacao_display(),
-            'data_verificacao': norma.data_verificacao.strftime("%d/%m/%Y %H:%M") if norma.data_verificacao else "",
-        })
-    
-    except Exception as e:
-        logger.error(f"Erro ao verificar norma {tipo} {numero}: {str(e)}", exc_info=True)
-        return JsonResponse({
-            'success': False,
-            'error': str(e)
-        }, status=500)
+    return redirect('validacao_normas')
 
 @login_required
 def executar_coleta_view(request):
     if request.method == 'POST':
         try:
-            # Executa a coleta de forma assíncrona
-            task = executar_coleta_completa.delay()
+            # Executa a coleta de forma síncrona
+            scraper = DiarioOficialScraper()
+            processor = PDFProcessor()
             
-            messages.info(request, 
-                "Coleta iniciada em segundo plano. Você será notificado quando concluir."
+            # 1. Coletar documentos
+            data_inicio = timezone.now() - timedelta(days=7)  # Últimos 7 dias
+            documentos_coletados = scraper.iniciar_coleta(data_inicio=data_inicio)
+            
+            # 2. Processar documentos coletados
+            resultados = processor.processar_todos_documentos()
+            
+            # Registrar log de execução
+            log = LogExecucao.objects.create(
+                tipo_execucao='COLETA',
+                status='SUCESSO' if resultados['falhas'] == 0 else 'PARCIAL',
+                detalhes={
+                    'documentos_coletados': len(documentos_coletados),
+                    'processados_com_sucesso': resultados['sucesso'],
+                    'documentos_irrelevantes': resultados['irrelevantes'],
+                    'erros': resultados['falhas']
+                }
+            )
+            
+            messages.success(request, 
+                f"Coleta concluída! {len(documentos_coletados)} documentos coletados, "
+                f"{resultados['sucesso']} processados com sucesso."
             )
             return redirect('dashboard')
             
         except Exception as e:
-            logger.error(f"Erro ao iniciar coleta: {str(e)}", exc_info=True)
-            messages.error(request, f"Erro ao iniciar coleta: {str(e)}")
+            logger.error(f"Erro ao executar coleta: {str(e)}", exc_info=True)
+            LogExecucao.objects.create(
+                tipo_execucao='COLETA',
+                status='ERRO',
+                detalhes={'erro': str(e)}
+            )
+            messages.error(request, f"Erro ao executar coleta: {str(e)}")
             return redirect('executar_coleta')
     
     # Mostra informações sobre a última execução
-    ultima_execucao = LogExecucao.objects.last()
+    ultima_execucao = LogExecucao.objects.filter(tipo_execucao='COLETA').last()
     documentos_nao_processados = Documento.objects.filter(processado=False).count()
     
     context = {
@@ -344,3 +392,18 @@ def validacao_normas(request):
         'normas': normas
     }
     return render(request, 'normas/validacao.html', context)
+
+
+@login_required
+def verificar_normas_view(request):
+    if request.method == 'POST':
+        # Cria uma página de progresso
+        request.session['tarefa_em_andamento'] = True
+        request.session['tarefa_tipo'] = 'verificacao_normas'
+        return redirect('progresso_tarefa')
+    
+    return redirect('validacao_normas')
+
+@login_required
+def progresso_tarefa(request):
+    return render(request, 'progresso_tarefa.html')

@@ -356,33 +356,33 @@ class PDFProcessor:
         except Exception as e:
             logger.error(f"Falha ao lidar com documento não relevante ID {documento.id}: {str(e)}")
 
-    def processar_todos_documentos(self) -> Dict[str, int]:
+    def processar_todos_documentos(self, batch_size=10) -> Dict[str, int]:
         docs = Documento.objects.filter(processado=False)
-        logger.info(f"Iniciando processamento em lote de {docs.count()} documentos")
+        total = docs.count()
+        logger.info(f"Iniciando processamento em lote de {total} documentos")
         
         resultados = {
-            'total': docs.count(),
+            'total': total,
             'sucesso': 0,
             'irrelevantes': 0,
             'falhas': 0
         }
         
-        for i, doc in enumerate(docs, 1):
-            try:
-                logger.info(f"Processando documento {i}/{resultados['total']} - ID: {doc.id}")
-                if self.processar_documento(doc):
-                    resultados['sucesso'] += 1
-                    logger.info(f"Documento {doc.id} processado com sucesso")
-                else:
-                    resultados['irrelevantes'] += 1
-                    logger.info(f"Documento {doc.id} marcado como irrelevante")
-            except Exception:
-                resultados['falhas'] += 1
-                logger.error(f"Falha no documento ID {doc.id}: {traceback.format_exc()}")
+        for i in range(0, total, batch_size):
+            batch = docs[i:i + batch_size]
+            logger.info(f"Processando lote {i//batch_size + 1}/{(total//batch_size)+1}")
+            
+            for doc in batch:
+                try:
+                    if self.processar_documento(doc):
+                        resultados['sucesso'] += 1
+                    else:
+                        resultados['irrelevantes'] += 1
+                except Exception:
+                    resultados['falhas'] += 1
+                    logger.error(f"Falha no documento ID {doc.id}: {traceback.format_exc()}")
         
-        logger.info(f"Processamento concluído: {resultados}")
-        return resultados
-        
+        return resultados    
     
     def _inferir_tipo_norma(self, texto: str) -> str:
         texto = texto.lower()

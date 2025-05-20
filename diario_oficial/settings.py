@@ -39,7 +39,6 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'monitor.apps.MonitorConfig',
     'django_extensions',
-    'django_celery_results',
 ]
 
 MIDDLEWARE = [
@@ -135,12 +134,3 @@ LOGIN_URL = '/admin/login/'  # Usando o admin como login temporário
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
-# Configurações do Celery
-# Configurações do Celery
-CELERY_BROKER_URL = 'redis://localhost:6379/0'  # Usando Redis
-CELERY_RESULT_BACKEND = 'redis://localhost:6379/1'  # Banco diferente para resultados
-CELERY_ACCEPT_CONTENT = ['json']
-CELERY_TASK_SERIALIZER = 'json'
-CELERY_RESULT_SERIALIZER = 'json'
-CELERY_TIMEZONE = 'America/Sao_Paulo'
-CELERY_RESULT_EXTENDED = True
