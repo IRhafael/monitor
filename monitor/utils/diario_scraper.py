@@ -1,4 +1,4 @@
-# diario_scraper.py
+# monitor/utils/diario_scraper.py
 
 import os
 import re
@@ -7,9 +7,11 @@ import logging
 import requests
 from pdfminer.high_level import extract_text
 from io import BytesIO
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date # Adicione 'date' aqui
 from urllib.parse import urljoin
-
+import uuid # Importar uuid para títulos únicos, se necessário
+from typing import List, Optional, Tuple # Adicionar Optional e Tuple para type hints
+from pdfminer.layout import LAParams
 from django.utils import timezone
 from django.core.files.base import ContentFile
 
@@ -18,17 +20,13 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException # Adicionar import para tratamento de erros do Selenium
+from selenium.webdriver.chrome.service import Service # Para inicializar o ChromeDriver corretamente
 
 from bs4 import BeautifulSoup
 
-from monitor.models import Documento
+from monitor.models import Documento # Certifique-se que Documento está importado
 import traceback
-import io
-import PyPDF2
-from pdfminer.high_level import extract_text as extract_text_pdfminer
-from pdfminer.layout import LAParams
-
-
 
 
 logger = logging.getLogger(__name__)
@@ -39,225 +37,49 @@ class DiarioOficialScraper:
         self.max_docs = max_docs
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.122.52 Chrome/91.0.4472.124 Safari/537.36'
         })
+        self.driver = None # Inicializa o driver como None
+        self.chrome_options = Options()
+        self.chrome_options.add_argument("--headless=new") # Executa em modo headless
+        self.chrome_options.add_argument("--no-sandbox")
+        self.chrome_options.add_argument("--disable-dev-shm-usage")
+        self.chrome_options.add_argument("--disable-gpu")
+        self.chrome_options.add_argument("--window-size=1920,1080")
+        self.chrome_options.add_argument("--incognito") # Para evitar cache
+        self.chrome_options.page_load_strategy = 'normal' # Espera a página carregar completamente
 
-        # Atualizar a lista de termos contábeis
-        self.termos_contabeis = [
-            'icms', 'decreto 21.866', 'unatri', 
-            'substituição tributária', 'regime especial'
-        ]
-    # Modifique o método configurar_navegador
-    def configurar_navegador(self):
-        """Configura o navegador Chrome em modo headless"""
-        chrome_options = Options()
-        chrome_options.add_argument("--headless=new")  # Novo modo headless
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--window-size=1280,720")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--log-level=3")  # Reduz logs do Chrome
-        chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
-        
-        # Configurações para evitar detecção
-        chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        chrome_options.add_experimental_option("useAutomationExtension", False)
-        
+
+    def _get_webdriver(self):
+        """Inicializa e retorna uma instância do WebDriver."""
+        if self.driver is None:
+            try:
+                # Usa o Service para evitar o FutureWarning
+                service = webdriver.chrome.service.Service() # Pode precisar de ChromeDriverManager().install() se não for automático
+                self.driver = webdriver.Chrome(service=service, options=self.chrome_options)
+                self.driver.set_page_load_timeout(30) # Define um timeout para o carregamento da página
+                logger.info("WebDriver inicializado com sucesso.")
+            except Exception as e:
+                logger.error(f"Erro ao inicializar WebDriver: {e}", exc_info=True)
+                self.driver = None # Garante que o driver está em um estado conhecido
+                raise # Relaça o erro para ser tratado mais acima
+        return self.driver
+
+    def _fechar_webdriver(self):
+        """Fecha a instância do WebDriver, se estiver aberta."""
+        if self.driver:
+            self.driver.quit()
+            self.driver = None
+            logger.info("WebDriver fechado.")
+
+    def _extrair_links_pdf(self, url: str) -> List[str]:
+        """Extrai URLs de PDF de uma página web usando Selenium."""
+        driver = self._get_webdriver()
         try:
-            driver = webdriver.Chrome(options=chrome_options)
-            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-            return driver
-        except Exception as e:
-            logger.error(f"Erro ao iniciar navegador: {str(e)}")
-            return None
-
-    def iniciar_coleta(self, data_inicio=None, data_fim=None):
-        try:
-            logger.info("Iniciando coleta de documentos")
-            driver = self.configurar_navegador()
-            if not driver:
-                logger.error("Falha ao iniciar navegador")
-                return []
-
-            # Define data_inicio e data_fim padrão para evitar erros
-            if data_inicio is None:
-                data_inicio = datetime.now() - timedelta(days=7)  # padrão 7 dias atrás
-                logger.info(f"data_inicio não fornecida. Usando padrão: {data_inicio}")
-            if data_fim is None:
-                data_fim = datetime.now()
-                logger.info(f"data_fim não fornecida. Usando padrão: {data_fim}")
-
-            datas = self.gerar_datas_no_intervalo(data_inicio, data_fim)
-            logger.info(f"Datas a serem verificadas: {datas}")
-
-            documentos_coletados = []
-
-            for data in datas:
-                url = self.construir_url_por_data(data)
-                logger.info(f"Acessando URL: {url}")
-
-                pdf_links = self.extrair_links_pdf(driver, url)
-                logger.info(f"Encontrados {len(pdf_links)} links PDF para a data {data}")
-
-                for link in pdf_links:
-                    logger.info(f"Verificando acessibilidade do link: {link}")
-                    if self.verificar_link_acessivel(link):
-                        logger.info(f"Link acessível: {link} - Processando PDF")
-                        documento = self.processar_pdf(link, data)
-                        if documento:
-                            documentos_coletados.append(documento)
-                            logger.info(f"Documento processado e coletado: {documento}")
-                        else:
-                            logger.warning(f"Falha ao processar documento no link: {link}")
-                    else:
-                        logger.warning(f"Link inacessível: {link}")
-
-            logger.info(f"Total de documentos coletados: {len(documentos_coletados)}")
-            return documentos_coletados
-
-        except Exception as e:
-            logger.error(f"Erro na coleta: {str(e)}", exc_info=True)
-            return []
-
-        finally:
-            if 'driver' in locals():
-                logger.info("Finalizando navegador")
-                driver.quit()
-
-    
-    def extrair_texto_pdf(self, pdf_bytes):
-        """
-        Extrai texto de um PDF usando múltiplas estratégias com fallback
-        """
-        # Tentativa 1: PyPDF2 (mais rápido para PDFs simples)
-        try:
-            texto = ""
-            with io.BytesIO(pdf_bytes) as pdf_file:
-                reader = PyPDF2.PdfReader(pdf_file)
-                for page in reader.pages:
-                    texto += page.extract_text() or ""
-            if len(texto.strip()) > 100:  # Verifica se extraiu conteúdo suficiente
-                return texto
-        except Exception as e:
-            print(f"PyPDF2 falhou: {str(e)}")
-
-        # Tentativa 2: pdfminer.six (melhor para PDFs complexos)
-        try:
-            laparams = LAParams()
-            with io.BytesIO(pdf_bytes) as pdf_file:
-                texto = extract_text_pdfminer(pdf_file, laparams=laparams)
-            return texto
-        except Exception as e:
-            print(f"PDFMiner falhou: {str(e)}")
-            return None
-
-    def verificar_link_acessivel(self, url):
-        try:
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            response = self.session.get(url, headers=headers, timeout=10, stream=True)
-            return response.status_code == 200
-        except Exception:
-            return False
-
-    def normalizar_url(self, link):
-        """Versão robusta para normalização de URLs"""
-        if link.startswith('http'):
-            return link
-            
-        # Remove ../ e ./ da URL
-        link = re.sub(r'\.\./', '', link)
-        link = re.sub(r'\./', '', link)
-        
-        base = self.BASE_URL.rstrip('/')
-        return f"{base}/{link.lstrip('/')}"
-
-    def processar_pdf(self, pdf_url, data_referencia):
-        try:
-            logger.info(f"Iniciando download do PDF: {pdf_url}")
-
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            }
-            
-            response = self.session.get(pdf_url, headers=headers, stream=True, timeout=60)
-            response.raise_for_status()
-            
-            content_type = response.headers.get('Content-Type', '').lower()
-            logger.info(f"Content-Type recebido: {content_type}")
-            
-            if content_type != 'application/pdf':
-                logger.warning(f"URL não é um PDF válido: {pdf_url}")
-                return None
-            
-            # Aqui você deve processar o conteúdo do PDF
-            # Por exemplo, ler os bytes do PDF
-            pdf_bytes = response.content
-            logger.info(f"PDF baixado com sucesso. Tamanho: {len(pdf_bytes)} bytes")
-            
-            # Exemplo: extrair texto do PDF (ajuste para seu método real)
-            texto_extraido = self.extrair_texto_pdf(pdf_bytes)
-            logger.info(f"Texto extraído do PDF. Tamanho do texto: {len(texto_extraido)} caracteres")
-            
-            # Supondo que você crie um objeto documento
-            documento = {
-                'url': pdf_url,
-                'data_referencia': data_referencia,
-                'texto': texto_extraido,
-                # outros campos que você usa
-            }
-            
-            logger.info(f"Processamento do PDF concluído com sucesso: {pdf_url}")
-            return documento
-
-        except requests.HTTPError as e:
-            logger.error(f"Erro HTTP ao acessar {pdf_url}: {str(e)}")
-            logger.error(traceback.format_exc())
-            return None
-        except Exception as e:
-            logger.error(f"Erro ao processar PDF {pdf_url}: {str(e)}")
-            logger.error(traceback.format_exc())
-            return None
-
-    def verificar_conteudo_contabil(self, conteudo):
-        sample = conteudo[:5000]  # Verifica o início (cabeçalho)
-        if any(termo.lower() in sample.decode('utf-8', errors='ignore').lower() 
-            for termo in self.termos_contabeis):
-            return True
-        
-        # Verifica o final (assinaturas/seções importantes)
-        sample = conteudo[-10000:]
-        return any(termo.lower() in sample.decode('utf-8', errors='ignore').lower() 
-                for termo in self.termos_contabeis)
-
-    def gerar_nome_arquivo(self, pdf_url, data_referencia):
-        """Gera um nome de arquivo consistente para o PDF"""
-        nome_base = pdf_url.split('/')[-1].split('?')[0]
-        if not nome_base.lower().endswith('.pdf'):
-            nome_base += '.pdf'
-            
-        data_str = data_referencia.strftime("%Y-%m-%d")
-        if data_str not in nome_base:
-            nome_base = f"{data_str}_{nome_base}"
-            
-        return nome_base
-
-    def gerar_datas_no_intervalo(self, data_inicio, data_fim):
-        """Gera todas as datas no intervalo especificado"""
-        delta = data_fim - data_inicio
-        return [data_inicio + timedelta(days=i) for i in range(delta.days + 1)]
-
-    def construir_url_por_data(self, data):
-        """Constrói a URL completa para uma data específica"""
-        data_formatada = data.strftime("%Y-%m-%d")
-        return f"{self.BASE_URL}?data={data_formatada}"
-
-    def extrair_links_pdf(self, driver, url): 
-        try:
-            logger.info(f"Acessando URL para extrair PDFs: {url}")
+            logger.info(f"Acessando URL: {url}")
             driver.get(url)
 
-            # Espera até que pelo menos 1 link PDF esteja presente na página
+            # Espera até que pelo menos um link .pdf esteja presente na página
             WebDriverWait(driver, 30).until(
                 EC.presence_of_element_located((By.XPATH, "//a[contains(@href, '.pdf')]"))
             )
@@ -279,17 +101,331 @@ class DiarioOficialScraper:
             logger.debug(f"Links encontrados: {links_pdf}")
             return links_pdf
 
+        except TimeoutException:
+            logger.error(f"Timeout ao carregar a página ou encontrar elementos em {url}")
+            return []
         except Exception as e:
             logger.error(f"Erro ao extrair links PDF de {url}: {str(e)}", exc_info=True)
             return []
+        finally:
+            # Não feche o driver aqui se for usar na mesma sessão
+            pass
 
-    def extrair_norma(self, texto):
-        padrao = r'(?i)(lei complementar|lc|lei|decreto[\- ]?lei|decreto|ato normativo|portaria)[\s:]*(n[º°o.]?\s*)?(\d+[\.,\/]?\d*)'
-        match = re.search(padrao, texto)
-        if match:
-            tipo = match.group(1).upper()
-            numero = match.group(3).replace('.', '').replace(',', '')
-            return tipo, numero
-        return None, None
-    
 
+    def _extrair_texto_de_pdf(self, pdf_content: bytes) -> Optional[str]:
+        """Extrai texto de conteúdo PDF em bytes."""
+        try:
+            # Tenta com pdfminer.high_level (mais robusto)
+            # Use LAParams se precisar de layout de texto mais preciso
+            laparams = LAParams(all_texts=True, detect_vertical=True)
+            text = extract_text(BytesIO(pdf_content), laparams=laparams)
+            if text and text.strip():
+                return text.strip()
+            
+            logger.warning("Nenhum texto extraído do PDF.")
+            return None
+        except Exception as e:
+            logger.error(f"Erro ao extrair texto do PDF: {e}", exc_info=True)
+            return None
+
+    def _baixar_pdf(self, url: str) -> Optional[bytes]:
+        """Baixa um arquivo PDF e retorna seu conteúdo como bytes."""
+        try:
+            logger.info(f"Tentando baixar PDF de: {url}")
+            response = self.session.get(url, stream=True, timeout=15) # Aumentar timeout
+            response.raise_for_status()
+            pdf_content = response.content
+            logger.info(f"PDF baixado com sucesso de {url}")
+            return pdf_content
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Erro ao baixar PDF de {url}: {e}")
+            return None
+
+    def extrair_texto_pdf(self, pdf_bytes, paginas=None):
+        """
+        Versão melhorada que permite extração de páginas específicas e usa múltiplas estratégias.
+        
+        Args:
+            pdf_bytes (bytes): Conteúdo do arquivo PDF em bytes.
+            paginas (list, optional): Lista de números de páginas para extrair. None para extrair todas.
+            
+        Returns:
+            str: Texto extraído do PDF.
+        """
+        try:
+            from pdfminer.high_level import extract_text
+            from pdfminer.layout import LAParams
+            from io import BytesIO
+            import logging
+            import re
+            import traceback
+            
+            # Tente usar PyPDF2/PyPDF4 como backup se disponível
+            try:
+                # Tentar importar PyPDF4 primeiro (mais recente)
+                try:
+                    from PyPDF4 import PdfFileReader
+                    pdf_reader_class = PdfFileReader
+                except ImportError:
+                    # Cair para PyPDF2 se PyPDF4 não estiver disponível
+                    from PyPDF2 import PdfFileReader
+                    pdf_reader_class = PdfFileReader
+                
+                use_pypdf = True
+            except ImportError:
+                use_pypdf = False
+            
+            logger = logging.getLogger(__name__)
+            logger.info(f"Iniciando extração de texto de PDF com {len(pdf_bytes)} bytes")
+            
+            # Criar um objeto BytesIO a partir dos bytes do PDF
+            pdf_file = BytesIO(pdf_bytes)
+            
+            # ESTRATÉGIA 1: PDFMiner com parâmetros ajustados
+            laparams = LAParams(
+                line_margin=0.3,
+                word_margin=0.1,
+                char_margin=2.0,
+                boxes_flow=0.5,
+                detect_vertical=True,
+                all_texts=True
+            )
+            
+            # Lidar com páginas específicas se solicitado
+            if paginas is not None:
+                logger.info(f"Extraindo páginas específicas: {paginas}")
+                texto_total = ""
+                
+                # Se PyPDF estiver disponível, verificar o número total de páginas
+                if use_pypdf:
+                    pdf = pdf_reader_class(pdf_file)
+                    total_paginas = pdf.getNumPages()
+                    logger.info(f"Total de páginas no documento: {total_paginas}")
+                    
+                    # Filtrar páginas válidas
+                    paginas = [p for p in paginas if 0 <= p < total_paginas]
+                    pdf_file.seek(0)  # Resetar o buffer para reutilização
+                
+                # Extrair cada página solicitada
+                for pagina in paginas:
+                    try:
+                        texto_pagina = extract_text(
+                            pdf_file, 
+                            page_numbers=[pagina], 
+                            laparams=laparams
+                        )
+                        texto_total += f"\n\n--- PÁGINA {pagina+1} ---\n\n" + texto_pagina
+                        pdf_file.seek(0)  # Resetar o buffer para reutilização
+                    except Exception as e:
+                        logger.error(f"Erro ao extrair página {pagina}: {str(e)}")
+                
+                texto = texto_total
+            else:
+                # Extrair todas as páginas
+                texto = extract_text(pdf_file, laparams=laparams)
+            
+            # ESTRATÉGIA 2: Se o texto estiver vazio ou muito curto, tentar PyPDF como fallback
+            if (not texto or len(texto.strip()) < 200) and use_pypdf:
+                logger.info("Texto insuficiente extraído pelo PDFMiner, tentando PyPDF como fallback")
+                try:
+                    pdf_file.seek(0)  # Resetar o buffer para reutilização
+                    pdf = pdf_reader_class(pdf_file)
+                    
+                    texto_pypdf = ""
+                    for pagina in range(pdf.getNumPages()):
+                        if paginas is None or pagina in paginas:
+                            page = pdf.getPage(pagina)
+                            texto_pypdf += page.extractText() + "\n\n"
+                    
+                    # Se o texto do PyPDF for mais longo, usá-lo
+                    if len(texto_pypdf.strip()) > len(texto.strip()):
+                        logger.info("Usando texto extraído pelo PyPDF (mais completo)")
+                        texto = texto_pypdf
+                except Exception as e:
+                    logger.error(f"Erro ao usar PyPDF como fallback: {str(e)}")
+            
+            # Tratamentos específicos para documentos contábeis
+            if texto:
+                # Remover caracteres de controle
+                texto = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', texto)
+                
+                # Normalizar espaços em branco
+                texto = re.sub(r'\s+', ' ', texto)
+                texto = re.sub(r' {2,}', ' ', texto)
+                
+                # Normalizar quebras de linha
+                texto = re.sub(r'(\S)\n(\S)', r'\1 \2', texto)
+                
+                # Preservar quebras de linha significativas (para tabelas e seções)
+                texto = re.sub(r'([.:;,]) (\S)', r'\1 \2', texto)
+                
+                # Normalizar separadores decimais
+                texto = re.sub(r'(\d+)[,\.](\d{2})(?=\s|$)', r'\1,\2', texto)
+                
+                # Resolver problemas com caracteres acentuados comuns em PDFs mal formatados
+                char_map = {
+                    '~': 'ã', '^': 'ê', '´': 'é', '`': 'à', '¸': 'ç',
+                    'Ã£': 'ã', 'Ãª': 'ê', 'Ã©': 'é', 'Ã¡': 'á', 'Ã§': 'ç',
+                    'Ãµ': 'õ', 'Ã³': 'ó', 'Ã­': 'í', 'Ãº': 'ú', 'Ã¢': 'â'
+                }
+                
+                for orig, corr in char_map.items():
+                    texto = texto.replace(orig, corr)
+                
+                # Corrigir espaçamento após pontuação
+                texto = re.sub(r'([.:;,])([A-Za-z0-9])', r'\1 \2', texto)
+                
+                # Normalizar termos contábeis para facilitar buscas posteriores
+                termos_contabeis_map = {
+                        r'i c m s': 'icms',
+                        r'i\. c\. m\. s\.': 'icms',
+                        r'i\.c\.m\.s\.': 'icms',
+                        r'substit\. tribut\.': 'substituição tributária',
+                        r'subst\. trib\.': 'substituição tributária',
+                        r'reg\. especial': 'regime especial',
+                        r'dec\. 21\.866': 'decreto 21.866',
+                        r'decreto21\.866': 'decreto 21.866',
+                        r'unatri': 'unatri',
+                        r'unifis': 'unifis',
+                        r'lei 4\.257': 'lei 4.257',
+                        r'ato normativo 25/21': 'ato normativo 25/21',
+                        r'ato normativo 26/21': 'ato normativo 26/21',
+                        r'ato normativo 27/21': 'ato normativo 27/21',
+                        r'secretaria de fazenda do estado do piauí': 'secretaria de fazenda do estado do piauí',
+                        r'sefaz-?pi': 'sefaz-pi',
+                        r'sefaz': 'sefaz',
+                        r'substituição tributária': 'substituição tributária',
+                    }
+
+                
+                for termo_orig, termo_norm in termos_contabeis_map.items():
+                    texto = re.sub(r'\b' + re.escape(termo_orig) + r'\b', termo_norm, texto, flags=re.IGNORECASE)
+                
+                logger.info(f"Texto extraído com sucesso. Tamanho: {len(texto)} caracteres")
+            else:
+                logger.warning("Nenhum texto extraído do PDF")
+                texto = ""
+            
+            return texto
+            
+        except Exception as e:
+            logger.error(f"Erro ao extrair texto do PDF: {str(e)}")
+            logger.error(traceback.format_exc())
+            return ""
+
+    def identificar_assunto_geral(self, texto: str) -> str:
+        """Identifica o assunto geral do documento com base em palavras-chave."""
+        texto_lower = texto.lower()
+        palavras_chave_contabeis = ['contábil', 'fiscal', 'imposto', 'icms', 'issqn', 'tributo', 'declaração', 'contabilidade', 'auditoria']
+        
+        for palavra in palavras_chave_contabeis:
+            if palavra in texto_lower:
+                return "Contábil/Fiscal"
+        
+        return "Geral"
+
+    def extrair_norma(self, texto: str) -> List[Tuple[str, str]]:
+        """Extrai normas (tipo e número) do texto de um documento."""
+        normas = []
+        # Padrões para Lei, Decreto, Portaria, etc.
+        # Captura o tipo da norma e um ou mais grupos de números separados por ponto, barra ou hífen
+        padrao = r'(?i)(lei complementar|lc|lei|decreto[\- ]?lei|decreto|ato normativo|portaria|instrução normativa|in|emenda constitucional|ec)[\s:]*(n[º°o.]?\s*)?(\d+([\.\/\-]\d+)*)'
+        
+        matches = re.finditer(padrao, texto)
+        for match in matches:
+            tipo = match.group(1).strip().upper()
+            numero_raw = match.group(3).strip()
+            # Padroniza o número removendo zeros à esquerda se houver, e tratando separadores
+            numero_padronizado = self._padronizar_numero(numero_raw)
+            normas.append((tipo, numero_padronizado))
+        return normas
+
+    def _padronizar_numero(self, numero):
+        """Padroniza o número da norma para remover zeros à esquerda e unificar separadores."""
+        # Remove caracteres que não são dígitos, pontos, barras ou hífens
+        numero = re.sub(r'[^0-9./-]', '', numero)
+        # Divide o número em partes usando separadores e remove zeros à esquerda de cada parte numérica
+        partes = re.split(r'([./-])', numero)
+        resultado = []
+        for parte in partes:
+            if parte in ['.', '/', '-']:
+                resultado.append(parte)
+            else:
+                # Remove zeros à esquerda, mas mantém '0' se o número for apenas '0'
+                resultado.append(parte.lstrip('0') or '0')
+        return ''.join(resultado)
+
+    # --- MÉTODO QUE ESTAVA FALTANDO E PRECISA SER ADICIONADO/CORRIGIDO ---
+    def coletar_e_salvar_documentos(self, data_inicio: date, data_fim: date) -> List[Documento]:
+        """
+        Coleta documentos do Diário Oficial para o período especificado,
+        baixa os PDFs, extrai o texto e salva no banco de dados.
+        """
+        documentos_salvos = []
+        current_date = data_inicio
+        try:
+            while current_date <= data_fim:
+                logger.info(f"Processando diário para a data: {current_date.strftime('%Y-%m-%d')}")
+                url_diario = f"{self.BASE_URL}?data={current_date.strftime('%d-%m-%Y')}"
+                
+                links_pdf_para_data = self._extrair_links_pdf(url_diario)
+                
+                if not links_pdf_para_data:
+                    logger.info(f"Nenhum PDF encontrado para a data {current_date.strftime('%Y-%m-%d')}.")
+                    current_date += timedelta(days=1)
+                    continue
+
+                for index, pdf_url in enumerate(links_pdf_para_data):
+                    logger.info(f"Baixando PDF {index + 1}/{len(links_pdf_para_data)}: {pdf_url}")
+                    pdf_content = self._baixar_pdf(pdf_url)
+
+                    if pdf_content:
+                        logger.info(f"Iniciando extração de texto de PDF: {pdf_url.split('/')[-1]}")
+                        texto_extraido = self._extrair_texto_de_pdf(pdf_content)
+
+                        if texto_extraido:
+                            # Filtro inicial por termos contábeis/fiscais no scraper
+                            assunto_geral = self.identificar_assunto_geral(texto_extraido)
+                            relevante_contabil = (assunto_geral == "Contábil/Fiscal")
+
+                            # Aqui é onde o objeto Documento é criado/atualizado
+                            try:
+                                documento, created = Documento.objects.update_or_create(
+                                    url_original=pdf_url,
+                                    defaults={
+                                        'titulo': f"Diário Oficial - {current_date.strftime('%d/%m/%Y')} - Parte {index + 1} - {str(uuid.uuid4())[:8]}", # Adicionado UUID para unicidade
+                                        'data_publicacao': current_date, # CORREÇÃO: Usar data_publicacao
+                                        'texto_completo': texto_extraido,
+                                        'processado': False, # Documento recém-coletado, ainda não processado
+                                        'relevante_contabil': relevante_contabil, # Marca se é relevante na coleta
+                                        'assunto': assunto_geral,
+                                        'metadata': {'data_coleta': timezone.now().isoformat()},
+                                    }
+                                )
+                                # Salva o arquivo PDF no campo FileField
+                                file_name = f"DOEPI_{current_date.strftime('%Y%m%d')}_{pdf_url.split('/')[-1]}"
+                                documento.arquivo_pdf.save(file_name, ContentFile(pdf_content), save=True) # save=True para salvar o objeto após adicionar o arquivo
+                                
+                                documentos_salvos.append(documento)
+                                logger.info(f"Documento '{file_name}' salvo com sucesso (novo: {created}).")
+
+                            except Exception as db_e:
+                                logger.error(f"Erro ao salvar/atualizar documento {pdf_url} no banco de dados: {db_e}", exc_info=True)
+                        else:
+                            logger.warning(f"Não foi possível extrair texto de {pdf_url}. Pulando.")
+                    else:
+                        logger.warning(f"Não foi possível baixar o PDF de {pdf_url}. Pulando.")
+                
+                current_date += timedelta(days=1)
+                # Adiciona um pequeno atraso para não sobrecarregar o servidor
+                time.sleep(2) 
+
+        except Exception as e:
+            logger.error(f"Erro geral durante a coleta de documentos: {e}", exc_info=True)
+            raise # Relaça o erro para a tarefa Celery
+
+        finally:
+            self._fechar_webdriver() # Garante que o driver seja fechado ao final
+            logger.info(f"Coleta de documentos finalizada. Total de documentos salvos: {len(documentos_salvos)}")
+
+        return documentos_salvos

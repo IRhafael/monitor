@@ -73,6 +73,8 @@ class NormaVigente(models.Model):
         choices=[('SEFAZ', 'SEFAZ'), ('DIARIO', 'Diário Oficial')]
     )
     observacoes = models.TextField(blank=True)
+    data_ultima_mencao = models.DateField(null=True, blank=True) # Campo para a data da última vez que foi mencionada
+
 
     class Meta:
         verbose_name = "Norma Vigente"
