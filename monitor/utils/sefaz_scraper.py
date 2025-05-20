@@ -293,17 +293,33 @@ class SEFAZScraper:
             return False
 
     def check_norm_status(self, norm_type, norm_number):
-        """Verifica status da norma"""
+        """Verifica status da norma e retorna informações detalhadas"""
         details = self.get_norm_details(norm_type, norm_number)
+
         if not details:
-            return False
-        
+            return {
+                "status": "não encontrada",
+                "fonte": self.driver.current_url if self.driver else None
+            }
+
         situacao = details.get('situacao', '').lower()
+
         if 'vigente' in situacao:
-            return True
+            status = "vigente"
         elif 'revogado' in situacao or 'cancelado' in situacao:
-            return False
-        return bool(details.get('data_publicacao'))
+            status = "revogado/cancelado"
+        elif details.get('data_publicacao'):
+            status = "publicado (sem info de vigência)"
+        else:
+            status = "indefinido"
+
+        return {
+            "status": status,
+            "fonte": self.driver.current_url if self.driver else None,
+            "dados": details
+        }
+
+
 
     def test_connection(self):
         """Testa conexão com o portal"""
@@ -322,3 +338,9 @@ class SEFAZScraper:
                 return "sefaz" in self.driver.title.lower()
         except Exception:
             return False
+        
+    def close(self):
+        """Fecha o navegador, se estiver aberto"""
+        if self.driver:
+            self.driver.quit()
+            self.driver = None
