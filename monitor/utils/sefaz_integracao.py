@@ -2,7 +2,7 @@ import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Silencia completamente o TensorFlow
 import re
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 from django.utils import timezone
 from django.db.models import Q
 from monitor.models import Documento, NormaVigente
@@ -156,40 +156,58 @@ class IntegradorSEFAZ:
             return []
 
     def _verificar_norma_eficiente(self, norma):
-            """Método otimizado que tenta várias estratégias para verificar a norma"""
-            cache_key = f"sefaz_{norma.tipo}_{norma.numero}"
+        """Método otimizado que tenta várias estratégias para verificar a norma"""
+        cache_key = f"sefaz_{norma.tipo}_{norma.numero}"
+        
+        # 1. Tentar cache
+        cached = cache.get(cache_key)
+        if cached and (timezone.now() - cached['data_consulta']) < timedelta(hours=12):
+            return self._formatar_resultado_para_json(cached)
             
-            # 1. Tentar cache
-            cached = cache.get(cache_key)
-            if cached and (timezone.now() - cached['data_consulta']) < timedelta(hours=12):
-                return cached
+        # 2. Verificação via scraper
+        try:
+            resultado = self.scraper.check_norm_status(norma.tipo, norma.numero)
+            
+            # Garantir que o resultado não é None
+            if resultado is None:
+                raise ValueError("Resposta do scraper é None")
                 
-            # 2. Verificação via scraper
-            try:
-                resultado = self.scraper.check_norm_status(norma.tipo, norma.numero)
-                if not isinstance(resultado, dict):
-                    resultado = {
-                        'vigente': bool(resultado),
-                        'irregular': False,
-                        'status': 'VIGENTE' if resultado else 'REVOGADA',
-                        'data_consulta': timezone.now()
-                    }
-                
-                # Armazena no cache
-                cache.set(cache_key, resultado, 43200)  # 12 horas
-                return resultado
-                
-            except Exception as e:
-                logger.error(f"Erro ao verificar norma {norma}: {e}")
-                return {
-                    'tipo': norma.tipo,
-                    'numero': norma.numero,
-                    'vigente': False,
+            # Formatar resultado consistentemente
+            if not isinstance(resultado, dict):
+                resultado = {
+                    'vigente': bool(resultado),
                     'irregular': False,
-                    'status': 'ERRO',
-                    'erro': str(e),
-                    'data_consulta': timezone.now()
+                    'status': 'VIGENTE' if resultado else 'REVOGADA',
+                    'data_consulta': timezone.now().isoformat()  # Serializa datetime para string
                 }
+            else:
+                # Garantir que datas são strings
+                if 'data_consulta' in resultado and isinstance(resultado['data_consulta'], datetime):
+                    resultado['data_consulta'] = resultado['data_consulta'].isoformat()
+            
+            # Armazena no cache
+            cache.set(cache_key, resultado, 43200)  # 12 horas
+            return resultado
+            
+        except Exception as e:
+            logger.error(f"Erro ao verificar norma {norma}: {e}")
+            return {
+                'tipo': norma.tipo,
+                'numero': norma.numero,
+                'vigente': False,
+                'irregular': False,
+                'status': 'ERRO',
+                'erro': str(e),
+                'data_consulta': timezone.now().isoformat()  # Serializa datetime
+            }
+
+    def _formatar_resultado_para_json(self, resultado):
+        """Garante que todos os campos datetime são convertidos para strings"""
+        if isinstance(resultado, dict):
+            for key, value in resultado.items():
+                if isinstance(value, datetime):
+                    resultado[key] = value.isoformat()
+        return resultado
 
     def _determinar_tipo_norma(self, texto):
         """Determina o tipo da norma com base no texto"""
@@ -242,47 +260,49 @@ class IntegradorSEFAZ:
         return numero.strip()
     
     def verificar_normas_em_lote(self, normas, batch_size=10):
-        """Verifica um lote de normas de forma mais eficiente"""
+        """Versão com tratamento completo de erros"""
         resultados = []
         try:
-            with self.scraper.browser_session() as session:
-                for i in range(0, len(normas), batch_size):
-                    batch = normas[i:i + batch_size]
-                    for norma in batch:
-                        try:
-                            if not norma.tipo or not norma.numero:
-                                logger.warning(f"Norma com dados incompletos ignorada: {norma}")
-                                continue
-                            
-                            # Usa o método otimizado de verificação
-                            resultado = self._verificar_norma_eficiente(norma)
-                            
-                            # Atualiza a norma com base no resultado
-                            norma.situacao = "VIGENTE" if resultado['vigente'] else "REVOGADA"
-                            norma.data_verificacao = timezone.now()
-                            norma.detalhes = resultado
-                            norma.save()
-                            
-                            resultados.append(norma)
-                        except Exception as e:
-                            logger.error(f"Erro na norma {norma}: {e}", exc_info=True)
+            with self.scraper.browser_session():
+                for norma in normas:
+                    try:
+                        # Verificação segura
+                        if not hasattr(norma, 'tipo') or not hasattr(norma, 'numero'):
                             continue
+                            
+                        resultado = self._verificar_norma_eficiente(norma)
+                        
+                        # Garante que temos um dicionário válido
+                        if not isinstance(resultado, dict):
+                            resultado = {
+                                'vigente': False,
+                                'irregular': False,
+                                'status': 'ERRO',
+                                'error': 'Resultado inválido'
+                            }
+                        
+                        # Atualização segura da norma
+                        norma.situacao = resultado.get('status', 'INDETERMINADO')
+                        norma.data_verificacao = timezone.now()
+                        
+                        # Remove campos datetime antes de salvar
+                        if 'data_consulta' in resultado:
+                            resultado['data_consulta'] = str(resultado['data_consulta'])
+                        
+                        norma.detalhes = resultado
+                        norma.save()
+                        resultados.append(norma)
+                        
+                    except Exception as e:
+                        logger.error(f"Erro ao processar norma {norma}: {str(e)}")
+                        continue
+                        
         except Exception as e:
-            logger.error(f"Erro na sessão do browser: {e}", exc_info=True)
-            raise
+            logger.error(f"Erro na sessão do browser: {str(e)}")
+            
         return resultados
 
     def _validar_status_norma(self, norma, status_response):
-        """
-        Realiza validação adicional para determinar se uma norma está realmente vigente.
-        
-        Args:
-            norma: O objeto norma
-            status_response: A resposta completa do scraper (pode ser um booleano simples ou um objeto com mais informações)
-        
-        Returns:
-            bool: True se a norma estiver vigente, False caso contrário
-        """
         # Se a resposta for apenas um booleano, precisamos melhorar o scraper para retornar mais detalhes
         if isinstance(status_response, bool):
             # Neste caso, confiamos na verificação básica, mas registramos para futura melhoria

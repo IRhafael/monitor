@@ -1,8 +1,8 @@
 from django.utils import timezone
 from django.db import models
-from django.utils import timezone
 from django.core.validators import MinValueValidator
 import os
+from datetime import datetime  # Adicione esta linha no início do arquivo
 
 class TermoMonitorado(models.Model):
     """
@@ -98,6 +98,25 @@ class NormaVigente(models.Model):
         elif self.situacao == 'ALTERADA':
             return 'warning'
         return 'secondary'
+    
+    def save(self, *args, **kwargs):
+        """Pre-processa os dados antes de salvar"""
+        if self.detalhes and isinstance(self.detalhes, dict):
+            self.detalhes = self._preprocessar_detalhes(self.detalhes)
+        super().save(*args, **kwargs)
+
+    def _preprocessar_detalhes(self, detalhes):
+        """Converte objetos datetime para strings no campo detalhes"""
+        if not detalhes:
+            return detalhes
+            
+        for key, value in detalhes.items():
+            if isinstance(value, datetime):
+                detalhes[key] = value.isoformat()
+            elif isinstance(value, dict):
+                detalhes[key] = self._preprocessar_detalhes(value)
+                
+        return detalhes
 
 
 class Documento(models.Model):

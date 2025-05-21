@@ -19,6 +19,8 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from django.utils import timezone
+
 
 
 logger = logging.getLogger(__name__)
@@ -310,52 +312,136 @@ class SEFAZScraper:
             self.logger.error(f"Erro na verificação: {str(e)}")
             return False
 
+
     def check_norm_status(self, norm_type, norm_number):
-        """Versão melhorada que verifica status e irregularidades"""
-        details = self.get_norm_details(norm_type, norm_number)
+        """
+        Verifica o status de uma norma com tratamento robusto de erros
+        
+        Args:
+            norm_type (str): Tipo da norma (LEI, DECRETO, etc.)
+            norm_number (str|int): Número da norma
+            
+        Returns:
+            dict: Resultado com status, vigência e irregularidade
+        """
+        # Inicializa variáveis para escopo da função
+        norm_type_str = ""
+        norm_number_str = ""
+        
+        try:
+            # 1. VALIDAÇÃO E NORMALIZAÇÃO DOS PARÂMETROS
+            if not norm_type or not isinstance(norm_type, (str, int, float)):
+                raise ValueError("Tipo da norma inválido ou não informado")
+                
+            if not norm_number or not isinstance(norm_number, (str, int, float)):
+                raise ValueError("Número da norma inválido ou não informado")
 
-        if not details:
+            # Normalização segura dos parâmetros
+            norm_type_str = str(norm_type).upper().strip()
+            norm_number_str = str(norm_number).strip()
+
+            # 2. OBTENÇÃO DOS DETALHES COM TRATAMENTO DE FALHAS
+            details = {}
+            try:
+                details = self.get_norm_details(norm_type_str, norm_number_str) or {}
+                if not isinstance(details, dict):
+                    details = {}
+            except Exception as e:
+                logger.warning(f"Falha ao obter detalhes para {norm_type_str} {norm_number_str}: {str(e)}")
+
+            # 3. EXTRAÇÃO SEGURA DOS CAMPOS RELEVANTES
+            situacao = str(details.get('situacao', '')).lower()
+            texto_completo = str(details.get('texto_completo', '')).lower()
+            data_publicacao = details.get('data_publicacao')
+
+            # 4. LISTAS DE VERIFICAÇÃO (CONSTANTES)
+            IRREGULAR_TERMS = [
+                'irregular', 'anulad', 'cancelad', 'suspens', 'invalid',
+                'sem efeito', 'não cumprid', 'não observad', 'ilegal',
+                'inconstitucional', 'impugnad', 'cassad', 'extint'
+            ]
+            REVOKED_TERMS = [
+                'revogad', 'derrogad', 'ab-rogad', 'substituíd',
+                'alterad', 'modificad'
+            ]
+            ACTIVE_TERMS = [
+                'vigente', 'em vigor', 'validad', 'eficácia',
+                'em execução', 'ativo', 'válid'
+            ]
+
+            # 5. LÓGICA DE DECISÃO COM TRATAMENTO SEGURO
+            irregular = any(term in texto_completo for term in IRREGULAR_TERMS)
+            revoked = any(term in situacao for term in REVOKED_TERMS)
+            active = any(term in situacao for term in ACTIVE_TERMS)
+
+            # Hierarquia de decisão
+            if irregular:
+                status = "IRREGULAR"
+                vigente = False
+            elif revoked:
+                status = "REVOGADA"
+                vigente = False
+            elif active:
+                status = "VIGENTE"
+                vigente = True
+            else:
+                status = "INDETERMINADO"
+                vigente = False
+
+            # 6. VERIFICAÇÃO POR DATA (OPCIONAL)
+            if data_publicacao:
+                try:
+                    pub_date = (
+                        datetime.strptime(data_publicacao, '%Y-%m-%d').date()
+                        if isinstance(data_publicacao, str)
+                        else data_publicacao
+                    )
+                    
+                    if hasattr(pub_date, 'date'):  # Para objetos datetime
+                        pub_date = pub_date.date()
+                        
+                    if pub_date > timezone.now().date():
+                        status = "NÃO VIGENTE"
+                        vigente = False
+                except (ValueError, TypeError, AttributeError) as e:
+                    logger.debug(f"Erro ao processar data {data_publicacao}: {str(e)}")
+
+            # 7. PREPARAÇÃO DA RESPOSTA
+            response = {
+                "status": status,
+                "vigente": vigente,
+                "irregular": irregular,
+                "details": {
+                    k: v.isoformat() if hasattr(v, 'isoformat') else v
+                    for k, v in details.items()
+                },
+                "last_updated": timezone.now().isoformat(),
+                "norm_type": norm_type_str,
+                "norm_number": norm_number_str
+            }
+
+            # Remove valores None do response
+            return {k: v for k, v in response.items() if v is not None}
+
+        except Exception as e:
+            logger.error(
+                f"Erro crítico ao verificar norma {norm_type_str or 'N/A'} {norm_number_str or 'N/A'}: {str(e)}",
+                exc_info=True,
+                extra={
+                    "norm_type": norm_type_str,
+                    "norm_number": norm_number_str
+                }
+            )
+
             return {
-                "status": "NÃO ENCONTRADA",
+                "status": "ERRO",
                 "vigente": False,
-                "irregular": False
+                "irregular": False,
+                "error": str(e),
+                "last_updated": timezone.now().isoformat(),
+                "norm_type": norm_type_str,
+                "norm_number": norm_number_str
             }
-
-        situacao = details.get('situacao', '').lower()
-        texto_completo = details.get('texto_completo', '').lower()
-
-        # Verifica se há indícios de irregularidade
-        irregular = any(term in texto_completo for term in [
-            'irregular', 'anulada', 'cancelada', 'suspensa', 
-            'invalidada', 'sem efeito'
-        ])
-
-        # Lógica mais rigorosa para determinar vigência
-        if irregular:
-            return {
-                "status": "IRREGULAR",
-                "vigente": False,
-                "irregular": True
-            }
-        elif 'revogado' in situacao or 'cancelado' in situacao:
-            return {
-                "status": "REVOGADA",
-                "vigente": False,
-                "irregular": False
-            }
-        elif 'vigente' in situacao:
-            return {
-                "status": "VIGENTE",
-                "vigente": True,
-                "irregular": False
-            }
-        else:
-            return {
-                "status": "INDETERMINADO",
-                "vigente": False,
-                "irregular": False
-            }
-
 
 
     def test_connection(self):
@@ -376,6 +462,20 @@ class SEFAZScraper:
         except Exception:
             return False
         
+    def _preprocessar_detalhes(self, detalhes):
+        """Converte objetos datetime para strings no campo detalhes"""
+        if not detalhes:
+            return detalhes
+            
+        # Adicione tratamento para diferentes tipos de datetime
+        for key, value in detalhes.items():
+            if isinstance(value, (datetime, timezone.datetime)):
+                detalhes[key] = value.isoformat()
+            elif isinstance(value, dict):
+                detalhes[key] = self._preprocessar_detalhes(value)
+                
+        return detalhes
+            
     def close(self):
         """Fecha o navegador, se estiver aberto"""
         if self.driver:
