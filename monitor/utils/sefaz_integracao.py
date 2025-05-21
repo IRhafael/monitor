@@ -22,6 +22,19 @@ class IntegradorSEFAZ:
         self.scraper = SEFAZScraper()
         self.max_tentativas = 3
         self.timeout = 60
+        self.browser_session = None
+
+    def __enter__(self):
+        """Implementação para uso com 'with'"""
+        self.browser_session = self.scraper.browser_session()
+        self.browser_session.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Garante que a sessão seja fechada corretamente"""
+        if self.browser_session:
+            self.browser_session.__exit__(exc_type, exc_val, exc_tb)
+            self.browser_session = None
 
     def buscar_norma_especifica(self, tipo, numero):
             """Versão mais robusta com tratamento de erros"""
@@ -143,36 +156,40 @@ class IntegradorSEFAZ:
             return []
 
     def _verificar_norma_eficiente(self, norma):
-        """Método otimizado que tenta várias estratégias para verificar a norma"""
-        try:
-            # 1. Tentar cache
+            """Método otimizado que tenta várias estratégias para verificar a norma"""
             cache_key = f"sefaz_{norma.tipo}_{norma.numero}"
+            
+            # 1. Tentar cache
             cached = cache.get(cache_key)
             if cached and (timezone.now() - cached['data_consulta']) < timedelta(hours=12):
-                return cached['vigente']
-            
-            # 2. Tentar método rápido
+                return cached
+                
+            # 2. Verificação via scraper
             try:
-                vigente = self.scraper.verificar_vigencia_rapida(norma.tipo, norma.numero)
-                cache.set(cache_key, {
-                    'vigente': vigente,
-                    'data_consulta': timezone.now()
-                }, 43200)  # 12 horas
-                return vigente
+                resultado = self.scraper.check_norm_status(norma.tipo, norma.numero)
+                if not isinstance(resultado, dict):
+                    resultado = {
+                        'vigente': bool(resultado),
+                        'irregular': False,
+                        'status': 'VIGENTE' if resultado else 'REVOGADA',
+                        'data_consulta': timezone.now()
+                    }
+                
+                # Armazena no cache
+                cache.set(cache_key, resultado, 43200)  # 12 horas
+                return resultado
+                
             except Exception as e:
-                logger.warning(f"Falha no método rápido para {norma}: {str(e)}")
-            
-            # 3. Método completo como fallback
-            vigente = self.scraper.verificar_vigencia_norma(norma.tipo, norma.numero)
-            cache.set(cache_key, {
-                'vigente': vigente if vigente is not None else False,
-                'data_consulta': timezone.now()
-            }, 43200)
-            return vigente
-            
-        except Exception as e:
-            logger.error(f"Erro em _verificar_norma_eficiente para {norma}: {str(e)}")
-            return False
+                logger.error(f"Erro ao verificar norma {norma}: {e}")
+                return {
+                    'tipo': norma.tipo,
+                    'numero': norma.numero,
+                    'vigente': False,
+                    'irregular': False,
+                    'status': 'ERRO',
+                    'erro': str(e),
+                    'data_consulta': timezone.now()
+                }
 
     def _determinar_tipo_norma(self, texto):
         """Determina o tipo da norma com base no texto"""
@@ -224,35 +241,35 @@ class IntegradorSEFAZ:
         numero = re.sub(r'[^\d/]', '', str(numero))
         return numero.strip()
     
-    def verificar_normas_em_lote(self, normas, batch_size=3):
+    def verificar_normas_em_lote(self, normas, batch_size=10):
         """Verifica um lote de normas de forma mais eficiente"""
         resultados = []
-        with self.scraper.browser_session():
-            for i in range(0, len(normas), batch_size):
-                batch = normas[i:i + batch_size]
-                for norma in batch:
-                    try:
-                        if not norma.tipo or not norma.numero:
-                            logger.warning(f"Norma com dados incompletos ignorada: {norma}")
-                            continue  # pula normas inválidas
-                        
-                        # Adicionar validação adicional para a resposta do scraper
-                        status_response = self.scraper.check_norm_status(norma.tipo, norma.numero)
-                        
-                        # Verificar se a resposta é válida e se realmente é uma norma vigente
-                        if status_response is None:  # Se o scraper não conseguiu determinar o status
-                            logger.warning(f"Não foi possível determinar o status da norma {norma}")
+        try:
+            with self.scraper.browser_session() as session:
+                for i in range(0, len(normas), batch_size):
+                    batch = normas[i:i + batch_size]
+                    for norma in batch:
+                        try:
+                            if not norma.tipo or not norma.numero:
+                                logger.warning(f"Norma com dados incompletos ignorada: {norma}")
+                                continue
+                            
+                            # Usa o método otimizado de verificação
+                            resultado = self._verificar_norma_eficiente(norma)
+                            
+                            # Atualiza a norma com base no resultado
+                            norma.situacao = "VIGENTE" if resultado['vigente'] else "REVOGADA"
+                            norma.data_verificacao = timezone.now()
+                            norma.detalhes = resultado
+                            norma.save()
+                            
+                            resultados.append(norma)
+                        except Exception as e:
+                            logger.error(f"Erro na norma {norma}: {e}", exc_info=True)
                             continue
-                        
-                        # Aplicar verificações adicionais de vigência baseadas na resposta completa
-                        vigente = self._validar_status_norma(norma, status_response)
-                        
-                        norma.situacao = "VIGENTE" if vigente else "REVOGADA"
-                        norma.data_verificacao = timezone.now()
-                        norma.save()
-                        resultados.append(norma)
-                    except Exception as e:
-                        logger.error(f"Erro na norma {norma}: {e}", exc_info=True)
+        except Exception as e:
+            logger.error(f"Erro na sessão do browser: {e}", exc_info=True)
+            raise
         return resultados
 
     def _validar_status_norma(self, norma, status_response):
