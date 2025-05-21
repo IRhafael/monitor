@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block title %}Logs de Execução{% endblock %}
+
+{% block page_title %}Logs de Execução{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <h5>Histórico de Execuções</h5>
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle">
+                <thead>
+                    <tr>
+                        <th>Início</th>
+                        <th>Fim</th>
+                        <th>Status</th>
+                        <th>Mensagem</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for log in logs %}
+                    <tr>
+                        <td>{{ log.data_inicio|date:"d/m/Y H:i:s" }}</td>
+                        <td>{{ log.data_fim|date:"d/m/Y H:i:s" }}</td>
+                        <td>
+                            {% if log.status == "sucesso" %}
+                                <span class="badge bg-success">Sucesso</span>
+                            {% elif log.status == "falha" %}
+                                <span class="badge bg-danger">Falha</span>
+                            {% else %}
+                                <span class="badge bg-secondary">{{ log.status }}</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ log.mensagem|default:"-" }}</td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="4" class="text-center">Nenhum log encontrado.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

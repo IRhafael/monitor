@@ -6,6 +6,8 @@ from .models import (
     TermoMonitorado, NormaVigente, Documento,
     RelatorioGerado, ConfiguracaoColeta, LogExecucao
 )
+import json
+
 
 class TermoMonitoradoAdmin(admin.ModelAdmin):
     list_display = ['termo', 'tipo', 'prioridade', 'ativo', 'data_cadastro']
@@ -123,7 +125,7 @@ class DocumentoAdmin(admin.ModelAdmin):
         processor = PDFProcessor()
         success = 0
         for doc in queryset:
-            if processor.processar_documento(doc):
+            if processor.process_document(doc):
                 success += 1
         self.message_user(
             request, 

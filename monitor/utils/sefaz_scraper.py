@@ -30,6 +30,21 @@ class SEFAZScraper:
         self.debug_dir = r"C:\Users\RRCONTAS\Documents\GitHub\monitor\debug"
         self.driver = None
         
+        # Termos com 100% de prioridade
+        self.priority_terms = [
+            "ICMS",
+            "DECRETO 21.866",
+            "UNATRI",
+            "UNIFIS",
+            "LEI 4.257",
+            "ATO NORMATIVO: 25/21",
+            "ATO NORMATIVO: 26/21",
+            "ATO NORMATIVO: 27/21",
+            "SECRETARIA DE FAZENDA DO ESTADO DO PIAUÍ (SEFAZ-PI)",
+            "SEFAZ",
+            "SUBSTITUIÇÃO TRIBUTÁRIA"
+        ]
+        
         # Configuração do ChromeDriver
         self.chrome_options = Options()
         self.chrome_options.add_argument("--headless=new")
@@ -44,20 +59,14 @@ class SEFAZScraper:
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
 
+
+    def get_priority_terms(self):
+        """Retorna a lista de termos prioritários"""
+        return self.priority_terms
+
     def _save_debug_info(self, prefix):
-        """Salva prints e HTML para debug"""
-        try:
-            if self.driver:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                screenshot_path = os.path.join(self.debug_dir, f"{prefix}_{timestamp}.png")
-                self.driver.save_screenshot(screenshot_path)
-                self.logger.info(f"Screenshot salvo em: {screenshot_path}")
-                
-                html_path = os.path.join(self.debug_dir, f"{prefix}_{timestamp}.html")
-                with open(html_path, 'w', encoding='utf-8') as f:
-                    f.write(self.driver.page_source)
-        except Exception as e:
-            self.logger.error(f"Erro ao salvar debug: {str(e)}")
+
+        pass
 
     @contextmanager
     def browser_session(self):
@@ -95,8 +104,9 @@ class SEFAZScraper:
         """Padroniza números para comparação"""
         return re.sub(r'[^\d/]', '', number).lower()
 
-    def _pesquisar_norma(self, norm_type, norm_number):
-        """Executa a pesquisa no portal"""
+    # Modifiquei o método _pesquisar_norma para aceitar pesquisa pelos termos prioritários
+    def _pesquisar_norma(self, norm_type=None, norm_number=None, term=None):
+        """Executa a pesquisa no portal com norm_type/norm_number ou com termo prioritário"""
         try:
             search_input = self._wait_for_element(
                 By.CSS_SELECTOR, "input[formcontrolname='searchQuery']")
@@ -105,8 +115,16 @@ class SEFAZScraper:
                 self.logger.error("Campo de busca não encontrado")
                 return False
             
-            # Preenche o campo de busca com wildcard no final
-            termo_busca = f"{norm_type} {norm_number}*"
+            # Define o termo de busca: se receber term, usa ele, senão usa norm_type + norm_number
+            if term:
+                termo_busca = term + "*"
+            else:
+                termo_busca = f"{norm_type} {norm_number}*" if norm_type and norm_number else ""
+            
+            if not termo_busca:
+                self.logger.error("Nenhum termo de busca fornecido")
+                return False
+
             search_input.clear()
             search_input.send_keys(termo_busca)
             self._save_debug_info("02_campo_preenchido")
@@ -302,11 +320,13 @@ class SEFAZScraper:
                 "fonte": self.driver.current_url if self.driver else None
             }
 
-        situacao = details.get('situacao', '').lower()
+        # Garante que details é um dict e evita erro se for None
+        situacao = (details or {}).get('situacao', '')
+        situacao_lower = situacao.lower() if situacao else ''
 
-        if 'vigente' in situacao:
+        if 'vigente' in situacao_lower:
             status = "vigente"
-        elif 'revogado' in situacao or 'cancelado' in situacao:
+        elif 'revogado' in situacao_lower or 'cancelado' in situacao_lower:
             status = "revogado/cancelado"
         elif details.get('data_publicacao'):
             status = "publicado (sem info de vigência)"

@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Detalhes do Documento{% endblock %}
+{% block page_title %}Detalhes do Documento{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <h5>{{ documento.titulo }}</h5>
+    </div>
+    <div class="card-body">
+        <p><strong>Data de Publicação:</strong> {{ documento.data_publicacao|date:"d/m/Y" }}</p>
+        <p><strong>Status:</strong>
+            {% if documento.processado %}
+                <span class="badge bg-success">Processado</span>
+            {% else %}
+                <span class="badge bg-warning text-dark">Pendente</span>
+            {% endif %}
+        </p>
+        <p><strong>Resumo:</strong><br>{{ documento.resumo|default:"(sem resumo disponível)" }}</p>
+        <a href="{% url 'analise_documentos' %}" class="btn btn-secondary mt-3">Voltar</a>
+    </div>
+</div>
+{% endblock %}

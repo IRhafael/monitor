@@ -16,17 +16,13 @@ import logging
 from .utils.tasks import coletar_diario_oficial_task, processar_documentos_pendentes_task
 from datetime import timedelta, date
 from .utils.tasks import pipeline_coleta_e_processamento
-
 from .forms import DocumentoUploadForm
 from .models import Documento, NormaVigente, LogExecucao, RelatorioGerado
-# REMOVIDAS as importações síncronas de scraper e processor, eles serão chamados nas tasks
-# from monitor.utils.pdf_processor import PDFProcessor
-# from .utils.diario_scraper import DiarioOficialScraper
 from .utils.sefaz_integracao import IntegradorSEFAZ # Mantida se houver outras funções síncronas aqui que não sejam tarefas
 from .utils.relatorio import RelatorioGenerator
-
-# IMPORTANTE: Importe suas tarefas Celery
 from .utils.tasks import coletar_diario_oficial_task, processar_documentos_pendentes_task, verificar_normas_sefaz_task
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +104,25 @@ def validacao_normas(request):
         'normas': normas
     }
     return render(request, 'normas/validacao.html', context)
+
+def verificar_norma_ajax(request, tipo, numero):
+    print(f"Verificando norma: tipo={tipo}, numero={numero}")  # DEBUG
+    if request.headers.get('x-requested-with') == 'XMLHttpRequest':
+        try:
+            norma = NormaVigente.objects.get(tipo=tipo, numero=numero)
+            integrador = IntegradorSEFAZ()
+            resultado = integrador.buscar_norma_especifica(norma.tipo, norma.numero)
+            
+            norma.situacao = resultado.get('situacao', 'NAO_ENCONTRADA')
+            norma.data_verificacao = timezone.now()
+            norma.save()
+            
+            return JsonResponse({'success': True})
+        except NormaVigente.DoesNotExist:
+            return JsonResponse({'success': False, 'error': 'Norma não encontrada.'})
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)})
+    return JsonResponse({'success': False, 'error': 'Requisição inválida'})
 
 
 @login_required
@@ -196,15 +211,12 @@ def upload_documento(request):
 @login_required
 def detalhe_documento(request, pk):
     documento = get_object_or_404(Documento, pk=pk)
-    return render(request, 'documento/detalhe.html', {'documento': documento})
+    return render(request, 'documentos/detalhe.html', {'documento': documento})
 
 @login_required
 def editar_documento(request, pk):
     documento = get_object_or_404(Documento, pk=pk)
     if request.method == 'POST':
-        # Aqui você pode adicionar lógica para atualizar o documento, por exemplo,
-        # se o usuário pode marcar como relevante ou ajustar outros campos.
-        # Exemplo simples:
         documento.relevante_contabil = request.POST.get('relevante_contabil') == 'on'
         # Adicione mais campos para edição conforme seu formulário
         documento.save()
@@ -217,24 +229,20 @@ def editar_documento(request, pk):
 def gerar_relatorio_contabil_view(request):
     if request.method == 'POST':
         try:
-            # Esta função provavelmente não precisa ser uma tarefa Celery,
-            # a menos que a geração do relatório seja extremamente longa.
-            # Se for, você criaria uma tarefa em tasks.py e a chamaria aqui.
-            RelatorioGenerator.gerar_relatorio_contabil() # Método estático
+            RelatorioGenerator.gerar_relatorio_contabil()  # Método estático
             messages.success(request, "Relatório contábil gerado com sucesso!")
         except Exception as e:
             messages.error(request, f"Erro ao gerar relatório contábil: {e}")
-        return redirect('dashboard_relatorios') # Redireciona para o dashboard de relatórios, se tiver um
-    return HttpResponse("Requisição inválida para gerar relatório.", status=400)
-
+        return redirect('dashboard_relatorios')
+    
+    # Para GET, renderiza um template com um botão para enviar POST
+    return render(request, 'relatorios/gerar_relatorio.html')
 
 @login_required
 def dashboard_relatorios(request):
-    relatorios = RelatorioGerado.objects.order_by('-data_geracao')
-    context = {
-        'relatorios': relatorios
-    }
-    return render(request, 'relatorio/dashboard_relatorios.html', context)
+    relatorios = RelatorioGerado.objects.order_by('-data_criacao')
+    return render(request, 'relatorios/listar_relatorios.html', {'relatorios': relatorios})
+
 
 @login_required
 def download_relatorio(request, pk):
@@ -245,9 +253,7 @@ def download_relatorio(request, pk):
     # Verifica se o arquivo realmente existe e está dentro de MEDIA_ROOT
     if not os.path.exists(file_path) or not os.path.isfile(file_path):
         raise Http404("Arquivo não encontrado.")
-    
-    # Adicionalmente, verifica se o caminho está contido dentro de MEDIA_ROOT para segurança
-    # Isso evita que um usuário tente acessar arquivos fora do diretório de mídia
+
     abs_media_root = os.path.abspath(settings.MEDIA_ROOT)
     abs_file_path = os.path.abspath(file_path)
     if not abs_file_path.startswith(abs_media_root):
@@ -256,11 +262,8 @@ def download_relatorio(request, pk):
     with open(file_path, 'rb') as fh:
         # Define o tipo de conteúdo como Excel (xlsx)
         response = HttpResponse(fh.read(), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        # Define o nome do arquivo para download. 'attachment' fará o download, 'inline' abrirá no navegador.
-        # Use 'attachment' para forçar o download.
         response['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path)}"'
         return response
-    # Se por algum motivo a abertura do arquivo falhar (improvável após as verificações), ainda levanta 404
     raise Http404("Erro ao abrir o arquivo para download.")
 
 # Exemplo de uma view para exibir logs de execução
@@ -272,8 +275,7 @@ def logs_execucao(request):
     }
     return render(request, 'monitor/logs_execucao.html', context)
 
-# Você pode adicionar mais views conforme a necessidade do seu projeto
-# Por exemplo, uma view para visualizar normas revogadas ou em processo de revogação
+
 @login_required
 def normas_revogadas(request):
     normas = NormaVigente.objects.filter(situacao='REVOGADA').order_by('-data_verificacao', '-data_cadastro')
@@ -282,17 +284,15 @@ def normas_revogadas(request):
     }
     return render(request, 'normas/normas_revogadas.html', context)
 
-# Uma view para adicionar uma nova norma manualmente (se aplicável)
+def norma_historico(request, pk):
+    norma = get_object_or_404(NormaVigente, pk=pk)
+    return render(request, 'normas/historico.html', {'norma': norma})
+
 @login_required
 def adicionar_norma(request):
-    # Lógica para um formulário de adição de norma
-    # Pode usar um ModelForm para NormaVigente
+
     if request.method == 'POST':
-        # form = NormaVigenteForm(request.POST) # Crie este formulário se precisar
-        # if form.is_valid():
-        #    form.save()
-        #    messages.success(request, "Norma adicionada com sucesso!")
-        #    return redirect('validacao_normas')
+
         messages.error(request, "Funcionalidade de adicionar norma manual não implementada.")
         return redirect('validacao_normas')
     return render(request, 'normas/adicionar_norma.html', {}) # Criar template
@@ -324,13 +324,10 @@ def reprocessar_documento(request, pk):
     documento = get_object_or_404(Documento, pk=pk)
     if request.method == 'POST':
         try:
-            # Marcar o documento como não processado novamente
-            # para que a tarefa Celery de processamento o pegue.
+
             documento.processado = False
             documento.save()
             
-            # Dispara a tarefa Celery para processar documentos pendentes.
-            # Esta tarefa irá encontrar o documento que acabamos de marcar como não processado.
             processamento_task_info = processar_documentos_pendentes_task.delay()
             
             messages.success(request, 
@@ -355,11 +352,9 @@ def logs_execucao(request):
     context = {
         'logs': logs
     }
-    return render(request, 'monitor/logs_execucao.html', context)
+    return render(request, 'logs_execucao.html', context)
 
-# Você pode adicionar mais views conforme a necessidade do seu projeto
 
-# Por exemplo, uma view para visualizar normas revogadas ou em processo de revogação
 @login_required
 def normas_revogadas(request):
     normas = NormaVigente.objects.filter(situacao='REVOGADA').order_by('-data_verificacao', '-data_cadastro')
@@ -368,25 +363,13 @@ def normas_revogadas(request):
     }
     return render(request, 'normas/normas_revogadas.html', context)
 
-# Uma view para adicionar uma nova norma manualmente (se aplicável)
-# Você precisaria criar um formulário para isso (e.g., monitor/forms.py -> NormaVigenteForm)
 @login_required
 def adicionar_norma(request):
     # from .forms import NormaVigenteForm # Descomente e crie este formulário
     
     if request.method == 'POST':
-        # form = NormaVigenteForm(request.POST) 
-        # if form.is_valid():
-        #     form.save()
-        #     messages.success(request, "Norma adicionada com sucesso!")
-        #     return redirect('validacao_normas')
-        # else:
-        #     messages.error(request, "Erro ao adicionar norma. Verifique os dados.")
         messages.error(request, "Funcionalidade de adicionar norma manual não implementada ainda.")
         return redirect('validacao_normas') # Ou renderiza o formulário novamente com erros
-    
-    # form = NormaVigenteForm()
-    # context = {'form': form}
     return render(request, 'normas/adicionar_norma.html', {}) # Criar template 'adicionar_norma.html'
 
 # Uma view para detalhe de uma norma específica

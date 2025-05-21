@@ -43,7 +43,7 @@
 
 <script>
 document.getElementById('verificarNormaBtn').addEventListener('click', function() {
-    fetch("{% url 'verificar_norma' norma.tipo norma.numero %}", {
+    fetch("{% url 'verificar_norma_ajax' norma.tipo norma.numero %}", {
         headers: {
             'X-Requested-With': 'XMLHttpRequest'
         }

@@ -9,10 +9,11 @@ from django.db.models import Q
 from monitor.models import Documento, NormaVigente
 from .sefaz_scraper import SEFAZScraper
 from selenium.common.exceptions import WebDriverException
-from monitor.models import NormaVigente
 import urllib.parse
 from django.core.cache import cache
 from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
+
 # Verifique se o cache está configurado no settings.py
 if not hasattr(settings, 'CACHES'):
     raise ImproperlyConfigured("Por favor, configure o backend de cache no settings.py")

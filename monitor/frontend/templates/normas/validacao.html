@@ -40,8 +40,7 @@
                         </td>
                         <td>
                             <button class="btn btn-sm btn-outline-primary verificar-btn" 
-                                    data-tipo="{{ norma.tipo }}" 
-                                    data-numero="{{ norma.numero }}">
+                                    data-url="{% url 'verificar_norma_ajax' norma.tipo norma.numero %}">
                                 Verificar
                             </button>
                         </td>
@@ -56,17 +55,16 @@
 <script>
 document.querySelectorAll('.verificar-btn').forEach(btn => {
     btn.addEventListener('click', function() {
-        const tipo = this.dataset.tipo;
-        const numero = this.dataset.numero;
-        
-        fetch(`/normas/${tipo}/${numero}/verificar/`, {
+        const url = this.dataset.url;
+
+        fetch(url, {
             headers: {
                 'X-Requested-With': 'XMLHttpRequest'
             }
         })
         .then(response => response.json())
         .then(data => {
-            if(data.success) {
+            if (data.success) {
                 location.reload();
             } else {
                 alert('Erro: ' + data.error);
@@ -75,4 +73,5 @@ document.querySelectorAll('.verificar-btn').forEach(btn => {
     });
 });
 </script>
+
 {% endblock %}

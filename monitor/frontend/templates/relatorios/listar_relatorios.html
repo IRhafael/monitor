@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Relatórios Gerados{% endblock %}
+{% block page_title %}Relatórios Gerados{% endblock %}
+
+{% block content %}
+<div class="row">
+    {% for relatorio in relatorios %}
+        <div class="col-md-6 mb-4">
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <h5 class="card-title">{{ relatorio.get_tipo_display }}</h5>
+                    <p class="card-text">
+                        Criado em: {{ relatorio.data_criacao|date:"d/m/Y H:i" }}<br>
+                        Formato: {{ relatorio.formato }}
+                    </p>
+                    <a href="{% url 'download_relatorio' relatorio.id %}" class="btn btn-sm btn-primary">
+                        <i class="bi bi-download"></i> Baixar
+                    </a>
+                </div>
+            </div>
+        </div>
+    {% empty %}
+        <p>Nenhum relatório encontrado.</p>
+    {% endfor %}
+</div>
+{% endblock %}
