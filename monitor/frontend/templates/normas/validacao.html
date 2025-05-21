@@ -1,4 +1,10 @@
 {% extends "base.html" %}
+{% block extra_js %}
+<!-- Carrega jQuery primeiro -->
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<!-- Depois carrega Font Awesome para os ícones -->
+<script src="https://kit.fontawesome.com/seu-codigo.js" crossorigin="anonymous"></script>
+{% endblock %}
 
 {% block content %}
 <div class="container mt-4">
@@ -20,28 +26,28 @@
                 </thead>
                 <tbody>
                     {% for norma in normas %}
-                    <tr>
+                    <tr data-norma-id="{{ norma.id }}">
                         <td>
                             <a href="{% url 'norma_historico' norma.id %}">
                                 {{ norma.tipo }} {{ norma.numero }}
                             </a>
                         </td>
-                        <td>
+                        <td class="status-cell">
                             <span class="badge bg-{% if norma.situacao == 'VIGENTE' %}success{% elif norma.situacao == 'REVOGADA' %}danger{% else %}warning{% endif %}">
                                 {{ norma.get_situacao_display }}
                             </span>
                         </td>
-                        <td>
+                        <td class="data-verificacao-cell">
                             {% if norma.data_verificacao %}
                                 {{ norma.data_verificacao|date:"d/m/Y H:i" }}
                             {% else %}
-                                Nunca verificada
+                                Nunca verificado
                             {% endif %}
                         </td>
                         <td>
                             <button class="btn btn-sm btn-outline-primary verificar-btn" 
                                     data-url="{% url 'verificar_norma_ajax' norma.tipo norma.numero %}">
-                                Verificar
+                                <i class="fas fa-sync-alt"></i> Verificar
                             </button>
                         </td>
                     </tr>
@@ -53,25 +59,52 @@
 </div>
 
 <script>
-document.querySelectorAll('.verificar-btn').forEach(btn => {
-    btn.addEventListener('click', function() {
-        const url = this.dataset.url;
-
-        fetch(url, {
-            headers: {
-                'X-Requested-With': 'XMLHttpRequest'
-            }
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                location.reload();
+    $(document).ready(function() {
+        $(document).on('click', '.verificar-btn', function() {
+    const btn = $(this);
+    const url = btn.data('url');
+    const row = btn.closest('tr');
+    
+    // Feedback visual
+    btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Verificando...');
+    
+    $.ajax({
+        url: url,
+        type: 'GET',
+        headers: {'X-Requested-With': 'XMLHttpRequest'},
+        success: function(response) {
+            if(response.success) {
+                // Atualiza o badge de status
+                const statusBadge = row.find('.status-cell .badge');
+                statusBadge.removeClass('bg-success bg-danger bg-warning');
+                
+                if(response.status === 'VIGENTE') {
+                    statusBadge.addClass('bg-success').text('VIGENTE');
+                } else if(response.status === 'REVOGADA') {
+                    statusBadge.addClass('bg-danger').text('REVOGADA');
+                } else {
+                    statusBadge.addClass('bg-warning').text(response.status);
+                }
+                
+                // Atualiza data de verificação
+                row.find('.data-verificacao-cell').text(response.data_verificacao);
+                
+                // Feedback visual do botão
+                btn.removeClass('btn-outline-primary')
+                   .addClass('btn-success')
+                   .html('<i class="fas fa-check"></i> Verificado');
             } else {
-                alert('Erro: ' + data.error);
+                alert('Erro: ' + (response.error || 'Erro desconhecido'));
+                btn.prop('disabled', false).html('<i class="fas fa-sync-alt"></i> Verificar');
             }
-        });
+        },
+        error: function(xhr) {
+            alert('Erro na requisição: ' + xhr.statusText);
+            btn.prop('disabled', false).html('<i class="fas fa-sync-alt"></i> Verificar');
+        }
     });
 });
+    });
 </script>
 
 {% endblock %}

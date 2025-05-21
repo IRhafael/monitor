@@ -15,7 +15,7 @@ from pdfminer.layout import LAParams
 from django.conf import settings
 from django.core.exceptions import SuspiciousFileOperation
 from django.db import transaction
-from sympy import Q
+from django.db.models import Q  # ✅ isso é o correto
 from monitor.models import Documento, NormaVigente, TermoMonitorado
 from django.utils import timezone
 from collections import defaultdict
@@ -43,6 +43,16 @@ class PDFProcessor:
         self.limite_relevancia = 4
         self.max_retries = 3
         self.timeout = 30
+        self.norma_type_choices_map = {
+                'lei': 'LEI',
+                'decreto': 'DECRETO',
+                'ato normativo': 'ATO_NORMATIVO',
+                'resolução': 'RESOLUCAO',
+                'instrução normativa': 'INSTRUCAO_NORMATIVA',
+                'portaria': 'PORTARIA',
+                'outros': 'OUTROS',
+            }
+
 
     def _setup_spacy(self):
         """Configura o pipeline NLP com spaCy"""

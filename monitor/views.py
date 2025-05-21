@@ -113,16 +113,23 @@ def verificar_norma_ajax(request, tipo, numero):
             integrador = IntegradorSEFAZ()
             resultado = integrador.buscar_norma_especifica(norma.tipo, norma.numero)
             
-            norma.situacao = resultado.get('situacao', 'NAO_ENCONTRADA')
+            # Corrigido aqui: mapeia corretamente o resultado
+            status = 'VIGENTE' if resultado.get('vigente') else 'REVOGADA'
+            norma.situacao = status
             norma.data_verificacao = timezone.now()
             norma.save()
             
-            return JsonResponse({'success': True})
+            return JsonResponse({
+                'success': True,
+                'status': status,
+                'data_verificacao': norma.data_verificacao.strftime('%d/%m/%Y %H:%M')
+            })
         except NormaVigente.DoesNotExist:
-            return JsonResponse({'success': False, 'error': 'Norma não encontrada.'})
+            return JsonResponse({'success': False, 'error': 'Norma não encontrada.'}, status=404)
         except Exception as e:
-            return JsonResponse({'success': False, 'error': str(e)})
-    return JsonResponse({'success': False, 'error': 'Requisição inválida'})
+            logger.error(f"Erro ao verificar norma {tipo} {numero}: {str(e)}")
+            return JsonResponse({'success': False, 'error': str(e)}, status=500)
+    return JsonResponse({'success': False, 'error': 'Requisição inválida'}, status=400)
 
 
 @login_required
