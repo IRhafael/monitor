@@ -146,32 +146,34 @@ class PDFProcessor:
         ])
         logger.info("Matchers spaCy configurados com sucesso.")
 
-    def _padronizar_numero(self, numero: str) -> str:
-        """Padroniza o número da norma para remover zeros à esquerda e unificar separadores."""
-        numero = re.sub(r'[^0-9./-]', '', numero)
-        partes = re.split(r'([./-])', numero)
-        resultado = []
-        for parte in partes:
-            if parte in ['.', '/', '-']:
-                resultado.append(parte)
-            else:
-                resultado.append(parte.lstrip('0') or '0')
-        return ''.join(resultado)
-    
     def _padronizar_numero_norma(self, numero: str) -> str:
-        """Padroniza o número da norma para remoção de zeros à esquerda e caracteres extras."""
-        # Remove caracteres que não sejam dígitos, pontos, barras ou hífens
-        numero = re.sub(r'[^\d./-]', '', numero)
-        # Divide o número em partes para remover zeros à esquerda de cada segmento
-        partes = re.split(r'([./-])', numero)
-        resultado = []
-        for parte in partes:
-            if parte in ['.', '/', '-']:
-                resultado.append(parte)
-            else:
-                # Remove zeros à esquerda, mas mantém '0' se o número for apenas '0'
-                resultado.append(parte.lstrip('0') or '0')
-        return ''.join(resultado)
+        """Padroniza números de normas mantendo pontos decimais"""
+        # Remove caracteres não numéricos exceto pontos, barras e hífens
+        numero = re.sub(r'[^\d./-]', '', str(numero))
+        
+        # Tratamento especial para números com pontos (como 21.866)
+        if '.' in numero:
+            partes = numero.split('.')
+            # Mantém a parte inteira e remove zeros à esquerda das partes decimais
+            numero = f"{partes[0]}.{''.join(partes[1:])}"
+        else:
+            # Remove zeros à esquerda para números sem ponto
+            numero = numero.lstrip('0') or '0'
+        
+        return numero
+    
+   
+    def _padronizar_numero_norma(self, numero: str) -> str:
+        """Corrige a extração de números como '21.866'"""
+        # Remove caracteres não numéricos exceto pontos, barras e hífens
+        numero = re.sub(r'[^\d./-]', '', str(numero))
+        
+        # Mantém zeros significativos (como em "21.866")
+        if '.' in numero:
+            partes = numero.split('.')
+            numero = '.'.join([partes[0]] + [p.lstrip('0') for p in partes[1:]])
+        
+        return numero
 
 
     def _extrair_normas_especificas(self, texto: str, termo_para_buscar: str) -> List[Tuple[str, str]]:
@@ -214,36 +216,37 @@ class PDFProcessor:
     def extrair_normas(self, texto: str) -> List[Tuple[str, str]]:
         normas_encontradas = []
         
-        # Buscar termos monitorados do tipo 'NORMA' e 'REGEX'
-        termos_monitorados = TermoMonitorado.objects.filter(ativo=True).filter(Q(tipo='NORMA') | Q(tipo='REGEX'))
+        # Padrão regex melhorado para capturar números com pontos
+        padrao_norma = re.compile(
+            r'(?i)(lei complementar|lc|lei|decreto[\- ]?lei|decreto|ato normativo|portaria|instrução normativa|in|emenda constitucional|ec)[\s:]*(?:n[º°o.]?\s*)?(\d+[\.,\/\-]?\d*(?:[\/\-]\d+)*)',
+            re.IGNORECASE
+        )
+        
+        # Primeiro procura por normas usando o padrão geral
+        for match in padrao_norma.finditer(texto):
+            tipo = match.group(1).upper()
+            numero = match.group(2)
+            
+            # Padroniza o número
+            numero = self._padronizar_numero_norma(numero)
+            normas_encontradas.append((tipo, numero))
+        
+        # Depois verifica termos monitorados do tipo NORMA
+        termos_normas = TermoMonitorado.objects.filter(ativo=True, tipo='NORMA')
+        for termo in termos_normas:
+            # Cria um padrão específico para o termo
+            termo_regex = re.compile(
+                rf'(?i){re.escape(termo.termo)}[\s:]*(?:n[º°o.]?\s*)?(\d+[\.,\/\-]?\d*(?:[\/\-]\d+)*)',
+                re.IGNORECASE
+            )
+            
+            for match in termo_regex.finditer(texto):
+                numero = match.group(1)
+                numero = self._padronizar_numero_norma(numero)
+                normas_encontradas.append((termo.termo.split()[0].upper(), numero))
+        
+        return list(set(normas_encontradas))  # Remove duplicatas
 
-        for termo_monitorado in termos_monitorados:
-            if termo_monitorado.tipo == 'NORMA':
-                extraidas = self._extrair_normas_especificas(texto, termo_monitorado.termo)
-                for raw_type, numero in extraidas:
-                    # Mapeia o tipo extraído para o formato curto do modelo
-                    mapped_type = self._get_norma_type_for_model(raw_type)
-                    if mapped_type != 'OUTROS': # Só adiciona se for um tipo que temos mapeamento
-                        normas_encontradas.append((mapped_type, numero))
-            elif termo_monitorado.tipo == 'REGEX' and termo_monitorado.termo:
-                try:
-                    padrao = re.compile(termo_monitorado.termo)
-                    for match in padrao.finditer(texto):
-                        if len(match.groups()) >= 2:
-                            raw_type = match.group(1)
-                            numero_raw = match.group(2)
-                            numero_padronizado = self._padronizar_numero_norma(numero_raw)
-                            
-                            # Aplica o mapeamento para garantir que o tipo seja válido para o modelo
-                            mapped_type = self._get_norma_type_for_model(raw_type)
-                            if mapped_type != 'OUTROS':
-                                normas_encontradas.append((mapped_type, numero_padronizado))
-                        else:
-                            logger.warning(f"Regex '{termo_monitorado.termo}' não capturou tipo e número conforme esperado. Grupos: {match.groups()}")
-                except re.error as e:
-                    logger.error(f"Erro no padrão regex '{termo_monitorado.termo}': {e}")
-
-        return list(set(normas_encontradas)) # Remove duplicatas para evitar processamento redundante
 
 
 
@@ -266,25 +269,63 @@ class PDFProcessor:
         
         return score
 
+   
+    # Método corrigido para is_relevante_contabil() em PDFProcessor
     def is_relevante_contabil(self, texto: str) -> bool:
-        """
-        Verifica se o documento é relevante para contabilidade com base nos termos monitorados.
-        """
-        termos_contabeis = TermoMonitorado.objects.filter(ativo=True, tipo='TEXTO')
-        doc = self.nlp(texto)
-        score = 0
+        """Verifica se o documento contém termos monitorados ativos (TEXTO ou NORMA)"""
+        from monitor.models import TermoMonitorado
         
-        # Considerar variações também
-        for termo_obj in termos_contabeis:
-            termos_para_checar = [termo_obj.termo]
+        # Converte para lowercase para comparações case-insensitive
+        texto_lower = texto.lower()
+        
+        # 1. Verificar termos do tipo TEXTO
+        termos_texto = TermoMonitorado.objects.filter(ativo=True, tipo='TEXTO')
+        for termo_obj in termos_texto:
+            # Verifica o termo principal
+            if termo_obj.termo.lower() in texto_lower:
+                return True
+                
+            # Verifica variações
             if termo_obj.variacoes:
-                termos_para_checar.extend([v.strip() for v in termo_obj.variacoes.split(',')])
-
-            for t in termos_para_checar:
-                if t.lower() in texto.lower():
-                    score += termo_obj.prioridade # Adiciona a prioridade como "peso"
-
-        return score >= self.limite_relevancia
+                for variacao in termo_obj.variacoes.split(','):
+                    if variacao.strip().lower() in texto_lower:
+                        return True
+        
+        # 2. Verificar termos do tipo NORMA
+        termos_norma = TermoMonitorado.objects.filter(ativo=True, tipo='NORMA')
+        for termo_obj in termos_norma:
+            # Verifica o termo principal de forma exata
+            if termo_obj.termo.lower() in texto_lower:
+                return True
+                
+            # Verifica variações exatas
+            if termo_obj.variacoes:
+                for variacao in termo_obj.variacoes.split(','):
+                    if variacao.strip().lower() in texto_lower:
+                        return True
+            
+            # Para normas, precisamos de busca mais flexível
+            # Extrai partes do termo (exemplo: "DECRETO 21.866" -> tipo="DECRETO", numero="21.866")
+            partes = termo_obj.termo.split()
+            if len(partes) >= 2:
+                tipo_norma = partes[0].lower()  # "decreto"
+                numero_norma = ' '.join(partes[1:]).lower()  # "21.866"
+                
+                # Cria padrão regex para busca flexível
+                # Aceita variações como "Decreto nº 21.866", "DECRETO N. 21.866", "Decreto 21.866"
+                padrao = rf'{tipo_norma}\s+(?:n[º°.]?\s*)?{re.escape(numero_norma)}'
+                if re.search(padrao, texto_lower, re.IGNORECASE):
+                    return True
+                
+                # Busca mais permissiva para números com pontuação
+                numero_sem_pontuacao = re.sub(r'[^\d]', '', numero_norma)
+                if numero_sem_pontuacao:
+                    # Cria um padrão que aceita o número com ou sem pontuação
+                    padrao_num_flex = rf'{tipo_norma}\s+(?:n[º°.]?\s*)?(?:\d+[.\s]*)+{numero_sem_pontuacao[-4:]}'
+                    if re.search(padrao_num_flex, texto_lower, re.IGNORECASE):
+                        return True
+        
+        return False
 
 
     def process_document(self, documento: Documento) -> Dict[str, any]:

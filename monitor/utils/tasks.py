@@ -1,6 +1,6 @@
 # monitor/utils/tasks.py
 
-from celery import shared_task
+from celery import chain, shared_task
 from datetime import datetime, timedelta, date # Adicione 'date' aqui
 import logging
 from django.utils import timezone
@@ -12,6 +12,8 @@ from .pdf_processor import PDFProcessor
 from monitor.models import Documento, LogExecucao, NormaVigente
 from .sefaz_integracao import IntegradorSEFAZ
 from celery.schedules import crontab
+from diario_oficial.celery import app  
+
 
 logger = logging.getLogger(__name__)
 
@@ -210,18 +212,13 @@ def pipeline_coleta_e_processamento(self, data_inicio_str=None, data_fim_str=Non
     task_id = self.request.id
     logger.info(f"[{task_id}] Iniciando pipeline completo de coleta, processamento e verificação SEFAZ.")
     
-    # 1. Tarefa de Coleta
-    coleta_signature = coletar_diario_oficial_task.s(data_inicio_str, data_fim_str)
-    
-    # 2. Tarefa de Processamento (roda após a coleta)
-    processamento_signature = processar_documentos_pendentes_task.s()
-    
-    # 3. Tarefa de Verificação SEFAZ (roda após o processamento)
-    sefaz_check_signature = verificar_normas_sefaz_task.s()
-
     # Encadeamento: Coleta -> Processamento -> Verificação SEFAZ
     # Use chain() para garantir que a ordem seja mantida
-    workflow = (coleta_signature | processamento_signature | sefaz_check_signature)
+    workflow = chain(
+        coletar_diario_oficial_task.s(data_inicio_str, data_fim_str),
+        processar_documentos_pendentes_task.s(),
+        verificar_normas_sefaz_task.s()
+    )
     
     # Dispara o pipeline encadeado
     workflow.apply_async() # apply_async é melhor para iniciar chains

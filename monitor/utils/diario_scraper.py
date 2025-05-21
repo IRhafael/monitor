@@ -347,23 +347,27 @@ class DiarioOficialScraper:
 
 
     def _contem_termos_prioritarios(self, texto: str) -> bool:
-        """Verifica se o texto contém pelo menos um dos termos monitorados prioritários."""
-        termos_prioritarios = [
-            "ATO NORMATIVO: 25/21",
-            "ATO NORMATIVO: 26/21",
-            "ATO NORMATIVO: 27/21",
-            "DECRETO 21.866",
-            "ICMS",
-            "LEI N° 4.257",
-            "SECRETARIA DE FAZENDA DO ESTADO DO PIAUÍ (SEFAZ-PI)",
-            "SEFAZ",
-            "SUBSTITUIÇÃO TRIBUTÁRIA",
-            "UNATRI",
-            "UNIFIS"
-        ]
+        """Verifica se o texto contém termos monitorados ativos"""
+        from monitor.models import TermoMonitorado
+        
+        # Busca termos ativos ordenados por prioridade (maior primeiro)
+        termos = TermoMonitorado.objects.filter(ativo=True).order_by('-prioridade')
         
         texto = texto.upper()
-        return any(termo.upper() in texto for termo in termos_prioritarios)
+        
+        for termo_obj in termos:
+            # Lista de termos para verificar incluindo o principal e variações
+            termos_verificar = [termo_obj.termo]
+            if termo_obj.variacoes:
+                termos_verificar.extend([v.strip() for v in termo_obj.variacoes.split(',')])
+            
+            # Verifica cada variação
+            for termo in termos_verificar:
+                if termo.upper() in texto:
+                    logger.info(f"Documento contém termo prioritário: {termo_obj.termo}")
+                    return True
+                    
+        return False
 
 
     # --- MÉTODO QUE ESTAVA FALTANDO E PRECISA SER ADICIONADO/CORRIGIDO ---
@@ -445,3 +449,25 @@ class DiarioOficialScraper:
             self._fechar_webdriver()
 
         return documentos_salvos
+    
+
+
+    # Em diario_scraper.py
+    def _log_termos_encontrados(self, texto: str):
+        from monitor.models import TermoMonitorado
+        
+        termos_encontrados = []
+        termos = TermoMonitorado.objects.filter(ativo=True)
+        
+        for termo_obj in termos:
+            termos_verificar = [termo_obj.termo]
+            if termo_obj.variacoes:
+                termos_verificar.extend([v.strip() for v in termo_obj.variacoes.split(',')])
+            
+            for termo in termos_verificar:
+                if termo.upper() in texto.upper():
+                    termos_encontrados.append(termo_obj.termo)
+                    break
+                    
+        if termos_encontrados:
+            logger.info(f"Termos encontrados no documento: {', '.join(termos_encontrados)}")
