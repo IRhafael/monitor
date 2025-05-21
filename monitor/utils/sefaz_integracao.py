@@ -20,44 +20,51 @@ logger = logging.getLogger(__name__)
 class IntegradorSEFAZ:
     def __init__(self):
         self.scraper = SEFAZScraper()
-        self.max_tentativas = 2
-        self.timeout = 40
+        self.max_tentativas = 3
+        self.timeout = 60
 
     def buscar_norma_especifica(self, tipo, numero):
-        """Verifica vigência de uma norma específica"""
-        try:
-            tipo = tipo.upper().strip()
-            numero = self._padronizar_numero_norma(numero)
-            logger.info(f"Verificando vigência de {tipo} {numero}")
-            
-            # Verifica cache primeiro
-            cache_key = f"sefaz_{tipo}_{numero}"
-            cached_result = cache.get(cache_key)
-            if cached_result:
-                return cached_result
+            """Versão mais robusta com tratamento de erros"""
+            try:
+                tipo = tipo.upper().strip()
+                numero = self._padronizar_numero_norma(numero)
                 
-            # Chama o método do scraper
-            vigente = self.scraper.check_norm_status(tipo, numero)
-            
-            resultado = {
-                'tipo': tipo,
-                'numero': numero,
-                'vigente': vigente if vigente is not None else False,
-                'data_consulta': timezone.now()
-            }
-            
-            # Armazena no cache
-            cache.set(cache_key, resultado, 86400)  # 24 horas
-            return resultado
-            
-        except Exception as e:
-            logger.error(f"Erro ao buscar norma: {str(e)}")
-            return {
-                'tipo': tipo,
-                'numero': numero,
-                'vigente': False,
-                'erro': str(e)
-            }
+                logger.info(f"Verificando vigência de {tipo} {numero}")
+                
+                # Tenta usar cache primeiro
+                cache_key = f"sefaz_{tipo}_{numero}"
+                cached_result = cache.get(cache_key)
+                if cached_result:
+                    return cached_result
+                    
+                # Verificação com timeout
+                with self.scraper.browser_session():
+                    vigente = self.scraper.check_norm_status(tipo, numero)
+                    
+                    resultado = {
+                        'tipo': tipo,
+                        'numero': numero,
+                        'vigente': vigente.get('vigente', False) if isinstance(vigente, dict) else False,
+                        'irregular': vigente.get('irregular', False) if isinstance(vigente, dict) else False,
+                        'status': vigente.get('status', 'INDETERMINADO') if isinstance(vigente, dict) else 'ERRO',
+                        'data_consulta': timezone.now()
+                    }
+                    
+                    # Armazena no cache por 24 horas
+                    cache.set(cache_key, resultado, 86400)
+                    return resultado
+                    
+            except Exception as e:
+                logger.error(f"Erro ao buscar norma {tipo} {numero}: {str(e)}")
+                return {
+                    'tipo': tipo,
+                    'numero': numero,
+                    'vigente': False,
+                    'irregular': False,
+                    'status': 'ERRO',
+                    'erro': str(e),
+                    'data_consulta': timezone.now()
+                }
 
     def verificar_vigencia_normas(self, documento_id):
         """Verifica múltiplas normas de um documento"""
@@ -229,7 +236,16 @@ class IntegradorSEFAZ:
                             logger.warning(f"Norma com dados incompletos ignorada: {norma}")
                             continue  # pula normas inválidas
                         
-                        vigente = self.scraper.check_norm_status(norma.tipo, norma.numero)
+                        # Adicionar validação adicional para a resposta do scraper
+                        status_response = self.scraper.check_norm_status(norma.tipo, norma.numero)
+                        
+                        # Verificar se a resposta é válida e se realmente é uma norma vigente
+                        if status_response is None:  # Se o scraper não conseguiu determinar o status
+                            logger.warning(f"Não foi possível determinar o status da norma {norma}")
+                            continue
+                        
+                        # Aplicar verificações adicionais de vigência baseadas na resposta completa
+                        vigente = self._validar_status_norma(norma, status_response)
                         
                         norma.situacao = "VIGENTE" if vigente else "REVOGADA"
                         norma.data_verificacao = timezone.now()
@@ -238,3 +254,49 @@ class IntegradorSEFAZ:
                     except Exception as e:
                         logger.error(f"Erro na norma {norma}: {e}", exc_info=True)
         return resultados
+
+    def _validar_status_norma(self, norma, status_response):
+        """
+        Realiza validação adicional para determinar se uma norma está realmente vigente.
+        
+        Args:
+            norma: O objeto norma
+            status_response: A resposta completa do scraper (pode ser um booleano simples ou um objeto com mais informações)
+        
+        Returns:
+            bool: True se a norma estiver vigente, False caso contrário
+        """
+        # Se a resposta for apenas um booleano, precisamos melhorar o scraper para retornar mais detalhes
+        if isinstance(status_response, bool):
+            # Neste caso, confiamos na verificação básica, mas registramos para futura melhoria
+            logger.info(f"Validação simplificada para norma {norma} - considerar aprimorar o scraper")
+            return status_response
+        
+        # Se recebemos um objeto com mais detalhes, podemos fazer verificações mais robustas
+        try:
+            # Verificar se há indicadores de norma irregular
+            # Exemplos (ajuste conforme a estrutura real de seus dados):
+            if hasattr(status_response, 'status_text'):
+                texto_status = status_response.status_text.lower()
+                if any(termo in texto_status for termo in ["revogad", "cancelad", "substituíd", "irregular", "inválid"]):
+                    return False
+            
+            # Verificar data de validade, se disponível
+            if hasattr(status_response, 'data_vigencia_final') and status_response.data_vigencia_final:
+                data_final = status_response.data_vigencia_final
+                if data_final < timezone.now().date():
+                    return False
+            
+            # Verificar status numérico, se aplicável
+            if hasattr(status_response, 'status_code'):
+                # Supondo que códigos diferentes de 1 indicam que não está vigente
+                if status_response.status_code != 1:
+                    return False
+            
+            # Se passou por todas as verificações
+            return True
+        
+        except Exception as e:
+            logger.error(f"Erro na validação avançada para norma {norma}: {e}", exc_info=True)
+            # Em caso de erro na validação avançada, usar a verificação simples como fallback
+            return bool(status_response)

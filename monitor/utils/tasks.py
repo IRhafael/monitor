@@ -151,56 +151,102 @@ def processar_documentos_pendentes_task(self, previous_task_result=None):
     return {'status': log_status, 'results': log_detalhes}
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, max_retries=3)
 def verificar_normas_sefaz_task(self):
-    task_id = self.request.id
-    logger.info(f"[{task_id}] Tarefa Celery 'verificar_normas_sefaz_task' iniciada.")
-    log_status = 'ERRO'
-    log_detalhes = {}
+    from monitor.utils.sefaz_integracao import IntegradorSEFAZ
+    from monitor.models import NormaVigente, LogExecucao
+    from django.utils import timezone
+    from datetime import timedelta
+    import logging
+
+    logger = logging.getLogger(__name__)
+    logger.info("Iniciando verificação de normas na SEFAZ")
 
     try:
-        integrador_sefaz = IntegradorSEFAZ()
-        # Filtra normas que nunca foram verificadas ou que estão desatualizadas (mais de 30 dias)
-        normas_para_verificar = NormaVigente.objects.filter(
+        integrador = IntegradorSEFAZ()
+        
+        # Normas para verificar (priorizando as não verificadas ou antigas)
+        normas = NormaVigente.objects.filter(
             Q(data_verificacao__isnull=True) |
             Q(data_verificacao__lt=timezone.now() - timedelta(days=30))
-        ).order_by('data_verificacao') # Verifica as mais antigas primeiro
+        ).order_by('data_verificacao', '-data_ultima_mencao')[:50]
 
-        if not normas_para_verificar.exists():
-            log_status = 'NENHUM_ENCONTRADA'
-            log_detalhes = {'message': 'Nenhuma norma encontrada para verificação.'}
-            logger.info(f"[{task_id}] Nenhuma norma para verificar.")
-            return {'status': log_status, 'normas_verificadas': 0}
+        if not normas.exists():
+            logger.info("Nenhuma norma necessita verificação no momento")
+            return {"status": "success", "message": "Nenhuma norma necessitava verificação"}
 
-        logger.info(f"[{task_id}] Encontradas {normas_para_verificar.count()} normas para verificar.")
-        
-        # O método verificar_normas_em_lote já atualiza as normas no DB
-        # Convertendo o QuerySet para lista para evitar problemas com iteração durante o Selenium
-        resultados_lote = integrador_sefaz.verificar_normas_em_lote(list(normas_para_verificar))
-        normas_verificadas_count = len(resultados_lote)
-
-        log_status = 'SUCESSO'
-        log_detalhes = {
-            'total_normas_analisadas': normas_verificadas_count,
-            # Se você quiser detalhes de quantas vigentes/revogadas, o método de lote precisa retornar isso
+        resultados = {
+            'total': normas.count(),
+            'vigentes': 0,
+            'revogadas': 0,
+            'irregulares': 0,
+            'nao_encontradas': 0,
+            'erros': 0,
+            'detalhes': []
         }
 
-    except Exception as e:
-        logger.error(f"[{task_id}] Erro fatal na verificação de normas SEFAZ: {e}", exc_info=True)
-        log_status = 'ERRO'
-        log_detalhes = {'erro': str(e), 'traceback': traceback.format_exc()}
-        raise self.retry(exc=e, countdown=60, max_retries=3)
+        with integrador.scraper.browser_session():
+            for norma in normas:
+                try:
+                    logger.info(f"Verificando: {norma.tipo} {norma.numero}")
+                    
+                    resultado = integrador.buscar_norma_especifica(norma.tipo, norma.numero)
+                    status_anterior = norma.situacao
+                    
+                    if resultado.get('erro'):
+                        norma.situacao = "ERRO_VERIFICACAO"
+                        resultados['erros'] += 1
+                    elif resultado.get('status') == 'NÃO ENCONTRADA':
+                        norma.situacao = "NAO_ENCONTRADA"
+                        resultados['nao_encontradas'] += 1
+                    elif resultado.get('irregular', False):
+                        norma.situacao = "IRREGULAR"
+                        resultados['irregulares'] += 1
+                    elif not resultado.get('vigente', False):
+                        norma.situacao = "REVOGADA"
+                        resultados['revogadas'] += 1
+                    else:
+                        norma.situacao = "VIGENTE"
+                        resultados['vigentes'] += 1
+                    
+                    norma.data_verificacao = timezone.now()
+                    norma.save()
+                    
+                    resultados['detalhes'].append({
+                        'norma': f"{norma.tipo} {norma.numero}",
+                        'status_anterior': status_anterior,
+                        'status_novo': norma.situacao,
+                        'data_verificacao': norma.data_verificacao
+                    })
 
-    finally:
-        LogExecucao.objects.create(
-            tipo_execucao='VERIFICACAO_SEFAZ', # Tipo de log específico
-            status=log_status,
-            detalhes=log_detalhes
-        )
-        logger.info(f"[{task_id}] Tarefa Celery 'verificar_normas_sefaz_task' concluída com status: {log_status}.")
+                except Exception as e:
+                    resultados['erros'] += 1
+                    logger.error(f"Falha ao verificar {norma}: {str(e)}")
+                    continue
+
+        logger.info(f"Verificação concluída: {resultados}")
         
-    return {'status': log_status, 'results': log_detalhes}
+        # Registrar log detalhado
+        LogExecucao.objects.create(
+            tipo_execucao='VERIFICACAO_SEFAZ',
+            status='SUCESSO' if resultados['erros'] == 0 else 'PARCIAL',
+            mensagem=(
+                f"Total: {resultados['total']}\n"
+                f"Vigentes: {resultados['vigentes']}\n"
+                f"Revogadas: {resultados['revogadas']}\n"
+                f"Irregulares: {resultados['irregulares']}\n"
+                f"Não encontradas: {resultados['nao_encontradas']}\n"
+                f"Erros: {resultados['erros']}"
+            ),
+            detalhes=resultados['detalhes'],
+            usuario=None
+        )
 
+        return resultados
+
+    except Exception as e:
+        logger.error(f"Falha na tarefa de verificação: {str(e)}", exc_info=True)
+        raise self.retry(exc=e, countdown=300)
 
 # Pipeline completo: Coleta -> Processamento -> Verificação SEFAZ
 @shared_task(bind=True)
@@ -217,7 +263,7 @@ def pipeline_coleta_e_processamento(self, data_inicio_str=None, data_fim_str=Non
     workflow = chain(
         coletar_diario_oficial_task.s(data_inicio_str, data_fim_str),
         processar_documentos_pendentes_task.s(),
-        verificar_normas_sefaz_task.s()
+        verificar_normas_sefaz_task.si()
     )
     
     # Dispara o pipeline encadeado

@@ -134,7 +134,7 @@ class SEFAZScraper:
             search_button.click()
             
             # Aguarda o carregamento
-            WebDriverWait(self.driver, 10).until(
+            WebDriverWait(self.driver, 20).until(
                 lambda d: d.find_element(By.TAG_NAME, "iframe").is_displayed())
             
             self._save_debug_info("03_pos_busca")
@@ -159,11 +159,11 @@ class SEFAZScraper:
                 
                 # 3. Aguarda e muda para o iframe de resultados
                 try:
-                    WebDriverWait(self.driver, 10).until(
+                    WebDriverWait(self.driver, 20).until(
                         EC.frame_to_be_available_and_switch_to_it((By.TAG_NAME, "iframe")))
                     
                     # 4. Aguarda o corpo do documento carregar
-                    WebDriverWait(self.driver, 10).until(
+                    WebDriverWait(self.driver, 20).until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, "div.document-body")))
                     
                     # 5. Extrai as informações da norma
@@ -311,33 +311,50 @@ class SEFAZScraper:
             return False
 
     def check_norm_status(self, norm_type, norm_number):
-        """Verifica status da norma e retorna informações detalhadas"""
+        """Versão melhorada que verifica status e irregularidades"""
         details = self.get_norm_details(norm_type, norm_number)
 
         if not details:
             return {
-                "status": "não encontrada",
-                "fonte": self.driver.current_url if self.driver else None
+                "status": "NÃO ENCONTRADA",
+                "vigente": False,
+                "irregular": False
             }
 
-        # Garante que details é um dict e evita erro se for None
-        situacao = (details or {}).get('situacao', '')
-        situacao_lower = situacao.lower() if situacao else ''
+        situacao = details.get('situacao', '').lower()
+        texto_completo = details.get('texto_completo', '').lower()
 
-        if 'vigente' in situacao_lower:
-            status = "vigente"
-        elif 'revogado' in situacao_lower or 'cancelado' in situacao_lower:
-            status = "revogado/cancelado"
-        elif details.get('data_publicacao'):
-            status = "publicado (sem info de vigência)"
+        # Verifica se há indícios de irregularidade
+        irregular = any(term in texto_completo for term in [
+            'irregular', 'anulada', 'cancelada', 'suspensa', 
+            'invalidada', 'sem efeito'
+        ])
+
+        # Lógica mais rigorosa para determinar vigência
+        if irregular:
+            return {
+                "status": "IRREGULAR",
+                "vigente": False,
+                "irregular": True
+            }
+        elif 'revogado' in situacao or 'cancelado' in situacao:
+            return {
+                "status": "REVOGADA",
+                "vigente": False,
+                "irregular": False
+            }
+        elif 'vigente' in situacao:
+            return {
+                "status": "VIGENTE",
+                "vigente": True,
+                "irregular": False
+            }
         else:
-            status = "indefinido"
-
-        return {
-            "status": status,
-            "fonte": self.driver.current_url if self.driver else None,
-            "dados": details
-        }
+            return {
+                "status": "INDETERMINADO",
+                "vigente": False,
+                "irregular": False
+            }
 
 
 

@@ -55,8 +55,8 @@ class NormaVigente(models.Model):
     SITUACAO_CHOICES = [
         ('VIGENTE', 'Vigente'),
         ('REVOGADA', 'Revogada'),
-        ('ALTERADA', 'Alterada'),
-        ('A_VERIFICAR', 'A Verificar'),
+        ('IRREGULAR', 'Irregular'),
+        ('A_VERIFICAR', 'A verificar')
     ]
 
     tipo = models.CharField(max_length=20, choices=TIPO_CHOICES)
@@ -74,7 +74,7 @@ class NormaVigente(models.Model):
     )
     observacoes = models.TextField(blank=True)
     data_ultima_mencao = models.DateField(null=True, blank=True) # Campo para a data da última vez que foi mencionada
-
+    irregular = models.BooleanField(default=False, verbose_name="Norma Irregular")
 
     class Meta:
         verbose_name = "Norma Vigente"
