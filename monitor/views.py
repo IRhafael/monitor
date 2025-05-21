@@ -160,20 +160,18 @@ def verificar_normas_view(request):
 def executar_coleta_view(request):
     if request.method == 'POST':
         data_fim = date.today()
-        data_inicio = data_fim - timedelta(days=3) # Últimos 3 dias como padrão
+        data_inicio = data_fim - timedelta(days=3)  # Sempre coleta dos últimos 3 dias
 
-        # Dispara o pipeline completo via Celery
         pipeline_task_info = pipeline_coleta_e_processamento.delay(
             data_inicio_str=data_inicio.strftime('%Y-%m-%d'),
             data_fim_str=data_fim.strftime('%Y-%m-%d')
         )
-        logger.info(f"Pipeline de coleta, processamento e verificação SEFAZ disparado com ID: {pipeline_task_info.id}")
-
-        messages.success(request,
-            f"O fluxo completo de coleta, processamento e verificação de normas foi iniciado em segundo plano. "
-            f"ID da tarefa principal: {pipeline_task_info.id}. Acompanhe o progresso no terminal do Celery."
+        
+        messages.success(request, 
+            f"Coleta dos últimos 3 dias (de {data_inicio} a {data_fim}) iniciada. "
+            f"ID da tarefa: {pipeline_task_info.id}"
         )
-        return redirect('dashboard') # Redireciona para o dashboard após o disparo
+        return redirect('dashboard')
 
     # Parte GET da view: mostra informações sobre a última execução
     ultima_execucao_coleta = LogExecucao.objects.filter(tipo_execucao='COLETA').order_by('-data_inicio').first()

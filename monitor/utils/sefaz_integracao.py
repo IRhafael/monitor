@@ -136,36 +136,34 @@ class IntegradorSEFAZ:
         return resultados
 
     def verificar_vigencia_automatica(self, documento_id):
-        """Versão otimizada com batch processing"""
         try:
             documento = Documento.objects.get(id=documento_id)
             if not documento.normas_relacionadas.exists():
                 return []
 
+            # Prioriza normas dos termos monitorados
+            normas_prioritarias = documento.normas_relacionadas.filter(
+                Q(tipo='DECRETO', numero='21.866') |
+                Q(tipo='LEI', numero='4.257') |
+                Q(tipo='ATO NORMATIVO', numero__in=['25/21', '26/21', '27/21'])
+            ).distinct()
+
             normas_verificadas = []
-            normas_para_verificar = documento.normas_relacionadas.all().order_by('tipo')[:15]  # Aumentado para 15
-            
-            for norma in normas_para_verificar:
+            for norma in normas_prioritarias:
                 try:
-                    # Usa verificação rápida com fallback
                     vigente = self._verificar_norma_eficiente(norma)
-                    
                     norma.situacao = "VIGENTE" if vigente else "REVOGADA"
                     norma.data_verificacao = timezone.now()
                     norma.save()
                     normas_verificadas.append(norma)
-                    
                 except Exception as e:
                     logger.error(f"Erro na norma {norma}: {str(e)}")
                     continue
 
             return normas_verificadas
             
-        except Documento.DoesNotExist:
-            logger.error(f"Documento {documento_id} não encontrado")
-            return []
         except Exception as e:
-            logger.error(f"Erro geral em verificar_vigencia_automatica: {str(e)}")
+            logger.error(f"Erro em verificar_vigencia_automatica: {str(e)}")
             return []
 
     def _verificar_norma_eficiente(self, norma):

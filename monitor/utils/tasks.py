@@ -11,8 +11,23 @@ from .diario_scraper import DiarioOficialScraper
 from .pdf_processor import PDFProcessor
 from monitor.models import Documento, LogExecucao, NormaVigente
 from .sefaz_integracao import IntegradorSEFAZ
+from celery.schedules import crontab
 
 logger = logging.getLogger(__name__)
+
+
+
+app.conf.beat_schedule = {
+    'coleta-automatica-3dias': {
+        'task': 'monitor.utils.tasks.pipeline_coleta_e_processamento',
+        'schedule': crontab(day_of_month='*/3'),  # A cada 3 dias
+        'args': (
+            (date.today() - timedelta(days=3)).strftime('%Y-%m-%d'),
+            date.today().strftime('%Y-%m-%d')
+        ),
+    },
+}
+
 
 @shared_task(bind=True)
 def coletar_diario_oficial_task(self, data_inicio_str=None, data_fim_str=None):

@@ -14,7 +14,6 @@ from typing import List, Optional, Tuple # Adicionar Optional e Tuple para type 
 from pdfminer.layout import LAParams
 from django.utils import timezone
 from django.core.files.base import ContentFile
-
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -142,16 +141,7 @@ class DiarioOficialScraper:
             return None
 
     def extrair_texto_pdf(self, pdf_bytes, paginas=None):
-        """
-        Versão melhorada que permite extração de páginas específicas e usa múltiplas estratégias.
-        
-        Args:
-            pdf_bytes (bytes): Conteúdo do arquivo PDF em bytes.
-            paginas (list, optional): Lista de números de páginas para extrair. None para extrair todas.
-            
-        Returns:
-            str: Texto extraído do PDF.
-        """
+
         try:
             from pdfminer.high_level import extract_text
             from pdfminer.layout import LAParams
@@ -355,16 +345,41 @@ class DiarioOficialScraper:
                 resultado.append(parte.lstrip('0') or '0')
         return ''.join(resultado)
 
+
+    def _contem_termos_prioritarios(self, texto: str) -> bool:
+        """Verifica se o texto contém pelo menos um dos termos monitorados prioritários."""
+        termos_prioritarios = [
+            "ATO NORMATIVO: 25/21",
+            "ATO NORMATIVO: 26/21",
+            "ATO NORMATIVO: 27/21",
+            "DECRETO 21.866",
+            "ICMS",
+            "LEI N° 4.257",
+            "SECRETARIA DE FAZENDA DO ESTADO DO PIAUÍ (SEFAZ-PI)",
+            "SEFAZ",
+            "SUBSTITUIÇÃO TRIBUTÁRIA",
+            "UNATRI",
+            "UNIFIS"
+        ]
+        
+        texto = texto.upper()
+        return any(termo.upper() in texto for termo in termos_prioritarios)
+
+
     # --- MÉTODO QUE ESTAVA FALTANDO E PRECISA SER ADICIONADO/CORRIGIDO ---
     def coletar_e_salvar_documentos(self, data_inicio: date, data_fim: date) -> List[Documento]:
-        """
-        Coleta documentos do Diário Oficial para o período especificado,
-        baixa os PDFs, extrai o texto e salva no banco de dados.
-        """
+        """Versão modificada para filtrar por termos prioritários"""
         documentos_salvos = []
         current_date = data_inicio
+        
         try:
             while current_date <= data_fim:
+                # Verifica se a data é múltiplo de 3 dias (0, 3, 6, ... dias desde data_inicio)
+                dias_desde_inicio = (current_date - data_inicio).days
+                if dias_desde_inicio % 3 != 0:
+                    current_date += timedelta(days=1)
+                    continue
+                    
                 logger.info(f"Processando diário para a data: {current_date.strftime('%Y-%m-%d')}")
                 url_diario = f"{self.BASE_URL}?data={current_date.strftime('%d-%m-%Y')}"
                 
@@ -384,48 +399,49 @@ class DiarioOficialScraper:
                         texto_extraido = self._extrair_texto_de_pdf(pdf_content)
 
                         if texto_extraido:
-                            # Filtro inicial por termos contábeis/fiscais no scraper
-                            assunto_geral = self.identificar_assunto_geral(texto_extraido)
-                            relevante_contabil = (assunto_geral == "Contábil/Fiscal")
-
-                            # Aqui é onde o objeto Documento é criado/atualizado
+                            # Filtro principal - só salva se contiver termos prioritários
+                            if not self._contem_termos_prioritarios(texto_extraido):
+                                logger.info(f"PDF não contém termos prioritários. Ignorando.")
+                                continue
+                                
+                            # Se passou pelo filtro, processa normalmente
+                            assunto_geral = "Contábil/Fiscal"  # Já que passou pelo filtro
+                            
                             try:
                                 documento, created = Documento.objects.update_or_create(
                                     url_original=pdf_url,
                                     defaults={
-                                        'titulo': f"Diário Oficial - {current_date.strftime('%d/%m/%Y')} - Parte {index + 1} - {str(uuid.uuid4())[:8]}", # Adicionado UUID para unicidade
-                                        'data_publicacao': current_date, # CORREÇÃO: Usar data_publicacao
+                                        'titulo': f"Diário Oficial - {current_date.strftime('%d/%m/%Y')} - Parte {index + 1}",
+                                        'data_publicacao': current_date,
                                         'texto_completo': texto_extraido,
-                                        'processado': False, # Documento recém-coletado, ainda não processado
-                                        'relevante_contabil': relevante_contabil, # Marca se é relevante na coleta
+                                        'processado': False,
+                                        'relevante_contabil': True,  # Já que passou pelo filtro
                                         'assunto': assunto_geral,
                                         'metadata': {'data_coleta': timezone.now().isoformat()},
                                     }
                                 )
-                                # Salva o arquivo PDF no campo FileField
+                                
                                 file_name = f"DOEPI_{current_date.strftime('%Y%m%d')}_{pdf_url.split('/')[-1]}"
-                                documento.arquivo_pdf.save(file_name, ContentFile(pdf_content), save=True) # save=True para salvar o objeto após adicionar o arquivo
+                                documento.arquivo_pdf.save(file_name, ContentFile(pdf_content), save=True)
                                 
                                 documentos_salvos.append(documento)
                                 logger.info(f"Documento '{file_name}' salvo com sucesso (novo: {created}).")
 
                             except Exception as db_e:
-                                logger.error(f"Erro ao salvar/atualizar documento {pdf_url} no banco de dados: {db_e}", exc_info=True)
+                                logger.error(f"Erro ao salvar documento {pdf_url}: {db_e}", exc_info=True)
                         else:
-                            logger.warning(f"Não foi possível extrair texto de {pdf_url}. Pulando.")
+                            logger.warning(f"Não foi possível extrair texto de {pdf_url}.")
                     else:
-                        logger.warning(f"Não foi possível baixar o PDF de {pdf_url}. Pulando.")
+                        logger.warning(f"Não foi possível baixar o PDF de {pdf_url}.")
                 
                 current_date += timedelta(days=1)
-                # Adiciona um pequeno atraso para não sobrecarregar o servidor
-                time.sleep(2) 
+                time.sleep(2)
 
         except Exception as e:
-            logger.error(f"Erro geral durante a coleta de documentos: {e}", exc_info=True)
-            raise # Relaça o erro para a tarefa Celery
+            logger.error(f"Erro durante coleta: {e}", exc_info=True)
+            raise
 
         finally:
-            self._fechar_webdriver() # Garante que o driver seja fechado ao final
-            logger.info(f"Coleta de documentos finalizada. Total de documentos salvos: {len(documentos_salvos)}")
+            self._fechar_webdriver()
 
         return documentos_salvos
