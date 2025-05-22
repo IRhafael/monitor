@@ -151,81 +151,37 @@ def processar_documentos_pendentes_task(self, previous_task_result=None):
     return {'status': log_status, 'results': log_detalhes}
 
 
-@shared_task(bind=True, max_retries=3)
-def verificar_normas_sefaz_task(self, *args, **kwargs):
-    from monitor.utils.sefaz_integracao import IntegradorSEFAZ
-    from monitor.models import NormaVigente, LogExecucao
-    from django.utils import timezone
-    from datetime import timedelta
-    import logging
-
-    logger = logging.getLogger(__name__)
-    logger.info("Iniciando verificação de normas na SEFAZ")
-
+@shared_task(bind=True, max_retries=3, time_limit=1200, soft_time_limit=900)
+def verificar_normas_sefaz_task(self):
+    logger.info("Iniciando verificação otimizada para Windows")
+    
     try:
-            integrador = IntegradorSEFAZ()
+        # Limita a quantidade para evitar timeout
+        normas = NormaVigente.objects.filter(
+            Q(data_verificacao__isnull=True) |
+            Q(data_verificacao__lt=timezone.now() - timedelta(days=30))
+        ).order_by('data_verificacao')[:20]  # Número reduzido para teste
+        
+        with IntegradorSEFAZ() as integrador:
+            resultados = integrador.verificar_normas_em_lote(normas)
             
-            normas = NormaVigente.objects.filter(
-                Q(data_verificacao__isnull=True) |
-                Q(data_verificacao__lt=timezone.now() - timedelta(days=30))
-            ).order_by('data_verificacao', '-data_ultima_mencao')[:50]
-
-            if not normas.exists():
-                logger.info("Nenhuma norma necessita verificação no momento")
-                return {"status": "success", "message": "Nenhuma norma necessitava verificação"}
-
-            # Adicionando métricas de tempo
-            start_time = timezone.now()
-            
-            resultados = {
-                'total': normas.count(),
-                'vigentes': 0,
-                'revogadas': 0,
-                'irregulares': 0,
-                'nao_encontradas': 0,
-                'erros': 0,
-                'tempo_total': None,
-                'tempo_medio_por_norma': None,
-                'detalhes': []
-            }
-
-            # Verificação em lote otimizada
-            normas_verificadas = integrador.verificar_normas_em_lote(normas)
-            
-            # Processar resultados
-            for norma in normas_verificadas:
-                resultados['detalhes'].append({
-                    'norma': f"{norma.tipo} {norma.numero}",
-                    'status': norma.situacao,
-                    'data_verificacao': norma.data_verificacao
-                })
-                if norma.situacao == "VIGENTE":
-                    resultados['vigentes'] += 1
-                elif norma.situacao == "REVOGADA":
-                    resultados['revogadas'] += 1
-                # ... outros status
-
-            # Calcular métricas de tempo
-            tempo_total = (timezone.now() - start_time).total_seconds()
-            resultados['tempo_total'] = tempo_total
-            resultados['tempo_medio_por_norma'] = tempo_total / normas.count() if normas.count() > 0 else 0
-
-            logger.info(f"Verificação concluída em {tempo_total:.2f}s. Detalhes: {resultados}")
-            
-            # Registrar log com métricas
-            LogExecucao.objects.create(
-                tipo_execucao='VERIFICACAO_SEFAZ',
-                status='SUCESSO' if resultados['erros'] == 0 else 'PARCIAL',
-                mensagem=f"Verificação concluída em {tempo_total:.2f} segundos",
-                detalhes=resultados,
-                duracao=timedelta(seconds=tempo_total)
-            )
-
-            return resultados
-
+        # Processa resultados
+        stats = {
+            'total': len(resultados),
+            'vigentes': sum(1 for r in resultados if r.get('status') == 'VIGENTE'),
+            'revogadas': sum(1 for r in resultados if r.get('status') == 'REVOGADA'),
+            'erros': sum(1 for r in resultados if r.get('status') == 'ERRO')
+        }
+        
+        logger.success(f"Verificação concluída: {stats}")
+        return stats
+        
+    except TimeoutError:
+        logger.warning("Timeout global - reiniciando task")
+        raise self.retry(countdown=60)
     except Exception as e:
-            logger.error(f"Falha na tarefa de verificação: {str(e)}", exc_info=True)
-            raise self.retry(exc=e, countdown=300)
+        logger.error(f"Erro fatal: {str(e)}", exc_info=True)
+        raise
 
 # Pipeline completo: Coleta -> Processamento -> Verificação SEFAZ
 @shared_task(bind=True)

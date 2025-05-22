@@ -1,3 +1,4 @@
+from asyncio import timeout
 import os
 from selenium.webdriver.common.keys import Keys
 import re
@@ -20,10 +21,40 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from django.utils import timezone
+from functools import wraps
+import threading
 
 
 
 logger = logging.getLogger(__name__)
+class TimeoutError(Exception):
+    pass
+
+    def timeout_decorator(timeout_seconds):
+        def decorator(func):
+            @wraps(func)
+            def wrapper(*args, **kwargs):
+                result = [None]
+                exception = [None]
+                
+                def target():
+                    try:
+                        result[0] = func(*args, **kwargs)
+                    except Exception as e:
+                        exception[0] = e
+                
+                thread = threading.Thread(target=target)
+                thread.daemon = True
+                thread.start()
+                thread.join(timeout_seconds)
+                
+                if thread.is_alive():
+                    raise TimeoutError(f"Timeout após {timeout_seconds} segundos")
+                if exception[0] is not None:
+                    raise exception[0]
+                return result[0]
+            return wrapper
+        return decorator
 
 class SEFAZScraper:
     def __init__(self):
@@ -31,7 +62,8 @@ class SEFAZScraper:
         self.timeout = 30
         self.debug_dir = r"C:\Users\RRCONTAS\Documents\GitHub\monitor\debug"
         self.driver = None
-        
+        self.max_retries = 2
+
         # Termos com 100% de prioridade
         self.priority_terms = [
             "ICMS",
@@ -61,6 +93,18 @@ class SEFAZScraper:
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
 
+    def init_driver(self):
+        """Configuração otimizada do WebDriver para Windows"""
+        chrome_options = Options()
+        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--window-size=1920,1080")
+        
+        service = Service(ChromeDriverManager().install())
+        self.driver = webdriver.Chrome(service=service, options=chrome_options)
+        self.driver.set_page_load_timeout(self.timeout)
 
     def get_priority_terms(self):
         """Retorna a lista de termos prioritários"""
@@ -70,28 +114,22 @@ class SEFAZScraper:
 
         pass
 
-    @contextmanager
     def browser_session(self):
-        """Gerenciador de contexto robusto"""
-        self.driver = None
-        try:
-            service = Service(ChromeDriverManager().install())
-            self.driver = webdriver.Chrome(
-                service=service,
-                options=self.chrome_options
-            )
-            self.driver.set_page_load_timeout(self.timeout)
-            yield self.driver
-        except Exception as e:
-            self.logger.error(f"Erro na sessão do navegador: {str(e)}")
-            raise
-        finally:
-            if self.driver:
-                try:
-                    self.driver.quit()
-                except Exception as e:
-                    self.logger.warning(f"Erro ao fechar navegador: {str(e)}")
-                self.driver = None
+        """Gerenciador de contexto otimizado"""
+        class BrowserContext:
+            def __init__(self, scraper):
+                self.scraper = scraper
+                
+            def __enter__(self):
+                if not self.scraper.driver:
+                    self.scraper.init_driver()
+                return self.scraper
+                
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                pass  # Mantemos a sessão aberta
+                
+        return BrowserContext(self)
+    
 
     def _wait_for_element(self, by, value, timeout=30):
         """Espera por um elemento específico"""
@@ -312,18 +350,8 @@ class SEFAZScraper:
             self.logger.error(f"Erro na verificação: {str(e)}")
             return False
 
-
+    
     def check_norm_status(self, norm_type, norm_number):
-        """
-        Verifica o status de uma norma com tratamento robusto de erros
-        
-        Args:
-            norm_type (str): Tipo da norma (LEI, DECRETO, etc.)
-            norm_number (str|int): Número da norma
-            
-        Returns:
-            dict: Resultado com status, vigência e irregularidade
-        """
         # Inicializa variáveis para escopo da função
         norm_type_str = ""
         norm_number_str = ""
@@ -477,7 +505,7 @@ class SEFAZScraper:
         return detalhes
             
     def close(self):
-        """Fecha o navegador, se estiver aberto"""
+        """Fecha o driver corretamente"""
         if self.driver:
             self.driver.quit()
             self.driver = None

@@ -20,3 +20,9 @@ app.autodiscover_tasks()
 @app.task(bind=True, ignore_result=True)
 def debug_task(self):
     print(f'Request: {self.request!r}')
+
+app.conf.task_soft_time_limit = 600  # 10 minutos para tarefas pesadas
+app.conf.task_time_limit = 900       # 15 minutos máximo
+app.conf.worker_prefetch_multiplier = 1  # Evita acumular tarefas
+app.conf.task_acks_late = True  # Reconhecimento tardio
+app.conf.worker_max_tasks_per_child = 100  # Reinicia worker periodicamente

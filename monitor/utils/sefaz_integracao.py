@@ -1,4 +1,6 @@
 import os
+import signal
+import time
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Silencia completamente o TensorFlow
 import re
 import logging
@@ -20,21 +22,16 @@ logger = logging.getLogger(__name__)
 class IntegradorSEFAZ:
     def __init__(self):
         self.scraper = SEFAZScraper()
-        self.max_tentativas = 3
-        self.timeout = 60
-        self.browser_session = None
-
+        self.session_timeout = 600  # 10 minutos por sessão
+        
     def __enter__(self):
-        """Implementação para uso com 'with'"""
-        self.browser_session = self.scraper.browser_session()
-        self.browser_session.__enter__()
+        self.start_time = time.time()
+        self.scraper.init_driver()
         return self
-
+        
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Garante que a sessão seja fechada corretamente"""
-        if self.browser_session:
-            self.browser_session.__exit__(exc_type, exc_val, exc_tb)
-            self.browser_session = None
+        self.scraper.close()
+        
 
     def buscar_norma_especifica(self, tipo, numero):
             """Versão mais robusta com tratamento de erros"""
@@ -156,50 +153,35 @@ class IntegradorSEFAZ:
             return []
 
     def _verificar_norma_eficiente(self, norma):
-        """Método otimizado que tenta várias estratégias para verificar a norma"""
-        cache_key = f"sefaz_{norma.tipo}_{norma.numero}"
-        
-        # 1. Tentar cache
-        cached = cache.get(cache_key)
-        if cached and (timezone.now() - cached['data_consulta']) < timedelta(hours=12):
-            return self._formatar_resultado_para_json(cached)
-            
-        # 2. Verificação via scraper
+        """Método otimizado com timeout e retry"""
         try:
-            resultado = self.scraper.check_norm_status(norma.tipo, norma.numero)
+            # Configura timeout
+            signal.signal(signal.SIGALRM, self._handle_timeout)
+            signal.alarm(self.timeout)
             
-            # Garantir que o resultado não é None
-            if resultado is None:
-                raise ValueError("Resposta do scraper é None")
-                
-            # Formatar resultado consistentemente
-            if not isinstance(resultado, dict):
-                resultado = {
-                    'vigente': bool(resultado),
-                    'irregular': False,
-                    'status': 'VIGENTE' if resultado else 'REVOGADA',
-                    'data_consulta': timezone.now().isoformat()  # Serializa datetime para string
-                }
-            else:
-                # Garantir que datas são strings
-                if 'data_consulta' in resultado and isinstance(resultado['data_consulta'], datetime):
-                    resultado['data_consulta'] = resultado['data_consulta'].isoformat()
+            resultado = self.scraper.check_norm_status(
+                norma.tipo, 
+                norma.numero
+            )
             
-            # Armazena no cache
-            cache.set(cache_key, resultado, 43200)  # 12 horas
-            return resultado
+            signal.alarm(0)  # Cancela timeout
+            
+            return {
+                'status': resultado.get('status', 'INDETERMINADO'),
+                'vigente': resultado.get('vigente', False),
+                'irregular': resultado.get('irregular', False)
+            }
             
         except Exception as e:
-            logger.error(f"Erro ao verificar norma {norma}: {e}")
+            logger.warning(f"Timeout/erro na norma {norma}: {str(e)}")
             return {
-                'tipo': norma.tipo,
-                'numero': norma.numero,
-                'vigente': False,
-                'irregular': False,
                 'status': 'ERRO',
-                'erro': str(e),
-                'data_consulta': timezone.now().isoformat()  # Serializa datetime
+                'vigente': False,
+                'irregular': False
             }
+
+    def _handle_timeout(self, signum, frame):
+        raise TimeoutError("Tempo excedido na consulta à SEFAZ")
 
     def _formatar_resultado_para_json(self, resultado):
         """Garante que todos os campos datetime são convertidos para strings"""
@@ -260,47 +242,33 @@ class IntegradorSEFAZ:
         return numero.strip()
     
     def verificar_normas_em_lote(self, normas, batch_size=10):
-        """Versão com tratamento completo de erros"""
+        """Processamento em lote com gerenciamento de tempo"""
         resultados = []
+        normas_verificadas = 0
+        
         try:
-            with self.scraper.browser_session():
-                for norma in normas:
+            for i in range(0, len(normas), batch_size):
+                batch = normas[i:i + batch_size]
+                
+                # Verifica timeout global
+                if time.time() - self.start_time > self.session_timeout:
+                    raise TimeoutError("Tempo máximo de sessão excedido")
+                
+                for norma in batch:
                     try:
-                        # Verificação segura
-                        if not hasattr(norma, 'tipo') or not hasattr(norma, 'numero'):
-                            continue
-                            
-                        resultado = self._verificar_norma_eficiente(norma)
-                        
-                        # Garante que temos um dicionário válido
-                        if not isinstance(resultado, dict):
-                            resultado = {
-                                'vigente': False,
-                                'irregular': False,
-                                'status': 'ERRO',
-                                'error': 'Resultado inválido'
-                            }
-                        
-                        # Atualização segura da norma
-                        norma.situacao = resultado.get('status', 'INDETERMINADO')
-                        norma.data_verificacao = timezone.now()
-                        
-                        # Remove campos datetime antes de salvar
-                        if 'data_consulta' in resultado:
-                            resultado['data_consulta'] = str(resultado['data_consulta'])
-                        
-                        norma.detalhes = resultado
-                        norma.save()
-                        resultados.append(norma)
-                        
+                        resultado = self.scraper.check_norm_status(norma.tipo, norma.numero)
+                        resultados.append(resultado)
+                        normas_verificadas += 1
                     except Exception as e:
-                        logger.error(f"Erro ao processar norma {norma}: {str(e)}")
+                        logger.error(f"Erro na norma {norma}: {str(e)}")
                         continue
                         
-        except Exception as e:
-            logger.error(f"Erro na sessão do browser: {str(e)}")
-            
-        return resultados
+                # Pausa estratégica entre batches
+                time.sleep(1)
+                
+            return resultados
+        finally:
+            self.scraper.close()
 
     def _validar_status_norma(self, norma, status_response):
         # Se a resposta for apenas um booleano, precisamos melhorar o scraper para retornar mais detalhes
