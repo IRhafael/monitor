@@ -57,54 +57,39 @@ class TimeoutError(Exception):
         return decorator
 
 class SEFAZScraper:
-    def __init__(self):
-        self.base_url = "https://portaldalegislacao.sefaz.pi.gov.br"
-        self.timeout = 30
-        self.debug_dir = r"C:\Users\RRCONTAS\Documents\GitHub\monitor\debug"
-        self.driver = None
-        self.max_retries = 2
-
-        # Termos com 100% de prioridade
-        self.priority_terms = [
-            "ICMS",
-            "DECRETO 21.866",
-            "UNATRI",
-            "UNIFIS",
-            "LEI 4.257",
-            "ATO NORMATIVO: 25/21",
-            "ATO NORMATIVO: 26/21",
-            "ATO NORMATIVO: 27/21",
-            "SECRETARIA DE FAZENDA DO ESTADO DO PIAUÍ (SEFAZ-PI)",
-            "SEFAZ",
-            "SUBSTITUIÇÃO TRIBUTÁRIA"
-        ]
-        
-        # Configuração do ChromeDriver
-        self.chrome_options = Options()
-        self.chrome_options.add_argument("--headless=new")
-        self.chrome_options.add_argument("--window-size=1920,1080")
-        self.chrome_options.add_argument("--no-sandbox")
-        self.chrome_options.add_argument("--disable-dev-shm-usage")
-        self.chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        
-        # Cria diretório de debug
-        os.makedirs(self.debug_dir, exist_ok=True)
-        
-        logging.basicConfig(level=logging.INFO)
-        self.logger = logging.getLogger(__name__)
-
     def init_driver(self):
         """Configuração otimizada do WebDriver para Windows"""
+        if hasattr(self, 'driver') and self.driver:
+            return  # Já está inicializado
+        
         chrome_options = Options()
-        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--headless=new")
+        chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--window-size=1920,1080")
+        
+        # Configurações para evitar detecção como bot
+        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        chrome_options.add_experimental_option('useAutomationExtension', False)
         
         service = Service(ChromeDriverManager().install())
         self.driver = webdriver.Chrome(service=service, options=chrome_options)
-        self.driver.set_page_load_timeout(self.timeout)
+        
+        # Timeouts ajustados
+        self.driver.set_page_load_timeout(45)
+        self.driver.set_script_timeout(30)
+        if self.driver is None:
+            try:
+                service = Service(ChromeDriverManager().install())
+                self.driver = webdriver.Chrome(service=service, options=self.chrome_options)
+                self.driver.set_page_load_timeout(self.timeout)
+                return True
+            except Exception as e:
+                logger.error(f"Erro ao iniciar WebDriver: {str(e)}")
+                return False
+        return True
 
     def get_priority_terms(self):
         """Retorna a lista de termos prioritários"""
@@ -473,22 +458,27 @@ class SEFAZScraper:
 
 
     def test_connection(self):
-        """Testa conexão com o portal"""
-        try:
-            # Teste HTTP simples
+            """Testa a conexão de forma robusta"""
             try:
-                response = requests.get(self.base_url, timeout=10)
+                # Teste HTTP básico
+                response = requests.get(self.base_url, timeout=10, verify=False)
                 if response.status_code != 200:
                     return False
-            except requests.RequestException:
-                return False
-            
-            # Teste com navegador
-            with self.browser_session():
+
+                # Teste com navegador
+                if not self.init_driver():
+                    return False
+
                 self.driver.get(self.base_url)
                 return "sefaz" in self.driver.title.lower()
-        except Exception:
-            return False
+                
+            except Exception as e:
+                logger.error(f"Erro no teste de conexão: {str(e)}")
+                return False
+            finally:
+                if self.driver:
+                    self.driver.quit()
+                    self.driver = None
         
     def _preprocessar_detalhes(self, detalhes):
         """Converte objetos datetime para strings no campo detalhes"""

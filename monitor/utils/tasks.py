@@ -13,6 +13,7 @@ from monitor.models import Documento, LogExecucao, NormaVigente
 from .sefaz_integracao import IntegradorSEFAZ
 from celery.schedules import crontab
 from diario_oficial.celery import app  
+from .sefaz_scraper import SEFAZScraper 
 
 
 logger = logging.getLogger(__name__)
@@ -151,34 +152,47 @@ def processar_documentos_pendentes_task(self, previous_task_result=None):
     return {'status': log_status, 'results': log_detalhes}
 
 
-@shared_task(bind=True, max_retries=3, time_limit=1200, soft_time_limit=900)
+# Modifique a tarefa verificar_normas_sefaz_task:
+@shared_task(bind=True, max_retries=3, time_limit=1800, soft_time_limit=1500)
 def verificar_normas_sefaz_task(self):
     logger.info("Iniciando verificação otimizada para Windows")
     
     try:
-        # Limita a quantidade para evitar timeout
+        # Verificação de conexão mais robusta
+        try:
+            scraper = SEFAZScraper()
+            if not scraper.test_connection():
+                logger.error("Falha na conexão com o portal SEFAZ")
+                raise ConnectionError("Não foi possível conectar ao portal SEFAZ")
+        except Exception as e:
+            logger.error(f"Erro ao testar conexão: {str(e)}")
+            raise self.retry(exc=e, countdown=60)
+        
+        # Limita a quantidade e adiciona filtros mais específicos
         normas = NormaVigente.objects.filter(
             Q(data_verificacao__isnull=True) |
-            Q(data_verificacao__lt=timezone.now() - timedelta(days=30))
-        ).order_by('data_verificacao')[:20]  # Número reduzido para teste
+            Q(data_verificacao__lt=timezone.now() - timedelta(days=30)),
+            Q(tipo__in=['DECRETO', 'LEI', 'ATO NORMATIVO'])
+        ).order_by('data_verificacao')[:5]  # Número reduzido para evitar timeout
         
+        # Usa conexão persistente
         with IntegradorSEFAZ() as integrador:
             resultados = integrador.verificar_normas_em_lote(normas)
             
         # Processa resultados
         stats = {
             'total': len(resultados),
-            'vigentes': sum(1 for r in resultados if r.get('status') == 'VIGENTE'),
-            'revogadas': sum(1 for r in resultados if r.get('status') == 'REVOGADA'),
-            'erros': sum(1 for r in resultados if r.get('status') == 'ERRO')
+            'vigentes': sum(1 for r in resultados if r and r.get('status') == 'VIGENTE'),
+            'revogadas': sum(1 for r in resultados if r and r.get('status') == 'REVOGADA'),
+            'erros': sum(1 for r in resultados if not r or r.get('status') == 'ERRO')
         }
         
-        logger.success(f"Verificação concluída: {stats}")
+        logger.info(f"Verificação concluída: {stats}")
         return stats
         
     except TimeoutError:
         logger.warning("Timeout global - reiniciando task")
-        raise self.retry(countdown=60)
+        raise self.retry(countdown=120)
     except Exception as e:
         logger.error(f"Erro fatal: {str(e)}", exc_info=True)
         raise

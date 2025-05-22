@@ -26,3 +26,28 @@ app.conf.task_time_limit = 900       # 15 minutos máximo
 app.conf.worker_prefetch_multiplier = 1  # Evita acumular tarefas
 app.conf.task_acks_late = True  # Reconhecimento tardio
 app.conf.worker_max_tasks_per_child = 100  # Reinicia worker periodicamente
+
+
+
+# Adicione estas configurações adicionais
+app.conf.update(
+    task_serializer='json',
+    result_serializer='json',
+    accept_content=['json'],
+    task_always_eager=False,
+    task_create_missing_queues=True,
+    task_default_queue='diario_oficial',
+    task_ignore_result=False,  # Alterado para False para melhor debug
+    worker_prefetch_multiplier=4,  # Ajustado para melhor performance
+    worker_max_memory_per_child=250000,  # 250MB
+    broker_connection_retry_on_startup=True
+)
+
+
+@app.task(bind=True)
+def health_check(self):
+    return {
+        'status': 'OK',
+        'timestamp': timezone.now().isoformat(),
+        'worker': socket.gethostname()
+    }

@@ -1,3 +1,4 @@
+import threading  
 import os
 import signal
 import time
@@ -12,6 +13,7 @@ from .sefaz_scraper import SEFAZScraper
 from django.core.cache import cache
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from selenium.webdriver.support.ui import WebDriverWait
 
 # Verifique se o cache está configurado no settings.py
 if not hasattr(settings, 'CACHES'):
@@ -26,12 +28,29 @@ class IntegradorSEFAZ:
         
     def __enter__(self):
         self.start_time = time.time()
-        self.scraper.init_driver()
+        try:
+            if not hasattr(self.scraper, 'driver') or not self.scraper.driver:
+                self.scraper.init_driver()
+        except Exception as e:
+            logger.error(f"Erro ao iniciar driver: {str(e)}")
+            raise
         return self
         
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.scraper.close()
         
+
+    def check_chrome_version(self):
+        try:
+            self.driver.get("chrome://version/")
+            version_text = WebDriverWait(self.driver, 10).until(
+                lambda d: d.find_element(By.XPATH, "//*[contains(text(), 'Google Chrome')]").text
+            )
+            logger.info(f"Versão do Chrome: {version_text.split()[-1]}")
+            return True
+        except Exception:
+            logger.warning("Não foi possível verificar a versão do Chrome")
+            return False
 
     def buscar_norma_especifica(self, tipo, numero):
             """Versão mais robusta com tratamento de erros"""
@@ -44,6 +63,11 @@ class IntegradorSEFAZ:
                 # Tenta usar cache primeiro
                 cache_key = f"sefaz_{tipo}_{numero}"
                 cached_result = cache.get(cache_key)
+                CACHE_DURATION = {
+                    'VIGENTE': 86400,  # 24 horas
+                    'REVOGADA': 2592000,  # 30 dias
+                    'ERRO': 3600  # 1 hora
+                    }
                 if cached_result:
                     return cached_result
                     
@@ -61,7 +85,7 @@ class IntegradorSEFAZ:
                     }
                     
                     # Armazena no cache por 24 horas
-                    cache.set(cache_key, resultado, 86400)
+                    cache.set(cache_key, resultado, CACHE_DURATION.get(resultado['status'], 3600))
                     return resultado
                     
             except Exception as e:
@@ -305,3 +329,86 @@ class IntegradorSEFAZ:
             logger.error(f"Erro na validação avançada para norma {norma}: {e}", exc_info=True)
             # Em caso de erro na validação avançada, usar a verificação simples como fallback
             return bool(status_response)
+        
+
+    # Adicione estes métodos à classe IntegradorSEFAZ:
+    def verificar_norma_individual_com_timeout(self, norma, timeout=120):
+        """Verificação com timeout individual para cada norma"""
+        start_time = time.time()
+        result = None
+        
+        try:
+            # Implementação com thread para timeout
+            def worker():
+                nonlocal result
+                result = self.scraper.check_norm_status(norma.tipo, norma.numero)
+            
+            thread = threading.Thread(target=worker)
+            thread.daemon = True
+            thread.start()
+            thread.join(timeout)
+            
+            if thread.is_alive():
+                raise TimeoutError(f"Timeout após {timeout} segundos")
+                
+            return result
+            
+        except Exception as e:
+            logger.error(f"Erro ao verificar norma {norma}: {str(e)}")
+            return {
+                'status': 'ERRO',
+                'error': str(e),
+                'norma': f"{norma.tipo} {norma.numero}"
+            }
+
+    # Substitua o método verificar_normas_em_lote por esta versão mais robusta:
+    def verificar_normas_em_lote(self, normas, batch_size=5):
+        """Processamento em lote com gerenciamento de tempo"""
+        resultados = []
+        
+        try:
+            with self.scraper.browser_session():
+                for norma in normas:
+                    try:
+                        # Verificação individual com timeout
+                        resultado = self.verificar_norma_individual_com_timeout(norma)
+                        resultados.append(resultado)
+                        
+                        # Pequena pausa entre verificações
+                        time.sleep(0.5)
+                        
+                    except Exception as e:
+                        logger.error(f"Erro na norma {norma}: {str(e)}")
+                        continue
+                        
+        except Exception as e:
+            logger.error(f"Erro no lote: {str(e)}")
+            
+        return resultados
+
+
+
+
+# Adicione esta classe
+class CircuitBreaker:
+    def __init__(self, max_failures=3, reset_timeout=300):
+        self.max_failures = max_failures
+        self.reset_timeout = reset_timeout
+        self.failures = 0
+        self.last_failure = None
+        
+    def is_open(self):
+        if self.failures >= self.max_failures:
+            if time.time() - self.last_failure > self.reset_timeout:
+                self.reset()
+                return False
+            return True
+        return False
+        
+    def record_failure(self):
+        self.failures += 1
+        self.last_failure = time.time()
+        
+    def reset(self):
+        self.failures = 0
+        self.last_failure = None
