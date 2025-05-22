@@ -155,29 +155,41 @@ def processar_documentos_pendentes_task(self, previous_task_result=None):
 # Modifique a tarefa verificar_normas_sefaz_task:
 @shared_task(bind=True, max_retries=3, time_limit=1800, soft_time_limit=1500)
 def verificar_normas_sefaz_task(self):
-    logger.info("Iniciando verificação otimizada para Windows")
+    logger.info("Iniciando verificação para Windows")
     
     try:
-        # Verificação de conexão mais robusta
-        try:
-            scraper = SEFAZScraper()
-            if not scraper.test_connection():
-                logger.error("Falha na conexão com o portal SEFAZ")
-                raise ConnectionError("Não foi possível conectar ao portal SEFAZ")
-        except Exception as e:
-            logger.error(f"Erro ao testar conexão: {str(e)}")
-            raise self.retry(exc=e, countdown=60)
+        # Teste de conexão com retry próprio
+        for attempt in range(3):
+            try:
+                scraper = SEFAZScraper()
+                if scraper.test_connection():
+                    break
+                else:
+                    raise ConnectionError("Falha na conexão com o portal SEFAZ")
+            except Exception as e:
+                if attempt == 2:  # Última tentativa
+                    raise
+                wait_time = (attempt + 1) * 30  # 30, 60, 90 segundos
+                logger.warning(f"Tentativa {attempt + 1} falhou. Aguardando {wait_time}s para retry...")
+                time.sleep(wait_time)
         
-        # Limita a quantidade e adiciona filtros mais específicos
+        # Limita a quantidade de normas para evitar timeout
         normas = NormaVigente.objects.filter(
             Q(data_verificacao__isnull=True) |
-            Q(data_verificacao__lt=timezone.now() - timedelta(days=30)),
-            Q(tipo__in=['DECRETO', 'LEI', 'ATO NORMATIVO'])
-        ).order_by('data_verificacao')[:5]  # Número reduzido para evitar timeout
-        
-        # Usa conexão persistente
+            Q(data_verificacao__lt=timezone.now() - timedelta(days=30))
+        ).order_by('data_verificacao')[:3]  # Apenas 3 normas por vez
+
+        # Usa conexão persistente com timeout por norma
         with IntegradorSEFAZ() as integrador:
-            resultados = integrador.verificar_normas_em_lote(normas)
+            resultados = []
+            for norma in normas:
+                try:
+                    resultado = integrador.verificar_norma_individual_com_timeout(norma, timeout=90)
+                    resultados.append(resultado)
+                    time.sleep(5)  # Intervalo entre consultas
+                except Exception as e:
+                    logger.error(f"Erro na norma {norma}: {str(e)}")
+                    continue
             
         # Processa resultados
         stats = {
@@ -190,12 +202,9 @@ def verificar_normas_sefaz_task(self):
         logger.info(f"Verificação concluída: {stats}")
         return stats
         
-    except TimeoutError:
-        logger.warning("Timeout global - reiniciando task")
-        raise self.retry(countdown=120)
     except Exception as e:
         logger.error(f"Erro fatal: {str(e)}", exc_info=True)
-        raise
+        raise self.retry(exc=e, countdown=300)  # 5 minutos para próxima tentativa
 
 # Pipeline completo: Coleta -> Processamento -> Verificação SEFAZ
 @shared_task(bind=True)

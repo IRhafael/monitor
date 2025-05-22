@@ -27,69 +27,52 @@ import threading
 
 
 logger = logging.getLogger(__name__)
-class TimeoutError(Exception):
-    pass
-
-    def timeout_decorator(timeout_seconds):
-        def decorator(func):
-            @wraps(func)
-            def wrapper(*args, **kwargs):
-                result = [None]
-                exception = [None]
-                
-                def target():
-                    try:
-                        result[0] = func(*args, **kwargs)
-                    except Exception as e:
-                        exception[0] = e
-                
-                thread = threading.Thread(target=target)
-                thread.daemon = True
-                thread.start()
-                thread.join(timeout_seconds)
-                
-                if thread.is_alive():
-                    raise TimeoutError(f"Timeout após {timeout_seconds} segundos")
-                if exception[0] is not None:
-                    raise exception[0]
-                return result[0]
-            return wrapper
-        return decorator
-
 class SEFAZScraper:
+    def __init__(self):
+        self.base_url = "https://portaldalegislacao.sefaz.pi.gov.br"
+        self.timeout = 45
+        self.driver = None
+        self.chrome_options = Options()
+        self._setup_chrome_options()
+        self.logger = logging.getLogger(__name__)
+
+    def _setup_chrome_options(self):
+        """Configura todas as opções do Chrome"""
+        self.chrome_options.add_argument("--headless=new")
+        self.chrome_options.add_argument("--disable-gpu")
+        self.chrome_options.add_argument("--no-sandbox")
+        self.chrome_options.add_argument("--disable-dev-shm-usage")
+        self.chrome_options.add_argument("--window-size=1920,1080")
+        self.chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+        self.chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        self.chrome_options.add_experimental_option('useAutomationExtension', False)
+        self.chrome_options.add_argument(f"user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{self._get_chrome_version()} Safari/537.36")
+
+    def _get_chrome_version(self):
+        """Obtém a versão do Chrome instalado"""
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Google\Chrome\BLBeacon") as key:
+                return winreg.QueryValueEx(key, "version")[0].split('.')[0]
+        except Exception:
+            return "120"  # Versão fallback
+
     def init_driver(self):
-        """Configuração otimizada do WebDriver para Windows"""
-        if hasattr(self, 'driver') and self.driver:
-            return  # Já está inicializado
-        
-        chrome_options = Options()
-        chrome_options.add_argument("--headless=new")
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--window-size=1920,1080")
-        
-        # Configurações para evitar detecção como bot
-        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        chrome_options.add_experimental_option('useAutomationExtension', False)
-        
-        service = Service(ChromeDriverManager().install())
-        self.driver = webdriver.Chrome(service=service, options=chrome_options)
-        
-        # Timeouts ajustados
-        self.driver.set_page_load_timeout(45)
-        self.driver.set_script_timeout(30)
-        if self.driver is None:
-            try:
-                service = Service(ChromeDriverManager().install())
-                self.driver = webdriver.Chrome(service=service, options=self.chrome_options)
-                self.driver.set_page_load_timeout(self.timeout)
-                return True
-            except Exception as e:
-                logger.error(f"Erro ao iniciar WebDriver: {str(e)}")
-                return False
-        return True
+        """Inicializa o WebDriver com tratamento de erros"""
+        if self.driver is not None:
+            return True
+            
+        try:
+            service = Service(ChromeDriverManager().install())
+            self.driver = webdriver.Chrome(service=service, options=self.chrome_options)
+            self.driver.set_page_load_timeout(self.timeout)
+            self.driver.set_script_timeout(30)
+            return True
+        except Exception as e:
+            self.logger.error(f"Erro ao iniciar WebDriver: {str(e)}")
+            return False
+
+
 
     def get_priority_terms(self):
         """Retorna a lista de termos prioritários"""
@@ -458,27 +441,35 @@ class SEFAZScraper:
 
 
     def test_connection(self):
-            """Testa a conexão de forma robusta"""
-            try:
-                # Teste HTTP básico
-                response = requests.get(self.base_url, timeout=10, verify=False)
-                if response.status_code != 200:
-                    return False
-
-                # Teste com navegador
-                if not self.init_driver():
-                    return False
-
-                self.driver.get(self.base_url)
-                return "sefaz" in self.driver.title.lower()
-                
-            except Exception as e:
-                logger.error(f"Erro no teste de conexão: {str(e)}")
+        """Testa conexão com o portal de forma robusta"""
+        try:
+            # Teste HTTP básico
+            response = requests.get(self.base_url, timeout=10, verify=False)
+            if response.status_code != 200:
+                self.logger.error(f"Status HTTP inesperado: {response.status_code}")
                 return False
-            finally:
-                if self.driver:
-                    self.driver.quit()
-                    self.driver = None
+
+            # Teste com navegador
+            if not self.init_driver():
+                return False
+
+            self.driver.get(self.base_url)
+            
+            # Verifica se o título contém "Sefaz" (case insensitive)
+            page_title = self.driver.title.lower()
+            if "sefaz" not in page_title:
+                self.logger.error(f"Título da página inesperado: {self.driver.title}")
+                return False
+                
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Erro no teste de conexão: {str(e)}")
+            return False
+        finally:
+            if self.driver:
+                self.driver.quit()
+                self.driver = None
         
     def _preprocessar_detalhes(self, detalhes):
         """Converte objetos datetime para strings no campo detalhes"""

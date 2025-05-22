@@ -331,17 +331,18 @@ class IntegradorSEFAZ:
             return bool(status_response)
         
 
-    # Adicione estes métodos à classe IntegradorSEFAZ:
     def verificar_norma_individual_com_timeout(self, norma, timeout=120):
-        """Verificação com timeout individual para cada norma"""
-        start_time = time.time()
-        result = None
-        
+        """Versão melhorada com tratamento de timeout"""
         try:
             # Implementação com thread para timeout
+            result_container = {}
+            exception_container = {}
+            
             def worker():
-                nonlocal result
-                result = self.scraper.check_norm_status(norma.tipo, norma.numero)
+                try:
+                    result_container['result'] = self.scraper.check_norm_status(norma.tipo, norma.numero)
+                except Exception as e:
+                    exception_container['exception'] = e
             
             thread = threading.Thread(target=worker)
             thread.daemon = True
@@ -350,15 +351,27 @@ class IntegradorSEFAZ:
             
             if thread.is_alive():
                 raise TimeoutError(f"Timeout após {timeout} segundos")
+            if 'exception' in exception_container:
+                raise exception_container['exception']
                 
-            return result
+            return result_container.get('result', {
+                'status': 'ERRO',
+                'error': 'Nenhum resultado retornado'
+            })
             
+        except TimeoutError:
+            logger.warning(f"Timeout na norma {norma}")
+            return {
+                'status': 'TIMEOUT',
+                'norma': f"{norma.tipo} {norma.numero}",
+                'error': 'Tempo excedido'
+            }
         except Exception as e:
-            logger.error(f"Erro ao verificar norma {norma}: {str(e)}")
+            logger.error(f"Erro na norma {norma}: {str(e)}")
             return {
                 'status': 'ERRO',
-                'error': str(e),
-                'norma': f"{norma.tipo} {norma.numero}"
+                'norma': f"{norma.tipo} {norma.numero}",
+                'error': str(e)
             }
 
     # Substitua o método verificar_normas_em_lote por esta versão mais robusta:
