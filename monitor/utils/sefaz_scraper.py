@@ -1,4 +1,3 @@
-from asyncio import timeout
 import os
 from selenium.webdriver.common.keys import Keys
 import re
@@ -20,58 +19,45 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from django.utils import timezone
-from functools import wraps
-import threading
-
 
 
 logger = logging.getLogger(__name__)
+
 class SEFAZScraper:
     def __init__(self):
         self.base_url = "https://portaldalegislacao.sefaz.pi.gov.br"
-        self.timeout = 45
+        self.timeout = 30
+        self.debug_dir = r"C:\Users\RRCONTAS\Documents\GitHub\monitor\debug"
         self.driver = None
+        
+        # Termos com 100% de prioridade
+        self.priority_terms = [
+            "ICMS",
+            "DECRETO 21.866",
+            "UNATRI",
+            "UNIFIS",
+            "LEI 4.257",
+            "ATO NORMATIVO: 25/21",
+            "ATO NORMATIVO: 26/21",
+            "ATO NORMATIVO: 27/21",
+            "SECRETARIA DE FAZENDA DO ESTADO DO PIAUÍ (SEFAZ-PI)",
+            "SEFAZ",
+            "SUBSTITUIÇÃO TRIBUTÁRIA"
+        ]
+        
+        # Configuração do ChromeDriver
         self.chrome_options = Options()
-        self._setup_chrome_options()
-        self.logger = logging.getLogger(__name__)
-
-    def _setup_chrome_options(self):
-        """Configura todas as opções do Chrome"""
         self.chrome_options.add_argument("--headless=new")
-        self.chrome_options.add_argument("--disable-gpu")
+        self.chrome_options.add_argument("--window-size=1920,1080")
         self.chrome_options.add_argument("--no-sandbox")
         self.chrome_options.add_argument("--disable-dev-shm-usage")
-        self.chrome_options.add_argument("--window-size=1920,1080")
-        self.chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-        self.chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        self.chrome_options.add_experimental_option('useAutomationExtension', False)
-        self.chrome_options.add_argument(f"user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{self._get_chrome_version()} Safari/537.36")
-
-    def _get_chrome_version(self):
-        """Obtém a versão do Chrome instalado"""
-        try:
-            import winreg
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Google\Chrome\BLBeacon") as key:
-                return winreg.QueryValueEx(key, "version")[0].split('.')[0]
-        except Exception:
-            return "120"  # Versão fallback
-
-    def init_driver(self):
-        """Inicializa o WebDriver com tratamento de erros"""
-        if self.driver is not None:
-            return True
-            
-        try:
-            service = Service(ChromeDriverManager().install())
-            self.driver = webdriver.Chrome(service=service, options=self.chrome_options)
-            self.driver.set_page_load_timeout(self.timeout)
-            self.driver.set_script_timeout(30)
-            return True
-        except Exception as e:
-            self.logger.error(f"Erro ao iniciar WebDriver: {str(e)}")
-            return False
-
+        self.chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        
+        # Cria diretório de debug
+        os.makedirs(self.debug_dir, exist_ok=True)
+        
+        logging.basicConfig(level=logging.INFO)
+        self.logger = logging.getLogger(__name__)
 
 
     def get_priority_terms(self):
@@ -82,22 +68,28 @@ class SEFAZScraper:
 
         pass
 
+    @contextmanager
     def browser_session(self):
-        """Gerenciador de contexto otimizado"""
-        class BrowserContext:
-            def __init__(self, scraper):
-                self.scraper = scraper
-                
-            def __enter__(self):
-                if not self.scraper.driver:
-                    self.scraper.init_driver()
-                return self.scraper
-                
-            def __exit__(self, exc_type, exc_val, exc_tb):
-                pass  # Mantemos a sessão aberta
-                
-        return BrowserContext(self)
-    
+        """Gerenciador de contexto robusto"""
+        self.driver = None
+        try:
+            service = Service(ChromeDriverManager().install())
+            self.driver = webdriver.Chrome(
+                service=service,
+                options=self.chrome_options
+            )
+            self.driver.set_page_load_timeout(self.timeout)
+            yield self.driver
+        except Exception as e:
+            self.logger.error(f"Erro na sessão do navegador: {str(e)}")
+            raise
+        finally:
+            if self.driver:
+                try:
+                    self.driver.quit()
+                except Exception as e:
+                    self.logger.warning(f"Erro ao fechar navegador: {str(e)}")
+                self.driver = None
 
     def _wait_for_element(self, by, value, timeout=30):
         """Espera por um elemento específico"""
@@ -142,7 +134,7 @@ class SEFAZScraper:
             search_button.click()
             
             # Aguarda o carregamento
-            WebDriverWait(self.driver, 20).until(
+            WebDriverWait(self.driver, 10).until(
                 lambda d: d.find_element(By.TAG_NAME, "iframe").is_displayed())
             
             self._save_debug_info("03_pos_busca")
@@ -167,11 +159,11 @@ class SEFAZScraper:
                 
                 # 3. Aguarda e muda para o iframe de resultados
                 try:
-                    WebDriverWait(self.driver, 20).until(
+                    WebDriverWait(self.driver, 10).until(
                         EC.frame_to_be_available_and_switch_to_it((By.TAG_NAME, "iframe")))
                     
                     # 4. Aguarda o corpo do documento carregar
-                    WebDriverWait(self.driver, 20).until(
+                    WebDriverWait(self.driver, 10).until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, "div.document-body")))
                     
                     # 5. Extrai as informações da norma
@@ -318,179 +310,57 @@ class SEFAZScraper:
             self.logger.error(f"Erro na verificação: {str(e)}")
             return False
 
-    
     def check_norm_status(self, norm_type, norm_number):
-        # Inicializa variáveis para escopo da função
-        norm_type_str = ""
-        norm_number_str = ""
-        
-        try:
-            # 1. VALIDAÇÃO E NORMALIZAÇÃO DOS PARÂMETROS
-            if not norm_type or not isinstance(norm_type, (str, int, float)):
-                raise ValueError("Tipo da norma inválido ou não informado")
-                
-            if not norm_number or not isinstance(norm_number, (str, int, float)):
-                raise ValueError("Número da norma inválido ou não informado")
+        """Verifica status da norma e retorna informações detalhadas"""
+        details = self.get_norm_details(norm_type, norm_number)
 
-            # Normalização segura dos parâmetros
-            norm_type_str = str(norm_type).upper().strip()
-            norm_number_str = str(norm_number).strip()
-
-            # 2. OBTENÇÃO DOS DETALHES COM TRATAMENTO DE FALHAS
-            details = {}
-            try:
-                details = self.get_norm_details(norm_type_str, norm_number_str) or {}
-                if not isinstance(details, dict):
-                    details = {}
-            except Exception as e:
-                logger.warning(f"Falha ao obter detalhes para {norm_type_str} {norm_number_str}: {str(e)}")
-
-            # 3. EXTRAÇÃO SEGURA DOS CAMPOS RELEVANTES
-            situacao = str(details.get('situacao', '')).lower()
-            texto_completo = str(details.get('texto_completo', '')).lower()
-            data_publicacao = details.get('data_publicacao')
-
-            # 4. LISTAS DE VERIFICAÇÃO (CONSTANTES)
-            IRREGULAR_TERMS = [
-                'irregular', 'anulad', 'cancelad', 'suspens', 'invalid',
-                'sem efeito', 'não cumprid', 'não observad', 'ilegal',
-                'inconstitucional', 'impugnad', 'cassad', 'extint'
-            ]
-            REVOKED_TERMS = [
-                'revogad', 'derrogad', 'ab-rogad', 'substituíd',
-                'alterad', 'modificad'
-            ]
-            ACTIVE_TERMS = [
-                'vigente', 'em vigor', 'validad', 'eficácia',
-                'em execução', 'ativo', 'válid'
-            ]
-
-            # 5. LÓGICA DE DECISÃO COM TRATAMENTO SEGURO
-            irregular = any(term in texto_completo for term in IRREGULAR_TERMS)
-            revoked = any(term in situacao for term in REVOKED_TERMS)
-            active = any(term in situacao for term in ACTIVE_TERMS)
-
-            # Hierarquia de decisão
-            if irregular:
-                status = "IRREGULAR"
-                vigente = False
-            elif revoked:
-                status = "REVOGADA"
-                vigente = False
-            elif active:
-                status = "VIGENTE"
-                vigente = True
-            else:
-                status = "INDETERMINADO"
-                vigente = False
-
-            # 6. VERIFICAÇÃO POR DATA (OPCIONAL)
-            if data_publicacao:
-                try:
-                    pub_date = (
-                        datetime.strptime(data_publicacao, '%Y-%m-%d').date()
-                        if isinstance(data_publicacao, str)
-                        else data_publicacao
-                    )
-                    
-                    if hasattr(pub_date, 'date'):  # Para objetos datetime
-                        pub_date = pub_date.date()
-                        
-                    if pub_date > timezone.now().date():
-                        status = "NÃO VIGENTE"
-                        vigente = False
-                except (ValueError, TypeError, AttributeError) as e:
-                    logger.debug(f"Erro ao processar data {data_publicacao}: {str(e)}")
-
-            # 7. PREPARAÇÃO DA RESPOSTA
-            response = {
-                "status": status,
-                "vigente": vigente,
-                "irregular": irregular,
-                "details": {
-                    k: v.isoformat() if hasattr(v, 'isoformat') else v
-                    for k, v in details.items()
-                },
-                "last_updated": timezone.now().isoformat(),
-                "norm_type": norm_type_str,
-                "norm_number": norm_number_str
-            }
-
-            # Remove valores None do response
-            return {k: v for k, v in response.items() if v is not None}
-
-        except Exception as e:
-            logger.error(
-                f"Erro crítico ao verificar norma {norm_type_str or 'N/A'} {norm_number_str or 'N/A'}: {str(e)}",
-                exc_info=True,
-                extra={
-                    "norm_type": norm_type_str,
-                    "norm_number": norm_number_str
-                }
-            )
-
+        if not details:
             return {
-                "status": "ERRO",
-                "vigente": False,
-                "irregular": False,
-                "error": str(e),
-                "last_updated": timezone.now().isoformat(),
-                "norm_type": norm_type_str,
-                "norm_number": norm_number_str
+                "status": "não encontrada",
+                "fonte": self.driver.current_url if self.driver else None
             }
+
+        # Garante que details é um dict e evita erro se for None
+        situacao = (details or {}).get('situacao', '')
+        situacao_lower = situacao.lower() if situacao else ''
+
+        if 'vigente' in situacao_lower:
+            status = "vigente"
+        elif 'revogado' in situacao_lower or 'cancelado' in situacao_lower:
+            status = "revogado/cancelado"
+        elif details.get('data_publicacao'):
+            status = "publicado (sem info de vigência)"
+        else:
+            status = "indefinido"
+
+        return {
+            "status": status,
+            "fonte": self.driver.current_url if self.driver else None,
+            "dados": details
+        }
+
 
 
     def test_connection(self):
-        """Testa conexão com o portal de forma robusta"""
+        """Testa conexão com o portal"""
         try:
-            # Teste HTTP básico
+            # Teste HTTP simples
             try:
-                response = requests.get(self.base_url, timeout=10, verify=False)
+                response = requests.get(self.base_url, timeout=10)
                 if response.status_code != 200:
-                    self.logger.error(f"Status HTTP inesperado: {response.status_code}")
                     return False
-            except requests.exceptions.RequestException as e:
-                self.logger.error(f"Erro na requisição HTTP: {str(e)}")
+            except requests.RequestException:
                 return False
-
+            
             # Teste com navegador
-            if not self.init_driver():
-                return False
-
-            try:
+            with self.browser_session():
                 self.driver.get(self.base_url)
-                
-                # Verificação adicional do conteúdo da página
-                if "sefaz" not in self.driver.title.lower():
-                    self.logger.error(f"Título da página inesperado: {self.driver.title}")
-                    return False
-                    
-                return True
-            except Exception as e:
-                self.logger.error(f"Erro no teste com navegador: {str(e)}")
-                return False
-                
-        finally:
-            if self.driver:
-                self.driver.quit()
-                self.driver = None
+                return "sefaz" in self.driver.title.lower()
+        except Exception:
+            return False
         
-    def _preprocessar_detalhes(self, detalhes):
-        """Converte objetos datetime para strings no campo detalhes"""
-        if not detalhes:
-            return detalhes
-            
-        # Adicione tratamento para diferentes tipos de datetime
-        for key, value in detalhes.items():
-            if isinstance(value, (datetime, timezone.datetime)):
-                detalhes[key] = value.isoformat()
-            elif isinstance(value, dict):
-                detalhes[key] = self._preprocessar_detalhes(value)
-                
-        return detalhes
-            
     def close(self):
-        """Fecha o driver corretamente"""
+        """Fecha o navegador, se estiver aberto"""
         if self.driver:
             self.driver.quit()
             self.driver = None

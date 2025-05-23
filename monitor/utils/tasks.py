@@ -1,5 +1,5 @@
 # monitor/utils/tasks.py
-import time
+
 from celery import chain, shared_task
 from datetime import datetime, timedelta, date # Adicione 'date' aqui
 import logging
@@ -13,7 +13,6 @@ from monitor.models import Documento, LogExecucao, NormaVigente
 from .sefaz_integracao import IntegradorSEFAZ
 from celery.schedules import crontab
 from diario_oficial.celery import app  
-from .sefaz_scraper import SEFAZScraper 
 
 
 logger = logging.getLogger(__name__)
@@ -152,71 +151,73 @@ def processar_documentos_pendentes_task(self, previous_task_result=None):
     return {'status': log_status, 'results': log_detalhes}
 
 
-def verificar_normas_sefaz_task(self, *args, **kwargs):
-    logger.info("Iniciando verificação para SEFAZ")
+@shared_task(bind=True)
+def verificar_normas_sefaz_task(self):
+    task_id = self.request.id
+    logger.info(f"[{task_id}] Tarefa Celery 'verificar_normas_sefaz_task' iniciada.")
+    log_status = 'ERRO'
+    log_detalhes = {}
 
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-
-    driver = None
     try:
-        logger.info("Inicializando WebDriver...")
-        driver = webdriver.Chrome(options=chrome_options)
-        logger.info("WebDriver inicializado.")
+        integrador_sefaz = IntegradorSEFAZ()
+        # Filtra normas que nunca foram verificadas ou que estão desatualizadas (mais de 30 dias)
+        normas_para_verificar = NormaVigente.objects.filter(
+            Q(data_verificacao__isnull=True) |
+            Q(data_verificacao__lt=timezone.now() - timedelta(days=30))
+        ).order_by('data_verificacao') # Verifica as mais antigas primeiro
 
-        url_sefaz = "https://portaldalegislacao.sefaz.pi.gov.br" # Substitua pela URL da página de busca real
-        logger.info(f"Acessando URL: {url_sefaz}")
-        driver.get(url_sefaz)
-        logger.info(f"Página atual: {driver.current_url}")
-        logger.info(f"Título da página: {driver.title}")
+        if not normas_para_verificar.exists():
+            log_status = 'NENHUM_ENCONTRADA'
+            log_detalhes = {'message': 'Nenhuma norma encontrada para verificação.'}
+            logger.info(f"[{task_id}] Nenhuma norma para verificar.")
+            return {'status': log_status, 'normas_verificadas': 0}
 
-        try:
+        logger.info(f"[{task_id}] Encontradas {normas_para_verificar.count()} normas para verificar.")
+        
+        # O método verificar_normas_em_lote já atualiza as normas no DB
+        # Convertendo o QuerySet para lista para evitar problemas com iteração durante o Selenium
+        resultados_lote = integrador_sefaz.verificar_normas_em_lote(list(normas_para_verificar))
+        normas_verificadas_count = len(resultados_lote)
 
-            logger.info("Página de busca carregada (elemento esperado encontrado).")
-        except Exception as e:
-            logger.error(f"Elemento de página de busca não encontrado: {e}")
-            driver.save_screenshot("/tmp/sefaz_pagina_busca_nao_carregada.png")
-            return {'total': 0, 'vigentes': 0, 'revogadas': 0, 'erros': 1, 'detalhes': f"Página de busca não carregada: {e}"}
-
-
-        total = 0 # Sua lógica para preencher estes valores
-        vigentes = 0
-        revogadas = 0
-        erros_logica = 0
-
-        # Seus prints de depuração podem se tornar logs aqui para ver o que está acontecendo
-        logger.info(f"Dados extraídos: Total={total}, Vigentes={vigentes}, Revogadas={revogadas}, ErrosLógica={erros_logica}")
-
-        # --- FIM DA LÓGICA DE INTERAÇÃO COM A PÁGINA ---
-
-        logger.info("Verificação concluída")
-        return {'total': total, 'vigentes': vigentes, 'revogadas': revogadas, 'erros': erros_logica}
+        log_status = 'SUCESSO'
+        log_detalhes = {
+            'total_normas_analisadas': normas_verificadas_count,
+            # Se você quiser detalhes de quantas vigentes/revogadas, o método de lote precisa retornar isso
+        }
 
     except Exception as e:
-        logger.error(f"Erro fatal na tarefa verificar_normas_sefaz_task: {e}", exc_info=True)
-        if driver:
-            try:
-                driver.save_screenshot(f"/tmp/sefaz_erro_fatal_{self.request.id}.png")
-                logger.info(f"Screenshot salvo em /tmp/sefaz_erro_fatal_{self.request.id}.png")
-            except Exception as se:
-                logger.error(f"Não foi possível salvar screenshot: {se}")
-        return {'total': 0, 'vigentes': 0, 'revogadas': 0, 'erros': 1, 'detalhes': f"Erro fatal: {e}"}
+        logger.error(f"[{task_id}] Erro fatal na verificação de normas SEFAZ: {e}", exc_info=True)
+        log_status = 'ERRO'
+        log_detalhes = {'erro': str(e), 'traceback': traceback.format_exc()}
+        raise self.retry(exc=e, countdown=60, max_retries=3)
+
     finally:
-        if driver:
-            driver.quit()
+        LogExecucao.objects.create(
+            tipo_execucao='VERIFICACAO_SEFAZ', # Tipo de log específico
+            status=log_status,
+            detalhes=log_detalhes
+        )
+        logger.info(f"[{task_id}] Tarefa Celery 'verificar_normas_sefaz_task' concluída com status: {log_status}.")
+        
+    return {'status': log_status, 'results': log_detalhes}
+
+
 # Pipeline completo: Coleta -> Processamento -> Verificação SEFAZ
 @shared_task(bind=True)
 def pipeline_coleta_e_processamento(self, data_inicio_str=None, data_fim_str=None):
-
+    """
+    Tarefa Celery que executa a coleta, em seguida o processamento de PDFs,
+    e por fim a verificação de normas na SEFAZ.
+    """
     task_id = self.request.id
     logger.info(f"[{task_id}] Iniciando pipeline completo de coleta, processamento e verificação SEFAZ.")
-
+    
+    # Encadeamento: Coleta -> Processamento -> Verificação SEFAZ
+    # Use chain() para garantir que a ordem seja mantida
     workflow = chain(
         coletar_diario_oficial_task.s(data_inicio_str, data_fim_str),
         processar_documentos_pendentes_task.s(),
-        verificar_normas_sefaz_task.si()
+        verificar_normas_sefaz_task.s()
     )
     
     # Dispara o pipeline encadeado
