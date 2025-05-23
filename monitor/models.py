@@ -70,9 +70,27 @@ class NormaVigente(models.Model):
     
     # NOVO CAMPO PARA O ANO
     ano = models.IntegerField(null=True, blank=True, db_index=True) # Ano pode ser nulo se não encontrado
-
+    fonte_confirmacao = models.CharField(
+        max_length=10, 
+        choices=[('SEFAZ', 'SEFAZ'), ('BING', 'Bing')],
+        null=True,
+        blank=True
+    )
+    resumo_ia = models.TextField(
+        'Resumo da IA',
+        null=True,
+        blank=True
+    )
+    url_consulta = models.URLField(
+        'URL de consulta',
+        null=True,
+        blank=True
+    )
+    data_verificacao = models.DateTimeField(
+        'Data da última verificação',
+        auto_now=True
+    )
     situacao = models.CharField(max_length=20, choices=SITUACAO_CHOICES, default='A_VERIFICAR')
-    data_verificacao = models.DateTimeField(null=True, blank=True)
     url = models.URLField(blank=True, verbose_name="URL da Norma")
     descricao = models.TextField(blank=True, verbose_name="Descrição/Objeto")
     detalhes = models.JSONField(blank=True, null=True, help_text="Detalhes da consulta na SEFAZ")

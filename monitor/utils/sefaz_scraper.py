@@ -20,7 +20,6 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-
 logger = logging.getLogger(__name__)
 
 class SEFAZScraper:
@@ -29,6 +28,8 @@ class SEFAZScraper:
         self.timeout = 30
         self.debug_dir = r"C:\Users\RRCONTAS\Documents\GitHub\monitor\debug"
         self.driver = None
+        self.bing_scraper = None
+
         
         # Termos com 100% de prioridade
         self.priority_terms = [
@@ -51,7 +52,11 @@ class SEFAZScraper:
         self.chrome_options.add_argument("--window-size=1920,1080")
         self.chrome_options.add_argument("--no-sandbox")
         self.chrome_options.add_argument("--disable-dev-shm-usage")
-        self.chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        self.chrome_options.add_argument("--disable-gpu")
+        self.chrome_options.add_argument("--disable-web-security")
+        self.chrome_options.add_argument("--allow-running-insecure-content")
+        self.chrome_options.add_argument("--disable-extensions")
+        self.chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.7103.114 Safari/537.36")
         
         # Cria diretório de debug
         os.makedirs(self.debug_dir, exist_ok=True)
@@ -59,36 +64,71 @@ class SEFAZScraper:
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
 
+    def _setup_chromedriver(self):
+        """Configura o ChromeDriver com tratamento de erros e versão atualizada"""
+        try:
+            self.logger.info("Configurando ChromeDriver...")
+            
+            # Usa o ChromeDriverManager sem tentar remover o cache manualmente
+            service = Service(ChromeDriverManager().install())
+            self.logger.info(f"ChromeDriver configurado: {service.path}")
+            return service
+            
+        except Exception as e:
+            self.logger.error(f"Erro ao configurar ChromeDriver: {e}")
+            raise
 
     def get_priority_terms(self):
         """Retorna a lista de termos prioritários"""
         return self.priority_terms
 
     def _save_debug_info(self, prefix):
-
         pass
 
     @contextmanager
     def browser_session(self):
-        """Gerenciador de contexto robusto"""
+        """Gerenciador de contexto robusto com tratamento de erros do ChromeDriver"""
         self.driver = None
-        try:
-            service = Service(ChromeDriverManager().install())
-            self.driver = webdriver.Chrome(
-                service=service,
-                options=self.chrome_options
-            )
-            self.driver.set_page_load_timeout(self.timeout)
-            yield self.driver
-        except Exception as e:
-            self.logger.error(f"Erro na sessão do navegador: {str(e)}")
-            raise
-        finally:
-            if self.driver:
-                try:
-                    self.driver.quit()
-                except Exception as e:
-                    self.logger.warning(f"Erro ao fechar navegador: {str(e)}")
+        max_retries = 3
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                service = self._setup_chromedriver()
+                self.driver = webdriver.Chrome(
+                    service=service,
+                    options=self.chrome_options
+                )
+                
+                self.driver.set_page_load_timeout(self.timeout)
+                self.logger.info("Sessão do navegador iniciada com sucesso")
+                yield self.driver
+                break
+                
+            except Exception as e:
+                retry_count += 1
+                self.logger.error(f"Tentativa {retry_count}/{max_retries} falhou: {str(e)}")
+                
+                if self.driver:
+                    try:
+                        self.driver.quit()
+                    except:
+                        pass
+                    self.driver = None
+                
+                if retry_count >= max_retries:
+                    self.logger.error("Todas as tentativas de iniciar o navegador falharam")
+                    raise Exception(f"Falha ao iniciar o navegador após {max_retries} tentativas: {str(e)}")
+                
+                time.sleep(2)
+                
+        if self.driver:
+            try:
+                self.driver.quit()
+                self.logger.info("Navegador fechado com sucesso")
+            except Exception as e:
+                self.logger.warning(f"Erro ao fechar navegador: {str(e)}")
+            finally:
                 self.driver = None
 
     def _wait_for_element(self, by, value, timeout=30):
@@ -104,57 +144,58 @@ class SEFAZScraper:
         """Padroniza números para comparação"""
         return re.sub(r'[^\d/]', '', number).lower()
 
-    # Modifiquei o método _pesquisar_norma para aceitar pesquisa pelos termos prioritários
-    def _pesquisar_norma(self, norm_type=None, norm_number=None, term=None):
-        """Executa a pesquisa no portal com norm_type/norm_number ou com termo prioritário"""
-        try:
-            search_input = self._wait_for_element(
-                By.CSS_SELECTOR, "input[formcontrolname='searchQuery']")
-            
-            if not search_input:
-                self.logger.error("Campo de busca não encontrado")
-                return False
-            
-            # Define o termo de busca: se receber term, usa ele, senão usa norm_type + norm_number
-            if term:
-                termo_busca = term + "*"
-            else:
-                termo_busca = f"{norm_type} {norm_number}*" if norm_type and norm_number else ""
-            
-            if not termo_busca:
-                self.logger.error("Nenhum termo de busca fornecido")
-                return False
+    def _pesquisar_norma(self, norm_type, norm_number, norm_year=None):
+        """Tenta múltiplas estratégias de pesquisa"""
+        estrategias = []
+        
+        # Estratégia 1: Com ano e aspas exatas
+        if norm_year:
+            estrategias.append(f'"{norm_type} {norm_number}/{norm_year}"')
+        
+        # Estratégia 2: Sem ano mas com número completo
+        estrategias.append(f"{norm_type} {norm_number}")
+        
+        # Estratégia 3: Apenas número para buscas mais amplas
+        if '/' in norm_number:
+            num_base = norm_number.split('/')[0]
+            estrategias.append(f"{norm_type} {num_base}*")
+        
+        for termo in estrategias:
+            try:
+                search_input = self._wait_for_element(By.CSS_SELECTOR, "input[formcontrolname='searchQuery']")
+                search_input.clear()
+                search_input.send_keys(termo)
+                search_button = self.driver.find_element(By.CSS_SELECTOR, "img[alt='search']")
+                search_button.click()
+                
+                # Verifica se encontrou resultados
+                if self._verificar_resultados():
+                    return True
+                    
+            except Exception as e:
+                continue
+        
+        return False
 
-            search_input.clear()
-            search_input.send_keys(termo_busca)
-            self._save_debug_info("02_campo_preenchido")
-            
-            # Clica no botão de busca (melhor que usar Keys.RETURN)
-            search_button = self.driver.find_element(By.CSS_SELECTOR, "img[alt='search']")
-            search_button.click()
-            
-            # Aguarda o carregamento
-            WebDriverWait(self.driver, 10).until(
-                lambda d: d.find_element(By.TAG_NAME, "iframe").is_displayed())
-            
-            self._save_debug_info("03_pos_busca")
+    def _verificar_resultados(self):
+        """Verifica se a busca retornou resultados válidos"""
+        try:
+            WebDriverWait(self.driver, 5).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, ".resultado-item")))
             return True
-            
-        except Exception as e:
-            self.logger.error(f"Erro ao pesquisar: {str(e)}")
-            self._save_debug_info("99_erro_pesquisa")
+        except:
             return False
 
-    def get_norm_details(self, norm_type, norm_number):
-        """Busca detalhes da norma com base na estrutura HTML fornecida"""
+    def get_norm_details(self, norm_type, norm_number, norm_year=None):
+        """Busca detalhes da norma incluindo o ano se disponível"""
         try:
             with self.browser_session():
                 # 1. Acessa a página principal
                 self.driver.get(self.base_url)
                 self._save_debug_info("01_pagina_inicial")
                 
-                # 2. Executa a pesquisa
-                if not self._pesquisar_norma(norm_type, norm_number):
+                # 2. Executa a pesquisa incluindo o ano
+                if not self._pesquisar_norma(norm_type, norm_number, norm_year=norm_year):
                     return None
                 
                 # 3. Aguarda e muda para o iframe de resultados
@@ -186,9 +227,10 @@ class SEFAZScraper:
                         'altera': self._extract_links(doc_body, "field-alt")
                     }
                     
-                    # Constrói o resultado
+                    # Constrói o resultado incluindo o ano se existir
+                    norma_completa = f"{norm_type} {norm_number}" + (f"/{norm_year}" if norm_year else "")
                     result = {
-                        'norma': f"{norm_type} {norm_number}",
+                        'norma': norma_completa,
                         'texto_completo': snippet,
                         **fields
                     }
@@ -310,37 +352,54 @@ class SEFAZScraper:
             self.logger.error(f"Erro na verificação: {str(e)}")
             return False
 
-    def check_norm_status(self, norm_type, norm_number):
-        """Verifica status da norma e retorna informações detalhadas"""
-        details = self.get_norm_details(norm_type, norm_number)
-
-        if not details:
-            return {
-                "status": "não encontrada",
-                "fonte": self.driver.current_url if self.driver else None
-            }
-
-        # Garante que details é um dict e evita erro se for None
-        situacao = (details or {}).get('situacao', '')
-        situacao_lower = situacao.lower() if situacao else ''
-
-        if 'vigente' in situacao_lower:
-            status = "vigente"
-        elif 'revogado' in situacao_lower or 'cancelado' in situacao_lower:
-            status = "revogado/cancelado"
-        elif details.get('data_publicacao'):
-            status = "publicado (sem info de vigência)"
-        else:
-            status = "indefinido"
-
-        return {
-            "status": status,
-            "fonte": self.driver.current_url if self.driver else None,
-            "dados": details
+    def check_norm_status(self, norm_type, norm_number, norm_year=None):
+        """Versão híbrida que verifica SEFAZ e Bing/Copilot"""
+        resultado = {
+            'sefaz': None,
+            'bing': None,
+            'status': 'não encontrado',
+            'vigente': False,
+            'resumo_ia': None
         }
+        
+        with self.browser_session():
+            # 1. Pesquisa na SEFAZ (prioritário)
+            resultado['sefaz'] = self.get_norm_details(norm_type, norm_number, norm_year)
+            
+            # 2. Se SEFAZ não retornou, tenta Bing
+            if not resultado['sefaz'] or not resultado['sefaz'].get('texto_completo'):
+                self.bing_scraper = BingScraper(self.driver)
+                resultado['bing'] = self.bing_scraper.pesquisar_norma(norm_type, norm_number, norm_year)
+                
+                if resultado['bing']:
+                    resultado['resumo_ia'] = resultado['bing'].get('resumo_copilot')
+                    resultado['status'] = self._analisar_resposta_bing(resultado['bing'])
+            
+            # Determina status final
+            if resultado['sefaz']:
+                resultado.update(self._determinar_status_sefaz(resultado['sefaz']))
+            elif resultado['bing']:
+                resultado['vigente'] = self._determinar_status_bing(resultado['bing'])
+            
+            return resultado
 
-
-
+    def _analisar_resposta_bing(self, dados_bing):
+        """Analisa a resposta do Bing/Copilot"""
+        if not dados_bing:
+            return 'não encontrado'
+            
+        texto_analise = ""
+        if dados_bing.get('resumo_copilot'):
+            texto_analise = dados_bing['resumo_copilot'].lower()
+        elif dados_bing.get('resultados_bing'):
+            texto_analise = ' '.join([r['snippet'].lower() for r in dados_bing['resultados_bing']])
+        
+        if 'revogado' in texto_analise or 'cancelado' in texto_analise:
+            return 'revogado (fonte: Bing)'
+        elif 'vigente' in texto_analise or 'em vigor' in texto_analise:
+            return 'vigente (fonte: Bing)'
+        else:
+            return 'encontrado mas status indeterminado (fonte: Bing)'
     def test_connection(self):
         """Testa conexão com o portal"""
         try:

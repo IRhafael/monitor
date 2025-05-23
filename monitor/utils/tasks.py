@@ -1,227 +1,201 @@
-# monitor/utils/tasks.py
-
 from celery import chain, shared_task
-from datetime import datetime, timedelta, date # Adicione 'date' aqui
+from datetime import datetime, timedelta, date
 import logging
 from django.utils import timezone
 from django.db import transaction
 import traceback
-from django.db.models import Q 
+from django.db.models import Q, Case, When, Value, CharField
 from .diario_scraper import DiarioOficialScraper
 from .pdf_processor import PDFProcessor
 from monitor.models import Documento, LogExecucao, NormaVigente
 from .sefaz_integracao import IntegradorSEFAZ
 from celery.schedules import crontab
-from diario_oficial.celery import app  
-
+from diario_oficial.celery import app
 
 logger = logging.getLogger(__name__)
-
-
 
 app.conf.beat_schedule = {
     'coleta-automatica-3dias': {
         'task': 'monitor.utils.tasks.pipeline_coleta_e_processamento',
-        'schedule': crontab(day_of_month='*/3'),  # A cada 3 dias
+        'schedule': crontab(day_of_month='*/3'),
         'args': (
             (date.today() - timedelta(days=3)).strftime('%Y-%m-%d'),
             date.today().strftime('%Y-%m-%d')
         ),
     },
+    'verificacao-normas-diaria': {
+        'task': 'monitor.utils.tasks.verificar_normas_sefaz_task',
+        'schedule': crontab(hour=3, minute=30),  # Executa diariamente às 3:30 AM
+    },
 }
-
 
 @shared_task(bind=True)
 def coletar_diario_oficial_task(self, data_inicio_str=None, data_fim_str=None):
     task_id = self.request.id
     logger.info(f"Tarefa Celery 'coletar_diario_oficial_task' [{task_id}] iniciada.")
 
-    data_inicio = None
-    data_fim = None
-    log_status = 'ERRO'
-    log_detalhes = {}
-    documentos_coletados_raw = []
-    documentos_salvos_count = 0
-
     try:
-        if data_inicio_str:
-            data_inicio = datetime.strptime(data_inicio_str, '%Y-%m-%d').date()
-        if data_fim_str:
-            data_fim = datetime.strptime(data_fim_str, '%Y-%m-%d').date()
-
-        if not data_inicio or not data_fim:
-            data_fim = date.today() # Use 'date' aqui
-            data_inicio = data_fim - timedelta(days=3)
-            logger.info(f"[{task_id}] Datas não fornecidas. Usando os últimos 3 dias: de {data_inicio} a {data_fim}")
+        data_inicio = datetime.strptime(data_inicio_str, '%Y-%m-%d').date() if data_inicio_str else date.today() - timedelta(days=3)
+        data_fim = datetime.strptime(data_fim_str, '%Y-%m-%d').date() if data_fim_str else date.today()
 
         scraper = DiarioOficialScraper()
-        logger.info(f"[{task_id}] Iniciando coleta de documentos do Diário Oficial de {data_inicio} a {data_fim}.")
+        documentos_coletados = scraper.coletar_e_salvar_documentos(data_inicio, data_fim)
 
-        documentos_coletados_raw = scraper.coletar_e_salvar_documentos(data_inicio, data_fim)
-        documentos_salvos_count = len(documentos_coletados_raw)
-
-        log_status = 'SUCESSO'
-        log_detalhes = {
-            'documentos_coletados': documentos_salvos_count,
-            'datas_coletadas': f"{data_inicio} a {data_fim}"
-        }
-
-    except Exception as e:
-        logger.error(f"[{task_id}] Erro na tarefa de coleta do Diário Oficial: {e}", exc_info=True)
-        log_status = 'ERRO'
-        log_detalhes = {'erro': str(e), 'traceback': traceback.format_exc()}
-        raise self.retry(exc=e, countdown=60, max_retries=3) # Adicionado retry para falhas de rede/scraper
-
-    finally:
         LogExecucao.objects.create(
             tipo_execucao='COLETA',
-            status=log_status,
-            detalhes=log_detalhes
+            status='SUCESSO',
+            detalhes={
+                'documentos_coletados': len(documentos_coletados),
+                'periodo': f"{data_inicio} a {data_fim}"
+            }
         )
-        logger.info(f"[{task_id}] Tarefa Celery 'coletar_diario_oficial_task' concluída com status: {log_status}.")
+        
+        logger.info(f"[{task_id}] Coleta concluída com {len(documentos_coletados)} documentos.")
+        return {'status': 'SUCESSO', 'documentos_coletados': len(documentos_coletados)}
 
-    return {'status': log_status, 'documentos_coletados': documentos_salvos_count}
-
+    except Exception as e:
+        logger.error(f"[{task_id}] Erro na coleta: {str(e)}", exc_info=True)
+        LogExecucao.objects.create(
+            tipo_execucao='COLETA',
+            status='ERRO',
+            detalhes={'erro': str(e), 'traceback': traceback.format_exc()}
+        )
+        raise self.retry(exc=e, countdown=300, max_retries=3)
 
 @shared_task(bind=True)
 def processar_documentos_pendentes_task(self, previous_task_result=None):
     task_id = self.request.id
-    logger.info(f"[{task_id}] Tarefa Celery 'processar_documentos_pendentes_task' iniciada.")
-    log_status = 'ERRO'
-    log_detalhes = {}
-
-    sucesso_count = 0
-    irrelevantes_count = 0
-    falhas_count = 0
+    logger.info(f"[{task_id}] Iniciando processamento de documentos pendentes.")
 
     try:
         processor = PDFProcessor()
-        documentos_pendentes = Documento.objects.filter(processado=False).order_by('data_publicacao')
-        total_a_processar = documentos_pendentes.count()
+        docs_pendentes = Documento.objects.filter(processado=False).order_by('data_publicacao')
         
-        logger.info(f"[{task_id}] Iniciando processamento em lote de {total_a_processar} documentos pendentes.")
+        if not docs_pendentes.exists():
+            logger.info(f"[{task_id}] Nenhum documento pendente para processar.")
+            return {'status': 'SEM_PENDENTES'}
 
-        if total_a_processar == 0:
-            log_status = 'NENHUM_PROCESSADO'
-            log_detalhes = {'message': 'Nenhum documento pendente para processar.'}
-            logger.info(f"[{task_id}] {log_detalhes['message']}")
-            return {'status': log_status, 'results': log_detalhes}
-
-        # Itera sobre cada documento pendente e chama process_document
-        with transaction.atomic(): # Garante que todas as atualizações sejam atômicas
-            for documento in documentos_pendentes:
-                try:
-                    # process_document retorna um dicionário com 'status', 'message', etc.
-                    # e já atualiza o documento no DB
-                    process_result = processor.process_document(documento)
-                    
-                    if process_result.get('status') == 'SUCESSO':
-                        sucesso_count += 1
-                    elif process_result.get('status') == 'IGNORADO_IRRELEVANTE':
-                        irrelevantes_count += 1
-                    else: # status == 'ERRO' ou outro
-                        falhas_count += 1
-                        logger.error(f"[{task_id}] Falha ao processar documento ID {documento.id}: {process_result.get('message', 'Erro desconhecido')}")
-                except Exception as doc_e:
-                    falhas_count += 1
-                    logger.error(f"[{task_id}] Erro inesperado ao processar documento ID {documento.id}: {doc_e}", exc_info=True)
-        
-        log_status = 'SUCESSO' # Assume sucesso se a iteração não lançar erro fatal
-        log_detalhes = {
-            'processados_com_sucesso': sucesso_count,
-            'documentos_irrelevantes': irrelevantes_count,
-            'erros': falhas_count,
-            'total_analisados': total_a_processar
+        resultados = {
+            'sucesso': 0,
+            'irrelevantes': 0,
+            'erros': 0,
+            'normas_identificadas': 0
         }
-        
-    except Exception as e:
-        logger.error(f"[{task_id}] Erro fatal no processamento de PDFs: {e}", exc_info=True)
-        log_status = 'ERRO'
-        log_detalhes = {'erro': str(e), 'traceback': traceback.format_exc()}
-        raise # Relaça a exceção para que Celery marque a tarefa como falha
 
-    finally:
+        for doc in docs_pendentes:
+            try:
+                resultado = processor.process_document(doc)
+                if resultado['status'] == 'SUCESSO':
+                    resultados['sucesso'] += 1
+                    resultados['normas_identificadas'] += len(resultado.get('normas_extraidas', []))
+                elif resultado['status'] == 'IGNORADO_IRRELEVANTE':
+                    resultados['irrelevantes'] += 1
+                else:
+                    resultados['erros'] += 1
+            except Exception as e:
+                resultados['erros'] += 1
+                logger.error(f"[{task_id}] Erro ao processar documento {doc.id}: {str(e)}")
+
         LogExecucao.objects.create(
-            tipo_execucao='PROCESSAMENTO_PDF',
-            status=log_status,
-            detalhes=log_detalhes
+            tipo_execucao='PROCESSAMENTO',
+            status='SUCESSO',
+            detalhes=resultados
         )
-        logger.info(f"[{task_id}] Tarefa Celery 'processar_documentos_pendentes_task' concluída com status: {log_status}.")
         
-    return {'status': log_status, 'results': log_detalhes}
+        logger.info(f"[{task_id}] Processamento concluído: {resultados}")
+        return {'status': 'SUCESSO', 'resultados': resultados}
 
+    except Exception as e:
+        logger.error(f"[{task_id}] Erro no processamento: {str(e)}", exc_info=True)
+        LogExecucao.objects.create(
+            tipo_execucao='PROCESSAMENTO',
+            status='ERRO',
+            detalhes={'erro': str(e)}
+        )
+        raise self.retry(exc=e, countdown=600, max_retries=3)
 
 @shared_task(bind=True)
-def verificar_normas_sefaz_task(self):
+def verificar_normas_sefaz_task(self, *_args, **_kwargs):
     task_id = self.request.id
-    logger.info(f"[{task_id}] Tarefa Celery 'verificar_normas_sefaz_task' iniciada.")
-    log_status = 'ERRO'
-    log_detalhes = {}
+    logger.info(f"[{task_id}] Iniciando verificação de normas na SEFAZ.")
 
     try:
-        integrador_sefaz = IntegradorSEFAZ()
-        # Filtra normas que nunca foram verificadas ou que estão desatualizadas (mais de 30 dias)
-        normas_para_verificar = NormaVigente.objects.filter(
-            Q(data_verificacao__isnull=True) |
-            Q(data_verificacao__lt=timezone.now() - timedelta(days=30))
-        ).order_by('data_verificacao') # Verifica as mais antigas primeiro
-
-        if not normas_para_verificar.exists():
-            log_status = 'NENHUM_ENCONTRADA'
-            log_detalhes = {'message': 'Nenhuma norma encontrada para verificação.'}
-            logger.info(f"[{task_id}] Nenhuma norma para verificar.")
-            return {'status': log_status, 'normas_verificadas': 0}
-
-        logger.info(f"[{task_id}] Encontradas {normas_para_verificar.count()} normas para verificar.")
+        integrador = IntegradorSEFAZ()
         
-        # O método verificar_normas_em_lote já atualiza as normas no DB
-        # Convertendo o QuerySet para lista para evitar problemas com iteração durante o Selenium
-        resultados_lote = integrador_sefaz.verificar_normas_em_lote(list(normas_para_verificar))
-        normas_verificadas_count = len(resultados_lote)
+        # Normas para verificar: nunca verificadas ou verificadas há mais de 15 dias
+        normas = NormaVigente.objects.filter(
+            Q(data_verificacao__isnull=True) |
+            Q(data_verificacao__lt=timezone.now() - timedelta(days=15))
+        ).annotate(
+            status_anterior=Case(
+                When(situacao='VIGENTE', then=Value('VIGENTE')),
+                When(situacao='REVOGADA', then=Value('REVOGADA')),
+                default=Value('NAO_VERIFICADO'),
+                output_field=CharField()
+            )
+        ).order_by('data_verificacao')[:50]  # Limita a 50 por execução
 
-        log_status = 'SUCESSO'
-        log_detalhes = {
-            'total_normas_analisadas': normas_verificadas_count,
-            # Se você quiser detalhes de quantas vigentes/revogadas, o método de lote precisa retornar isso
+        if not normas.exists():
+            logger.info(f"[{task_id}] Nenhuma norma para verificar.")
+            return {'status': 'SEM_NORMAS_PENDENTES'}
+
+        resultados = integrador.verificar_normas_em_lote(normas)
+        
+        # Contabiliza mudanças
+        mudancas = {
+            'novas_vigentes': 0,
+            'novas_revogadas': 0,
+            'mantidas': 0,
+            'erros': 0
         }
 
-    except Exception as e:
-        logger.error(f"[{task_id}] Erro fatal na verificação de normas SEFAZ: {e}", exc_info=True)
-        log_status = 'ERRO'
-        log_detalhes = {'erro': str(e), 'traceback': traceback.format_exc()}
-        raise self.retry(exc=e, countdown=60, max_retries=3)
+        for norma in resultados:
+            if norma.situacao == 'VIGENTE' and norma.status_anterior != 'VIGENTE':
+                mudancas['novas_vigentes'] += 1
+            elif norma.situacao == 'REVOGADA' and norma.status_anterior != 'REVOGADA':
+                mudancas['novas_revogadas'] += 1
+            elif norma.situacao == norma.status_anterior:
+                mudancas['mantidas'] += 1
+            else:
+                mudancas['erros'] += 1
 
-    finally:
         LogExecucao.objects.create(
-            tipo_execucao='VERIFICACAO_SEFAZ', # Tipo de log específico
-            status=log_status,
-            detalhes=log_detalhes
+            tipo_execucao='VERIFICACAO_SEFAZ',
+            status='SUCESSO',
+            detalhes={
+                'normas_verificadas': len(resultados),
+                'mudancas': mudancas
+            }
         )
-        logger.info(f"[{task_id}] Tarefa Celery 'verificar_normas_sefaz_task' concluída com status: {log_status}.")
         
-    return {'status': log_status, 'results': log_detalhes}
+        logger.info(f"[{task_id}] Verificação concluída: {len(resultados)} normas verificadas.")
+        return {'status': 'SUCESSO', 'resultados': mudancas}
 
+    except Exception as e:
+        logger.error(f"[{task_id}] Erro na verificação: {str(e)}", exc_info=True)
+        LogExecucao.objects.create(
+            tipo_execucao='VERIFICACAO_SEFAZ',
+            status='ERRO',
+            detalhes={'erro': str(e)}
+        )
+        raise self.retry(exc=e, countdown=900, max_retries=2)
 
-# Pipeline completo: Coleta -> Processamento -> Verificação SEFAZ
 @shared_task(bind=True)
 def pipeline_coleta_e_processamento(self, data_inicio_str=None, data_fim_str=None):
-    """
-    Tarefa Celery que executa a coleta, em seguida o processamento de PDFs,
-    e por fim a verificação de normas na SEFAZ.
-    """
     task_id = self.request.id
-    logger.info(f"[{task_id}] Iniciando pipeline completo de coleta, processamento e verificação SEFAZ.")
-    
-    # Encadeamento: Coleta -> Processamento -> Verificação SEFAZ
-    # Use chain() para garantir que a ordem seja mantida
-    workflow = chain(
-        coletar_diario_oficial_task.s(data_inicio_str, data_fim_str),
-        processar_documentos_pendentes_task.s(),
-        verificar_normas_sefaz_task.s()
-    )
-    
-    # Dispara o pipeline encadeado
-    workflow.apply_async() # apply_async é melhor para iniciar chains
-    
-    logger.info(f"[{task_id}] Pipeline completo disparado: Coleta -> Processamento -> Verificação SEFAZ.")
-    return {'status': 'PIPELINE_DISPARADO', 'pipeline_task_id': task_id}
+    logger.info(f"[{task_id}] Iniciando pipeline completo.")
+
+    try:
+        # Encadeamento das tarefas
+        chain(
+            coletar_diario_oficial_task.s(data_inicio_str, data_fim_str),
+            processar_documentos_pendentes_task.s(),
+            verificar_normas_sefaz_task.si()  
+        ).apply_async()
+
+        logger.info(f"[{task_id}] Pipeline disparado com sucesso.")
+        return {'status': 'PIPELINE_INICIADO'}
+
+    except Exception as e:
+        logger.error(f"[{task_id}] Erro ao iniciar pipeline: {str(e)}")
+        raise

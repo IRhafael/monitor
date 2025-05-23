@@ -2,8 +2,7 @@ import os
 from datetime import datetime
 import logging
 from django.conf import settings
-from django.db.models import Count, Q, F, Value, CharField
-from django.db.models.functions import Concat
+from django.db.models import Count, Q, Max
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
@@ -14,22 +13,25 @@ logger = logging.getLogger(__name__)
 class RelatorioGenerator:
     @staticmethod
     def gerar_relatorio_contabil():
+        """Gera relatório contábil completo com abas para documentos, normas e estatísticas"""
         try:
-            # Configura caminhos
+            # Configura caminhos e cria diretório se necessário
             relatorios_dir = os.path.join(settings.MEDIA_ROOT, 'relatorios')
             os.makedirs(relatorios_dir, exist_ok=True)
             
-            # Cria workbook
+            # Cria workbook e planilhas
             wb = Workbook()
             ws_docs = wb.active
             ws_docs.title = "Documentos Contábeis"
             
-            # Cabeçalho com estilo melhorado
-            cabecalho_docs = ["ID", "Título", "Data Publicação", "Assunto", "Resumo", "Normas Relacionadas"]
+            # Planilha de Documentos Contábeis
+            cabecalho_docs = [
+                "ID", "Título", "Data Publicação", "Assunto", 
+                "Resumo", "Normas Relacionadas", "Fonte Verificação"
+            ]
             RelatorioGenerator._adicionar_cabecalho(ws_docs, cabecalho_docs)
             
-            # Preenche dados - com ordenação e otimização de consulta
-            from monitor.models import Documento
+            # Consulta otimizada para documentos
             documentos = Documento.objects.filter(
                 relevante_contabil=True, 
                 processado=True
@@ -39,29 +41,47 @@ class RelatorioGenerator:
             
             RelatorioGenerator._preencher_planilha_documentos(ws_docs, documentos)
             
-            # Segunda aba: Resumo de Normas
+            # Planilha de Resumo de Normas
             ws_normas = wb.create_sheet(title="Resumo Normas")
-            cabecalho_normas = ["Tipo", "Número", "Situação", "Frequência", "Documentos Relacionados"]
+            cabecalho_normas = [
+                "Tipo", "Número", "Situação", "Frequência", 
+                "Documentos Relacionados", "Fonte", "Última Verificação", "Resumo IA"
+            ]
             RelatorioGenerator._adicionar_cabecalho(ws_normas, cabecalho_normas)
             
-            # Dados de normas com contagem agrupada e otimização
-            normas = NormaVigente.objects.filter(
-                documentos__relevante_contabil=True  # Use 'documentos' em vez de 'documento'
-            ).annotate(
+            # Consulta otimizada para normas
+            normas = NormaVigente.objects.annotate(
                 qtd_docs=Count('documentos')
             ).order_by('-qtd_docs', 'tipo', 'numero')
             
             RelatorioGenerator._preencher_planilha_normas(ws_normas, normas)
             
-            # Terceira aba: Estatísticas
+            # Planilha de Normas Não Encontradas
+            ws_nao_encontradas = wb.create_sheet(title="Normas Problemáticas")
+            cabecalho_problemas = [
+                "Tipo", "Número", "Situação", "Última Menção", 
+                "Documentos", "Fonte Alternativa", "Resumo IA"
+            ]
+            RelatorioGenerator._adicionar_cabecalho(ws_nao_encontradas, cabecalho_problemas)
+            
+            normas_problema = NormaVigente.objects.filter(
+                Q(situacao='NÃO ENCONTRADA') | Q(fonte_confirmacao='BING')
+            ).annotate(
+                qtd_docs=Count('documentos')
+            ).order_by('-data_verificacao')
+            
+            RelatorioGenerator._preencher_planilha_problemas(ws_nao_encontradas, normas_problema)
+            
+            # Planilha de Estatísticas
             ws_stats = wb.create_sheet(title="Estatísticas")
             RelatorioGenerator._gerar_estatisticas(ws_stats)
             
-            # Ajusta largura das colunas em todas as planilhas
-            for ws in [ws_docs, ws_normas, ws_stats]:
+            # Ajusta formatação de todas as planilhas
+            for ws in wb.worksheets:
                 RelatorioGenerator._ajustar_colunas(ws)
+                RelatorioGenerator._aplicar_auto_filtro(ws)
             
-            # Salva arquivo
+            # Salva arquivo com timestamp
             nome_arquivo = f"relatorio_contabil_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
             caminho_completo = os.path.join(relatorios_dir, nome_arquivo)
             wb.save(caminho_completo)
@@ -72,287 +92,267 @@ class RelatorioGenerator:
         except Exception as e:
             logger.error(f"Erro ao gerar relatório: {e}", exc_info=True)
             return None
-    
+
     @staticmethod
     def _adicionar_cabecalho(worksheet, cabecalho):
-        """Adiciona cabeçalho com estilo melhorado"""
+        """Adiciona cabeçalho estilizado à planilha"""
         worksheet.append(cabecalho)
         
         # Estilos do cabeçalho
-        header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
-        header_font = Font(color="FFFFFF", bold=True, size=12)
-        header_border = Border(
-            bottom=Side(border_style="medium", color="FFFFFF")
-        )
-        header_alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        header_style = {
+            'fill': PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid"),
+            'font': Font(color="FFFFFF", bold=True, size=12),
+            'border': Border(bottom=Side(border_style="medium", color="FFFFFF")),
+            'alignment': Alignment(horizontal='center', vertical='center', wrap_text=True)
+        }
         
-        # Aplica estilos
         for cell in worksheet[1]:
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.border = header_border
-            cell.alignment = header_alignment
-    
+            for attr, value in header_style.items():
+                setattr(cell, attr, value)
+
     @staticmethod
     def _preencher_planilha_documentos(worksheet, documentos):
-        """Preenche planilha de documentos contábeis com formatação"""
-        # Estilos para alternância de linhas
-        zebra_fill = PatternFill(start_color="EEF1F5", end_color="EEF1F5", fill_type="solid")
-        row_num = 2  # Começa após o cabeçalho
+        """Preenche a planilha de documentos com formatação condicional"""
+        zebra_style = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
         
-        for doc in documentos:
-            # Extrai informações das normas
-            normas = ", ".join([f"{n.tipo} {n.numero}" for n in doc.normas_relacionadas.all()]) or "Nenhuma norma"
+        for row_num, doc in enumerate(documentos, start=2):
+            normas = ", ".join([f"{n.tipo} {n.numero}" for n in doc.normas_relacionadas.all()[:3]])
+            if doc.normas_relacionadas.count() > 3:
+                normas += f" (+{doc.normas_relacionadas.count() - 3} mais)"
+                
+            fonte = ", ".join(set([n.fonte_confirmacao or "N/A" for n in doc.normas_relacionadas.all()]))
             
-            # Limita tamanho do resumo para não sobrecarregar a planilha
-            resumo = doc.resumo[:500] + "..." if doc.resumo and len(doc.resumo) > 500 else (doc.resumo or "Sem resumo")
-            
-            # Adiciona linha
             worksheet.append([
                 doc.id,
                 doc.titulo,
                 doc.data_publicacao.strftime("%d/%m/%Y"),
                 doc.assunto or "Não especificado",
-                resumo,
-                normas
+                doc.resumo[:300] + "..." if doc.resumo and len(doc.resumo) > 300 else doc.resumo,
+                normas,
+                fonte
             ])
             
-            # Aplica estilo zebrado
+            # Formatação zebrada
             if row_num % 2 == 0:
                 for cell in worksheet[row_num]:
-                    cell.fill = zebra_fill
+                    cell.fill = zebra_style
             
-            # Alinhamento para todas as células
-            for cell in worksheet[row_num]:
-                cell.alignment = Alignment(vertical='center', wrap_text=True)
-            
-            # Alinha ID à direita
-            worksheet.cell(row=row_num, column=1).alignment = Alignment(horizontal='right')
-            
-            row_num += 1
-    
+            # Alinhamentos específicos
+            worksheet.cell(row=row_num, column=1).alignment = Alignment(horizontal='right')  # ID
+            worksheet.cell(row=row_num, column=3).alignment = Alignment(horizontal='center')  # Data
+
     @staticmethod
     def _preencher_planilha_normas(worksheet, normas):
-        """Preenche planilha de resumo de normas"""
-        zebra_fill = PatternFill(start_color="EEF1F5", end_color="EEF1F5", fill_type="solid")
-        row_num = 2  # Começa após o cabeçalho
+        """Preenche a planilha de normas com dados completos"""
+        zebra_style = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+        alerta_style = PatternFill(start_color="FFEEEE", end_color="FFEEEE", fill_type="solid")
         
-        for norma in normas:
-            # Obtém documentos relacionados
+        for row_num, norma in enumerate(normas, start=2):
             docs_relacionados = ", ".join([
-            f"{doc.id} ({doc.data_publicacao.strftime('%d/%m/%Y')})" 
-            for doc in norma.documentos.all()[:5]  # Alterado de documento_set para documentos
-        ])
-
-        if norma.documentos.count() > 5:  # Alterado aqui também
-            docs_relacionados += f" e mais {norma.documentos.count() - 5} documento(s)"  # E aqui
-
+                f"{doc.id} ({doc.data_publicacao.strftime('%d/%m/%Y')})" 
+                for doc in norma.documentos.all()[:2]
+            ])
+            if norma.documentos.count() > 2:
+                docs_relacionados += f" e +{norma.documentos.count() - 2}"
+                
             worksheet.append([
                 norma.tipo,
                 norma.numero,
-                norma.situacao,
-                norma.qtd_docs,  # Anotação do Count
-                docs_relacionados
+                norma.situacao or "NÃO VERIFICADO",
+                norma.qtd_docs,
+                docs_relacionados,
+                norma.fonte_confirmacao or "N/A",
+                norma.data_verificacao.strftime("%d/%m/%Y %H:%M") if norma.data_verificacao else "N/A",
+                RelatorioGenerator._formatar_resumo_ia(norma.resumo_ia)
             ])
             
-            # Aplica estilo zebrado
-            if row_num % 2 == 0:
+            # Formatação condicional
+            if norma.situacao == 'REVOGADA':
                 for cell in worksheet[row_num]:
-                    cell.fill = zebra_fill
+                    cell.fill = alerta_style
+            elif row_num % 2 == 0:
+                for cell in worksheet[row_num]:
+                    cell.fill = zebra_style
+
+    @staticmethod
+    def _preencher_planilha_problemas(worksheet, normas):
+        """Preenche a planilha de normas problemáticas com destaque"""
+        alerta_style = PatternFill(start_color="FFEEEE", end_color="FFEEEE", fill_type="solid")
+        
+        for row_num, norma in enumerate(normas, start=2):
+            worksheet.append([
+                norma.tipo,
+                norma.numero,
+                norma.situacao or "NÃO VERIFICADO",
+                norma.data_ultima_mencao.strftime("%d/%m/%Y") if norma.data_ultima_mencao else "N/A",
+                norma.qtd_docs,
+                "Bing" if norma.fonte_confirmacao == 'BING' else "N/A",
+                RelatorioGenerator._formatar_resumo_ia(norma.resumo_ia)
+            ])
             
-            # Alinhamento
+            # Destaque para todas as linhas
             for cell in worksheet[row_num]:
-                cell.alignment = Alignment(vertical='center', wrap_text=True)
-            
-            # Frequência alinhada à direita
-            worksheet.cell(row=row_num, column=4).alignment = Alignment(horizontal='right')
-            
-            row_num += 1
-    
+                cell.fill = alerta_style
+
     @staticmethod
     def _gerar_estatisticas(worksheet):
-        """Gera estatísticas na terceira aba"""
+        """Gera a planilha de estatísticas com dados consolidados"""
         # Estilos
-        title_font = Font(size=14, bold=True)
-        subtitle_font = Font(size=12, bold=True)
-        header_fill = PatternFill(start_color="C5D9F1", end_color="C5D9F1", fill_type="solid")
+        title_style = {'font': Font(size=14, bold=True), 'alignment': Alignment(horizontal='center')}
+        header_style = {
+            'fill': PatternFill(start_color="5B9BD5", end_color="5B9BD5", fill_type="solid"),
+            'font': Font(color="FFFFFF", bold=True)
+        }
         
-        # Título
-        worksheet.append(["Estatísticas do Sistema de Monitoramento"])
-        worksheet['A1'].font = title_font
+        # Seção 1: Estatísticas de Documentos
         worksheet.merge_cells('A1:E1')
-        worksheet['A1'].alignment = Alignment(horizontal='center')
-        
-        # Espaço
-        worksheet.append([])
-        
-        # Total de documentos
-        total_docs = Documento.objects.count()
-        docs_contabeis = Documento.objects.filter(relevante_contabil=True).count()
-        docs_processados = Documento.objects.filter(processado=True).count()
-        
-        worksheet.append(["Estatísticas de Documentos", "", "", "", ""])
-        worksheet['A3'].font = subtitle_font
-        worksheet.merge_cells('A3:E3')
-        
-        # Cabeçalhos das estatísticas
-        worksheet.append(["Métrica", "Valor", "Percentual", "", ""])
-        for cell in worksheet[4]:
-            if cell.column_letter in ['A', 'B', 'C']:
-                cell.fill = header_fill
-                cell.font = Font(bold=True)
-        
-        # Dados de estatísticas
-        stats = [
-            ["Total de documentos", total_docs, "100%"],
-            ["Documentos contábeis", docs_contabeis, f"{docs_contabeis/total_docs*100:.1f}%" if total_docs else "0%"],
-            ["Documentos processados", docs_processados, f"{docs_processados/total_docs*100:.1f}%" if total_docs else "0%"],
-            ["Não processados", total_docs - docs_processados, f"{(total_docs-docs_processados)/total_docs*100:.1f}%" if total_docs else "0%"]
-        ]
-        
-        row_num = 5
-        for stat in stats:
-            worksheet.append(stat + ["", ""])
-            row_num += 1
-        
-        # Espaço
-        worksheet.append([])
-        row_num += 1
-        
-        # Estatísticas de normas
-        worksheet.append(["Estatísticas de Normas", "", "", "", ""])
-        worksheet[f'A{row_num}'].font = subtitle_font
-        worksheet.merge_cells(f'A{row_num}:E{row_num}')
-        row_num += 1
+        worksheet['A1'] = "ESTATÍSTICAS DE DOCUMENTOS"
+        for attr, value in title_style.items():
+            setattr(worksheet['A1'], attr, value)
         
         # Cabeçalhos
-        worksheet.append(["Tipo de Norma", "Quantidade", "Normas Vigentes", "Percentual Vigentes", ""])
-        for cell in worksheet[row_num]:
-            if cell.column_letter in ['A', 'B', 'C', 'D']:
-                cell.fill = header_fill
-                cell.font = Font(bold=True)
-        row_num += 1
+        worksheet.append(["Métrica", "Total", "Contábil", "Processados", "Não Processados"])
+        for cell in worksheet[2]:
+            for attr, value in header_style.items():
+                setattr(cell, attr, value)
         
-        # Dados agrupados por tipo de norma
-        from django.db.models import Count
-        tipos_normas = NormaVigente.objects.values('tipo').annotate(
+        # Dados
+        total_docs = Documento.objects.count()
+        contabeis = Documento.objects.filter(relevante_contabil=True).count()
+        processados = Documento.objects.filter(processado=True).count()
+        
+        worksheet.append([
+            "Quantidade",
+            total_docs,
+            contabeis,
+            processados,
+            total_docs - processados
+        ])
+        
+        # Seção 2: Estatísticas de Normas
+        worksheet.merge_cells('A5:E5')
+        worksheet['A5'] = "ESTATÍSTICAS DE NORMAS"
+        for attr, value in title_style.items():
+            setattr(worksheet['A5'], attr, value)
+        
+        # Cabeçalhos
+        worksheet.append(["Tipo", "Total", "Vigentes", "Revogadas", "Não Verificadas"])
+        for cell in worksheet[6]:
+            for attr, value in header_style.items():
+                setattr(cell, attr, value)
+        
+        # Dados agrupados por tipo
+        tipos = NormaVigente.objects.values('tipo').annotate(
             total=Count('id'),
-            vigentes=Count('id', filter=Q(situacao='VIGENTE'))
-        ).order_by('-total')
+            vigentes=Count('id', filter=Q(situacao='VIGENTE')),
+            revogadas=Count('id', filter=Q(situacao='REVOGADA'))
+        )
         
-        for tipo in tipos_normas:
-            percentual = f"{tipo['vigentes']/tipo['total']*100:.1f}%" if tipo['total'] else "0%"
+        for tipo in tipos:
             worksheet.append([
                 tipo['tipo'],
                 tipo['total'],
                 tipo['vigentes'],
-                percentual,
-                ""
+                tipo['revogadas'],
+                tipo['total'] - tipo['vigentes'] - tipo['revogadas']
             ])
-            row_num += 1
-            
-        # Nova seção: Evolução Mensal
-        from django.db.models.functions import TruncMonth
-        evolucao = (
-            Documento.objects
-            .annotate(mes=TruncMonth('data_publicacao'))
-            .values('mes')
-            .annotate(total=Count('id'))
-            .order_by('mes')
-        )
+
+    @staticmethod
+    def _formatar_resumo_ia(resumo):
+        """Formata o resumo da IA para exibição na planilha"""
+        if not resumo:
+            return ""
         
-        worksheet.append(["Evolução Mensal de Documentos"])
-        for item in evolucao:
-            worksheet.append([item['mes'].strftime("%Y-%m"), item['total']])
-    
+        resumo = resumo.replace('\n', ' ').strip()
+        return (resumo[:150] + '...') if len(resumo) > 150 else resumo
+
     @staticmethod
     def _ajustar_colunas(worksheet):
-        """Ajusta a largura das colunas baseado no conteúdo"""
-        dimensoes = {}
-        for linha in worksheet.rows:
-            for i, cell in enumerate(linha):
-                if cell.value:
-                    # Estima o tamanho baseado no conteúdo
-                    tamanho_conteudo = len(str(cell.value)) + 4
-                    # Ajusta para largura máxima
-                    tamanho_conteudo = min(tamanho_conteudo, 60)
-                    
-                    coluna = cell.column_letter
-                    dimensoes[coluna] = max(
-                        dimensoes.get(coluna, 10),
-                        tamanho_conteudo
-                    )
-        
-        for col, value in dimensoes.items():
-            worksheet.column_dimensions[col].width = value
+        """Ajusta automaticamente a largura das colunas"""
+        for col in worksheet.columns:
+            max_length = 0
+            column = col[0].column_letter
+            
+            for cell in col:
+                try:
+                    value = str(cell.value) if cell.value else ""
+                    max_length = max(max_length, len(value))
+                except:
+                    pass
+                
+            adjusted_width = (max_length + 2) * 1.1
+            worksheet.column_dimensions[column].width = min(adjusted_width, 50)
 
-
+    @staticmethod
+    def _aplicar_auto_filtro(worksheet):
+        """Adiciona filtros automáticos ao cabeçalho"""
+        if worksheet.max_row > 1:
+            worksheet.auto_filter.ref = f"A1:{get_column_letter(worksheet.max_column)}{1}"
 
     @staticmethod
     def gerar_relatorio_mudancas(dias_retroativos=30):
-        """Gera um relatório de mudanças nas normas"""
+        """Gera relatório específico de mudanças nas normas"""
         try:
-            from monitor.utils.sefaz_integracao import IntegradorSEFAZ
-            integrador = IntegradorSEFAZ()
-            mudancas = integrador.comparar_mudancas(dias_retroativos)
-            
-            # Cria workbook
             wb = Workbook()
             ws = wb.active
-            ws.title = "Mudanças nas Normas"
+            ws.title = "Mudanças Recentes"
             
             # Estilos
-            header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
-            header_font = Font(color="FFFFFF", bold=True)
-            zebra_fill = PatternFill(start_color="EEF1F5", end_color="EEF1F5", fill_type="solid")
+            title_style = {
+                'font': Font(size=14, bold=True, color="1F4E78"),
+                'alignment': Alignment(horizontal='center')
+            }
             
-            # Seção de Novas Normas
-            ws.append(["Novas Normas Identificadas"])
-            ws['A1'].font = Font(size=14, bold=True)
-            ws.merge_cells('A1:B1')
+            # Título principal
+            ws.merge_cells('A1:D1')
+            ws['A1'] = f"RELATÓRIO DE MUDANÇAS - ÚLTIMOS {dias_retroativos} DIAS"
+            for attr, value in title_style.items():
+                setattr(ws['A1'], attr, value)
             
-            ws.append(["Norma", "Detalhes"])
+            # Consulta de normas alteradas
+            from django.utils import timezone
+            from django.db.models import F
+            data_corte = timezone.now() - timezone.timedelta(days=dias_retroativos)
+            
+            normas_alteradas = NormaVigente.objects.filter(
+                data_verificacao__gte=data_corte
+            ).annotate(
+                mudanca=Case(
+                    When(data_verificacao=F('data_ultima_mencao'), then=Value('NOVA')),
+                    When(situacao='REVOGADA', then=Value('REVOGADA')),
+                    default=Value('ATUALIZADA'),
+                    output_field=CharField()
+                )
+            ).order_by('-data_verificacao')
+            
+            # Cabeçalhos
+            cabecalhos = ["Norma", "Tipo Mudança", "Data Verificação", "Detalhes"]
+            ws.append(cabecalhos)
+            
+            # Formata cabeçalhos
             for cell in ws[2]:
-                cell.fill = header_fill
-                cell.font = header_font
+                cell.font = Font(bold=True)
+                cell.fill = PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid")
+                cell.border = Border(bottom=Side(border_style="thin"))
             
-            row_num = 3
-            for norma in mudancas['novas_normas']:
-                ws.append([norma, "Nova norma identificada no Diário Oficial"])
-                if row_num % 2 == 0:
-                    for cell in ws[row_num]:
-                        cell.fill = zebra_fill
-                row_num += 1
+            # Preenche dados
+            for norma in normas_alteradas:
+                ws.append([
+                    f"{norma.tipo} {norma.numero}",
+                    norma.mudanca,
+                    norma.data_verificacao.strftime("%d/%m/%Y %H:%M"),
+                    norma.resumo_ia[:100] + "..." if norma.resumo_ia else "Sem detalhes"
+                ])
             
-            # Seção de Normas Revogadas
-            ws.append([])
-            ws.append(["Normas Potencialmente Revogadas"])
-            ws[f'A{row_num}'].font = Font(size=14, bold=True)
-            ws.merge_cells(f'A{row_num}:B{row_num}')
-            row_num += 1
-            
-            ws.append(["Norma", "Última Menção"])
-            for cell in ws[row_num]:
-                cell.fill = header_fill
-                cell.font = header_font
-            row_num += 1
-            
-            for item in mudancas['normas_revogadas']:
-                ws.append([item['norma'], item['ultima_menção']])
-                if row_num % 2 == 0:
-                    for cell in ws[row_num]:
-                        cell.fill = zebra_fill
-                row_num += 1
-            
-            # Ajusta colunas
-            ws.column_dimensions['A'].width = 40
-            ws.column_dimensions['B'].width = 40
+            # Ajustes finais
+            RelatorioGenerator._ajustar_colunas(ws)
+            RelatorioGenerator._aplicar_auto_filtro(ws)
             
             # Salva arquivo
             relatorios_dir = os.path.join(settings.MEDIA_ROOT, 'relatorios')
             os.makedirs(relatorios_dir, exist_ok=True)
             
-            nome_arquivo = f"relatorio_mudancas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            nome_arquivo = f"mudancas_normas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
             caminho_completo = os.path.join(relatorios_dir, nome_arquivo)
             wb.save(caminho_completo)
             

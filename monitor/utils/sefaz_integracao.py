@@ -218,23 +218,37 @@ class IntegradorSEFAZ:
         return numero.strip()
     
     def verificar_normas_em_lote(self, normas, batch_size=3):
-        """Verifica um lote de normas de forma mais eficiente"""
         resultados = []
+        
         with self.scraper.browser_session():
-            for i in range(0, len(normas), batch_size):
-                batch = normas[i:i + batch_size]
-                for norma in batch:
-                    try:
-                        if not norma.tipo or not norma.numero:
-                            logger.warning(f"Norma com dados incompletos ignorada: {norma}")
-                            continue  # pula normas inválidas
-                        
-                        vigente = self.scraper.check_norm_status(norma.tipo, norma.numero)
-                        
-                        norma.situacao = "VIGENTE" if vigente else "REVOGADA"
-                        norma.data_verificacao = timezone.now()
-                        norma.save()
-                        resultados.append(norma)
-                    except Exception as e:
-                        logger.error(f"Erro na norma {norma}: {e}", exc_info=True)
+            for norma in normas:
+                try:
+                    tipo, numero, ano = self._extrair_components_norma(norma)
+                    resultado = self.scraper.check_norm_status(tipo, numero, ano)
+                    
+                    # Atualiza modelo com dados completos
+                    norma.situacao = "VIGENTE" if resultado['vigente'] else "REVOGADA"
+                    norma.fonte_confirmacao = 'SEFAZ' if resultado['sefaz'] else 'BING'
+                    norma.resumo_ia = resultado.get('resumo_ia')
+                    norma.ultima_verificacao = timezone.now()
+                    norma.save()
+                    
+                    resultados.append(self._gerar_relatorio(norma, resultado))
+                    
+                except Exception as e:
+                    logger.error(f"Erro na norma {norma}: {str(e)}")
+        
         return resultados
+
+    def _extrair_components_norma(self, norma):
+        """Extrai tipo, número e ano de uma norma"""
+        tipo = norma.tipo.upper()
+        numero = norma.numero
+        
+        # Extrai ano do formato "NÚMERO/ANO"
+        if '/' in numero:
+            partes = numero.split('/')
+            if len(partes) == 2 and partes[1].isdigit():
+                return tipo, partes[0], partes[1]
+        
+        return tipo, numero, None
