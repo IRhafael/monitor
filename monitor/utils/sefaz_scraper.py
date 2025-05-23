@@ -19,6 +19,7 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from .bing_scraper import BingScraper
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +29,7 @@ class SEFAZScraper:
         self.timeout = 30
         self.debug_dir = r"C:\Users\RRCONTAS\Documents\GitHub\monitor\debug"
         self.driver = None
-        self.bing_scraper = None
-
+        self.bing_scraper = None  # Será inicializado quando necessário
         
         # Termos com 100% de prioridade
         self.priority_terms = [
@@ -353,7 +353,7 @@ class SEFAZScraper:
             return False
 
     def check_norm_status(self, norm_type, norm_number, norm_year=None):
-        """Versão híbrida que verifica SEFAZ e Bing/Copilot"""
+        """Versão robusta com tratamento de erros aprimorado"""
         resultado = {
             'sefaz': None,
             'bing': None,
@@ -362,26 +362,37 @@ class SEFAZScraper:
             'resumo_ia': None
         }
         
-        with self.browser_session():
-            # 1. Pesquisa na SEFAZ (prioritário)
-            resultado['sefaz'] = self.get_norm_details(norm_type, norm_number, norm_year)
-            
-            # 2. Se SEFAZ não retornou, tenta Bing
-            if not resultado['sefaz'] or not resultado['sefaz'].get('texto_completo'):
-                self.bing_scraper = BingScraper(self.driver)
-                resultado['bing'] = self.bing_scraper.pesquisar_norma(norm_type, norm_number, norm_year)
+        try:
+            # 1. Tentar SEFAZ primeiro
+            with self.browser_session() as driver:
+                self.driver = driver
+                resultado['sefaz'] = self.get_norm_details(norm_type, norm_number, norm_year)
                 
-                if resultado['bing']:
-                    resultado['resumo_ia'] = resultado['bing'].get('resumo_copilot')
-                    resultado['status'] = self._analisar_resposta_bing(resultado['bing'])
+                # Se SEFAZ não retornou, tentar Bing
+                if not resultado['sefaz'] or not resultado['sefaz'].get('texto_completo'):
+                    if not self.bing_scraper:
+                        self.bing_scraper = BingScraper(self.driver)
+                    resultado['bing'] = self.bing_scraper.pesquisar_norma(norm_type, norm_number, norm_year)
+                    
+                    if resultado['bing']:
+                        resultado['resumo_ia'] = resultado['bing'].get('resumo_copilot')
+                        resultado['status'] = self._analisar_resposta_bing(resultado['bing'])
             
             # Determina status final
             if resultado['sefaz']:
-                resultado.update(self._determinar_status_sefaz(resultado['sefaz']))
+                status_info = self._determinar_status_sefaz(resultado['sefaz'])
+                resultado.update(status_info)
             elif resultado['bing']:
                 resultado['vigente'] = self._determinar_status_bing(resultado['bing'])
             
             return resultado
+            
+        except Exception as e:
+            logger.error(f"Erro ao verificar norma {norm_type} {norm_number}: {str(e)}")
+            resultado['erro'] = str(e)
+            return resultado
+        finally:
+            self.driver = None  # Garante que o driver seja limpo
 
     def _analisar_resposta_bing(self, dados_bing):
         """Analisa a resposta do Bing/Copilot"""

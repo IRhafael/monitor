@@ -86,9 +86,11 @@ class NormaVigente(models.Model):
         null=True,
         blank=True
     )
+    # Em models.py, altere:
     data_verificacao = models.DateTimeField(
         'Data da última verificação',
-        auto_now=True
+        null=True,
+        blank=True
     )
     situacao = models.CharField(max_length=20, choices=SITUACAO_CHOICES, default='A_VERIFICAR')
     url = models.URLField(blank=True, verbose_name="URL da Norma")

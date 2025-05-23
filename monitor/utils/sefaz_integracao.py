@@ -24,7 +24,7 @@ class IntegradorSEFAZ:
         self.timeout = 40
 
     def buscar_norma_especifica(self, tipo, numero):
-        """Verifica vigência de uma norma específica"""
+        """Verifica vigência de uma norma específica com tratamento robusto"""
         try:
             tipo = tipo.upper().strip()
             numero = self._padronizar_numero_norma(numero)
@@ -37,26 +37,31 @@ class IntegradorSEFAZ:
                 return cached_result
                 
             # Chama o método do scraper
-            vigente = self.scraper.check_norm_status(tipo, numero)
+            resultado = self.scraper.check_norm_status(tipo, numero)
             
-            resultado = {
+            if not resultado:
+                raise ValueError("Nenhum resultado retornado pelo scraper")
+                
+            resultado_completo = {
                 'tipo': tipo,
                 'numero': numero,
-                'vigente': vigente if vigente is not None else False,
-                'data_consulta': timezone.now()
+                'vigente': resultado.get('vigente', False),
+                'data_consulta': timezone.now(),
+                'detalhes': resultado
             }
             
             # Armazena no cache
-            cache.set(cache_key, resultado, 86400)  # 24 horas
-            return resultado
+            cache.set(cache_key, resultado_completo, 86400)  # 24 horas
+            return resultado_completo
             
         except Exception as e:
-            logger.error(f"Erro ao buscar norma: {str(e)}")
+            logger.error(f"Erro ao buscar norma {tipo} {numero}: {str(e)}")
             return {
                 'tipo': tipo,
                 'numero': numero,
                 'vigente': False,
-                'erro': str(e)
+                'erro': str(e),
+                'data_consulta': timezone.now()
             }
 
     def verificar_vigencia_normas(self, documento_id):
@@ -217,26 +222,41 @@ class IntegradorSEFAZ:
         numero = re.sub(r'[^\d/]', '', str(numero))
         return numero.strip()
     
-    def verificar_normas_em_lote(self, normas, batch_size=3):
+    def verificar_normas_em_lote(self, normas):
+        """Versão robusta com tratamento de erros completo"""
         resultados = []
         
-        with self.scraper.browser_session():
-            for norma in normas:
-                try:
-                    tipo, numero, ano = self._extrair_components_norma(norma)
-                    resultado = self.scraper.check_norm_status(tipo, numero, ano)
-                    
-                    # Atualiza modelo com dados completos
-                    norma.situacao = "VIGENTE" if resultado['vigente'] else "REVOGADA"
-                    norma.fonte_confirmacao = 'SEFAZ' if resultado['sefaz'] else 'BING'
-                    norma.resumo_ia = resultado.get('resumo_ia')
-                    norma.ultima_verificacao = timezone.now()
-                    norma.save()
-                    
-                    resultados.append(self._gerar_relatorio(norma, resultado))
-                    
-                except Exception as e:
-                    logger.error(f"Erro na norma {norma}: {str(e)}")
+        try:
+            with self.scraper.browser_session():
+                for norma in normas:
+                    try:
+                        # Extrai componentes da norma
+                        tipo = norma.tipo.upper()
+                        numero = self._padronizar_numero_norma(norma.numero)
+                        
+                        # Verifica a norma
+                        resultado = self.scraper.check_norm_status(tipo, numero)
+                        
+                        # Processa resultado
+                        if resultado:
+                            vigente = resultado.get('vigente', False)
+                            norma.situacao = 'VIGENTE' if vigente else 'REVOGADA'
+                            norma.data_verificacao = timezone.now()
+                            norma.fonte_confirmacao = 'SEFAZ' if resultado.get('sefaz') else 'BING'
+                            norma.resumo_ia = resultado.get('resumo_ia')
+                            norma.detalhes = resultado
+                            norma.save()
+                            
+                            resultados.append(norma)
+                        else:
+                            logger.error(f"Resultado vazio para norma {norma.id}")
+                            
+                    except Exception as e:
+                        logger.error(f"Erro ao processar norma {norma.id}: {str(e)}")
+                        continue
+                        
+        except Exception as e:
+            logger.error(f"Erro geral na verificação em lote: {str(e)}")
         
         return resultados
 

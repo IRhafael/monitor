@@ -122,7 +122,7 @@ def verificar_normas_sefaz_task(self, *_args, **_kwargs):
     try:
         integrador = IntegradorSEFAZ()
         
-        # Normas para verificar: nunca verificadas ou verificadas há mais de 15 dias
+        # Query para normas nunca verificadas ou verificadas há mais de 15 dias
         normas = NormaVigente.objects.filter(
             Q(data_verificacao__isnull=True) |
             Q(data_verificacao__lt=timezone.now() - timedelta(days=15))
@@ -133,15 +133,16 @@ def verificar_normas_sefaz_task(self, *_args, **_kwargs):
                 default=Value('NAO_VERIFICADO'),
                 output_field=CharField()
             )
-        ).order_by('data_verificacao')[:50]  # Limita a 50 por execução
+        ).order_by('data_verificacao')  # Ordena para priorizar as mais antigas
+
+        total_normas = normas.count()
+        logger.info(f"[{task_id}] Total de normas para verificar: {total_normas}")
 
         if not normas.exists():
             logger.info(f"[{task_id}] Nenhuma norma para verificar.")
             return {'status': 'SEM_NORMAS_PENDENTES'}
 
-        resultados = integrador.verificar_normas_em_lote(normas)
-        
-        # Contabiliza mudanças
+        # Processa todas as normas de uma vez, mas com tratamento robusto
         mudancas = {
             'novas_vigentes': 0,
             'novas_revogadas': 0,
@@ -149,34 +150,62 @@ def verificar_normas_sefaz_task(self, *_args, **_kwargs):
             'erros': 0
         }
 
-        for norma in resultados:
-            if norma.situacao == 'VIGENTE' and norma.status_anterior != 'VIGENTE':
-                mudancas['novas_vigentes'] += 1
-            elif norma.situacao == 'REVOGADA' and norma.status_anterior != 'REVOGADA':
-                mudancas['novas_revogadas'] += 1
-            elif norma.situacao == norma.status_anterior:
-                mudancas['mantidas'] += 1
-            else:
-                mudancas['erros'] += 1
+        normas_atualizadas = []
+        
+        with transaction.atomic():
+            for norma in normas:
+                try:
+                    # Verifica a norma individualmente
+                    resultado = integrador.buscar_norma_especifica(norma.tipo, norma.numero)
+                    
+                    # Determina o novo status
+                    novo_status = 'VIGENTE' if resultado.get('vigente', False) else 'REVOGADA'
+                    
+                    # Atualiza a norma
+                    norma.situacao = novo_status
+                    norma.data_verificacao = timezone.now()
+                    norma.detalhes = resultado
+                    norma.save()
+                    
+                    # Contabiliza mudanças
+                    if novo_status == 'VIGENTE' and norma.status_anterior != 'VIGENTE':
+                        mudancas['novas_vigentes'] += 1
+                    elif novo_status == 'REVOGADA' and norma.status_anterior != 'REVOGADA':
+                        mudancas['novas_revogadas'] += 1
+                    elif novo_status == norma.status_anterior:
+                        mudancas['mantidas'] += 1
+                    
+                    normas_atualizadas.append(norma.id)
+                    
+                except Exception as e:
+                    mudancas['erros'] += 1
+                    logger.error(f"[{task_id}] Erro ao verificar norma {norma.id}: {str(e)}")
+                    continue
 
         LogExecucao.objects.create(
             tipo_execucao='VERIFICACAO_SEFAZ',
-            status='SUCESSO',
+            status='SUCESSO' if mudancas['erros'] == 0 else 'PARCIAL',
             detalhes={
-                'normas_verificadas': len(resultados),
-                'mudancas': mudancas
+                'normas_verificadas': len(normas_atualizadas),
+                'mudancas': mudancas,
+                'normas_com_erro': mudancas['erros']
             }
         )
         
-        logger.info(f"[{task_id}] Verificação concluída: {len(resultados)} normas verificadas.")
-        return {'status': 'SUCESSO', 'resultados': mudancas}
+        logger.info(f"[{task_id}] Verificação concluída. Normas verificadas: {len(normas_atualizadas)}")
+        logger.info(f"[{task_id}] Mudanças: {mudancas}")
+        return {
+            'status': 'SUCESSO',
+            'normas_verificadas': len(normas_atualizadas),
+            'mudancas': mudancas
+        }
 
     except Exception as e:
         logger.error(f"[{task_id}] Erro na verificação: {str(e)}", exc_info=True)
         LogExecucao.objects.create(
             tipo_execucao='VERIFICACAO_SEFAZ',
             status='ERRO',
-            detalhes={'erro': str(e)}
+            detalhes={'erro': str(e), 'traceback': traceback.format_exc()}
         )
         raise self.retry(exc=e, countdown=900, max_retries=2)
 
@@ -198,4 +227,30 @@ def pipeline_coleta_e_processamento(self, data_inicio_str=None, data_fim_str=Non
 
     except Exception as e:
         logger.error(f"[{task_id}] Erro ao iniciar pipeline: {str(e)}")
+        raise
+
+# Tarefa adicional para verificar apenas normas específicas (útil para debug)
+@shared_task(bind=True)
+def verificar_normas_especificas_task(self, limite=None):
+    """
+    Tarefa para verificar um número limitado de normas (útil para testes)
+    """
+    task_id = self.request.id
+    limite = limite or 10
+    logger.info(f"[{task_id}] Iniciando verificação de {limite} normas específicas.")
+
+    try:
+        normas = NormaVigente.objects.all()[:limite]
+        total_normas = normas.count()
+        
+        logger.info(f"[{task_id}] Verificando {total_normas} normas: IDs {[n.id for n in normas]}")
+        
+        integrador = IntegradorSEFAZ()
+        resultados = integrador.verificar_normas_em_lote(normas)
+        
+        logger.info(f"[{task_id}] Verificação específica concluída: {len(resultados)} normas verificadas.")
+        return {'status': 'SUCESSO', 'normas_verificadas': len(resultados)}
+
+    except Exception as e:
+        logger.error(f"[{task_id}] Erro na verificação específica: {str(e)}", exc_info=True)
         raise
