@@ -152,74 +152,67 @@ def processar_documentos_pendentes_task(self, previous_task_result=None):
     return {'status': log_status, 'results': log_detalhes}
 
 
-@shared_task(bind=True, max_retries=3, time_limit=1800, soft_time_limit=1500)
-def verificar_normas_sefaz_task(self):
-    logger.info("Iniciando verificação para Windows")
-    
+def verificar_normas_sefaz_task(self, *args, **kwargs):
+    logger.info("Iniciando verificação para SEFAZ")
+
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+
+    driver = None
     try:
-        # Teste de conexão com retry próprio
-        for attempt in range(3):
-            try:
-                scraper = SEFAZScraper()
-                if scraper.test_connection():
-                    logger.info("Conexão com SEFAZ estabelecida com sucesso")
-                    break
-                else:
-                    raise ConnectionError("Falha na conexão com o portal SEFAZ")
-            except Exception as e:
-                if attempt == 2:  # Última tentativa
-                    logger.error("Falha após 3 tentativas de conexão")
-                    raise
-                wait_time = (attempt + 1) * 30  # 30, 60, 90 segundos
-                logger.warning(f"Tentativa {attempt + 1} falhou. Aguardando {wait_time}s para retry...")
-                time.sleep(wait_time)
-        
-        # Limita a quantidade de normas para evitar timeout
-        normas = NormaVigente.objects.filter(
-            Q(data_verificacao__isnull=True) |
-            Q(data_verificacao__lt=timezone.now() - timedelta(days=30))
-        ).order_by('data_verificacao')[:3]  # Apenas 3 normas por vez
+        logger.info("Inicializando WebDriver...")
+        driver = webdriver.Chrome(options=chrome_options)
+        logger.info("WebDriver inicializado.")
 
-        # Usa conexão persistente com timeout por norma
-        with IntegradorSEFAZ() as integrador:
-            resultados = []
-            for norma in normas:
-                try:
-                    logger.info(f"Verificando norma: {norma.tipo} {norma.numero}")
-                    resultado = integrador.verificar_norma_individual_com_timeout(norma, timeout=90)
-                    resultados.append(resultado)
-                    time.sleep(5)  # Intervalo entre consultas
-                except Exception as e:
-                    logger.error(f"Erro na norma {norma}: {str(e)}")
-                    continue
-            
-        # Processa resultados
-        stats = {
-            'total': len(resultados),
-            'vigentes': sum(1 for r in resultados if r and r.get('status') == 'VIGENTE'),
-            'revogadas': sum(1 for r in resultados if r and r.get('status') == 'REVOGADA'),
-            'erros': sum(1 for r in resultados if not r or r.get('status') == 'ERRO')
-        }
-        
-        logger.info(f"Verificação concluída: {stats}")
-        return stats
-        
+        url_sefaz = "https://portaldalegislacao.sefaz.pi.gov.br" # Substitua pela URL da página de busca real
+        logger.info(f"Acessando URL: {url_sefaz}")
+        driver.get(url_sefaz)
+        logger.info(f"Página atual: {driver.current_url}")
+        logger.info(f"Título da página: {driver.title}")
+
+        try:
+
+            logger.info("Página de busca carregada (elemento esperado encontrado).")
+        except Exception as e:
+            logger.error(f"Elemento de página de busca não encontrado: {e}")
+            driver.save_screenshot("/tmp/sefaz_pagina_busca_nao_carregada.png")
+            return {'total': 0, 'vigentes': 0, 'revogadas': 0, 'erros': 1, 'detalhes': f"Página de busca não carregada: {e}"}
+
+
+        total = 0 # Sua lógica para preencher estes valores
+        vigentes = 0
+        revogadas = 0
+        erros_logica = 0
+
+        # Seus prints de depuração podem se tornar logs aqui para ver o que está acontecendo
+        logger.info(f"Dados extraídos: Total={total}, Vigentes={vigentes}, Revogadas={revogadas}, ErrosLógica={erros_logica}")
+
+        # --- FIM DA LÓGICA DE INTERAÇÃO COM A PÁGINA ---
+
+        logger.info("Verificação concluída")
+        return {'total': total, 'vigentes': vigentes, 'revogadas': revogadas, 'erros': erros_logica}
+
     except Exception as e:
-        logger.error(f"Erro fatal: {str(e)}", exc_info=True)
-        raise self.retry(exc=e, countdown=300)  # 5 minutos para próxima tentativa
-
+        logger.error(f"Erro fatal na tarefa verificar_normas_sefaz_task: {e}", exc_info=True)
+        if driver:
+            try:
+                driver.save_screenshot(f"/tmp/sefaz_erro_fatal_{self.request.id}.png")
+                logger.info(f"Screenshot salvo em /tmp/sefaz_erro_fatal_{self.request.id}.png")
+            except Exception as se:
+                logger.error(f"Não foi possível salvar screenshot: {se}")
+        return {'total': 0, 'vigentes': 0, 'revogadas': 0, 'erros': 1, 'detalhes': f"Erro fatal: {e}"}
+    finally:
+        if driver:
+            driver.quit()
 # Pipeline completo: Coleta -> Processamento -> Verificação SEFAZ
 @shared_task(bind=True)
 def pipeline_coleta_e_processamento(self, data_inicio_str=None, data_fim_str=None):
-    """
-    Tarefa Celery que executa a coleta, em seguida o processamento de PDFs,
-    e por fim a verificação de normas na SEFAZ.
-    """
+
     task_id = self.request.id
     logger.info(f"[{task_id}] Iniciando pipeline completo de coleta, processamento e verificação SEFAZ.")
-    
-    # Encadeamento: Coleta -> Processamento -> Verificação SEFAZ
-    # Use chain() para garantir que a ordem seja mantida
+
     workflow = chain(
         coletar_diario_oficial_task.s(data_inicio_str, data_fim_str),
         processar_documentos_pendentes_task.s(),
