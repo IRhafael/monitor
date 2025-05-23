@@ -1,5 +1,5 @@
 # monitor/utils/tasks.py
-
+import time
 from celery import chain, shared_task
 from datetime import datetime, timedelta, date # Adicione 'date' aqui
 import logging
@@ -152,7 +152,6 @@ def processar_documentos_pendentes_task(self, previous_task_result=None):
     return {'status': log_status, 'results': log_detalhes}
 
 
-# Modifique a tarefa verificar_normas_sefaz_task:
 @shared_task(bind=True, max_retries=3, time_limit=1800, soft_time_limit=1500)
 def verificar_normas_sefaz_task(self):
     logger.info("Iniciando verificação para Windows")
@@ -163,11 +162,13 @@ def verificar_normas_sefaz_task(self):
             try:
                 scraper = SEFAZScraper()
                 if scraper.test_connection():
+                    logger.info("Conexão com SEFAZ estabelecida com sucesso")
                     break
                 else:
                     raise ConnectionError("Falha na conexão com o portal SEFAZ")
             except Exception as e:
                 if attempt == 2:  # Última tentativa
+                    logger.error("Falha após 3 tentativas de conexão")
                     raise
                 wait_time = (attempt + 1) * 30  # 30, 60, 90 segundos
                 logger.warning(f"Tentativa {attempt + 1} falhou. Aguardando {wait_time}s para retry...")
@@ -184,6 +185,7 @@ def verificar_normas_sefaz_task(self):
             resultados = []
             for norma in normas:
                 try:
+                    logger.info(f"Verificando norma: {norma.tipo} {norma.numero}")
                     resultado = integrador.verificar_norma_individual_com_timeout(norma, timeout=90)
                     resultados.append(resultado)
                     time.sleep(5)  # Intervalo entre consultas

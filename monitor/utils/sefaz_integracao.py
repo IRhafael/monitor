@@ -374,8 +374,10 @@ class IntegradorSEFAZ:
                 'error': str(e)
             }
 
-    # Substitua o método verificar_normas_em_lote por esta versão mais robusta:
+
     def verificar_normas_em_lote(self, normas, batch_size=5):
+        logger.info(f"Iniciando verificação da norma: {norma.codigo}")
+
         """Processamento em lote com gerenciamento de tempo"""
         resultados = []
         

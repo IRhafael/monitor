@@ -444,28 +444,32 @@ class SEFAZScraper:
         """Testa conexão com o portal de forma robusta"""
         try:
             # Teste HTTP básico
-            response = requests.get(self.base_url, timeout=10, verify=False)
-            if response.status_code != 200:
-                self.logger.error(f"Status HTTP inesperado: {response.status_code}")
+            try:
+                response = requests.get(self.base_url, timeout=10, verify=False)
+                if response.status_code != 200:
+                    self.logger.error(f"Status HTTP inesperado: {response.status_code}")
+                    return False
+            except requests.exceptions.RequestException as e:
+                self.logger.error(f"Erro na requisição HTTP: {str(e)}")
                 return False
 
             # Teste com navegador
             if not self.init_driver():
                 return False
 
-            self.driver.get(self.base_url)
-            
-            # Verifica se o título contém "Sefaz" (case insensitive)
-            page_title = self.driver.title.lower()
-            if "sefaz" not in page_title:
-                self.logger.error(f"Título da página inesperado: {self.driver.title}")
+            try:
+                self.driver.get(self.base_url)
+                
+                # Verificação adicional do conteúdo da página
+                if "sefaz" not in self.driver.title.lower():
+                    self.logger.error(f"Título da página inesperado: {self.driver.title}")
+                    return False
+                    
+                return True
+            except Exception as e:
+                self.logger.error(f"Erro no teste com navegador: {str(e)}")
                 return False
                 
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Erro no teste de conexão: {str(e)}")
-            return False
         finally:
             if self.driver:
                 self.driver.quit()
