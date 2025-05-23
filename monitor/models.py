@@ -39,6 +39,10 @@ class TermoMonitorado(models.Model):
         return f"{self.termo} ({self.get_tipo_display()})"
 
 
+from django.db import models
+from django.utils import timezone # Importar timezone se for usar no save, etc.
+from datetime import datetime # Importar datetime para o _preprocessar_detalhes
+
 class NormaVigente(models.Model):
     """
     Normas legais monitoradas pelo sistema
@@ -48,19 +52,25 @@ class NormaVigente(models.Model):
         ('DECRETO', 'Decreto'),
         ('PORTARIA', 'Portaria'),
         ('RESOLUCAO', 'Resolução'),
-        ('INSTRUCAO', 'Instrução Normativa'),
+        ('INSTRUCAO', 'Instrução Normativa'), # Mantido como INSTRUCAO para caber no max_length=20
         ('OUTROS', 'Outros'),
     ]
 
     SITUACAO_CHOICES = [
         ('VIGENTE', 'Vigente'),
         ('REVOGADA', 'Revogada'),
-        ('IRREGULAR', 'Irregular'),
-        ('A_VERIFICAR', 'A verificar')
+        ('IRREGULAR', 'Irregular'), # Você tem este, mas não no status_style.
+        ('A_VERIFICAR', 'A verificar'),
+        ('ALTERADA', 'Alterada'), # Adicionado para corresponder ao status_style, se necessário
+        ('DESCONHECIDA', 'Desconhecida') # Adicionado para um default mais explícito se 'A_VERIFICAR' não for o estado inicial
     ]
 
-    tipo = models.CharField(max_length=20, choices=TIPO_CHOICES)
-    numero = models.CharField(max_length=50)
+    tipo = models.CharField(max_length=20, choices=TIPO_CHOICES, db_index=True) # Adicionado db_index=True
+    numero = models.CharField(max_length=50, db_index=True) # Adicionado db_index=True
+    
+    # NOVO CAMPO PARA O ANO
+    ano = models.IntegerField(null=True, blank=True, db_index=True) # Ano pode ser nulo se não encontrado
+
     situacao = models.CharField(max_length=20, choices=SITUACAO_CHOICES, default='A_VERIFICAR')
     data_verificacao = models.DateTimeField(null=True, blank=True)
     url = models.URLField(blank=True, verbose_name="URL da Norma")
@@ -73,21 +83,27 @@ class NormaVigente(models.Model):
         choices=[('SEFAZ', 'SEFAZ'), ('DIARIO', 'Diário Oficial')]
     )
     observacoes = models.TextField(blank=True)
-    data_ultima_mencao = models.DateField(null=True, blank=True) # Campo para a data da última vez que foi mencionada
+    data_ultima_mencao = models.DateField(null=True, blank=True)
     irregular = models.BooleanField(default=False, verbose_name="Norma Irregular")
 
     class Meta:
         verbose_name = "Norma Vigente"
         verbose_name_plural = "Normas Vigentes"
-        ordering = ['tipo', 'numero']
-        unique_together = ['tipo', 'numero']
+        # ATUALIZADO ordering para incluir o ano (ex: mais recentes primeiro)
+        ordering = ['tipo', '-ano', 'numero'] 
+        # ATUALIZADO unique_together para incluir o ano
+        unique_together = [['tipo', 'numero', 'ano']] 
         indexes = [
-            models.Index(fields=['tipo', 'numero']),
+            # ATUALIZADO index principal para incluir o ano
+            models.Index(fields=['tipo', 'numero', 'ano']), 
             models.Index(fields=['situacao']),
             models.Index(fields=['data_verificacao']),
         ]
 
     def __str__(self):
+        # ATUALIZADO para incluir o ano, se existir
+        if self.ano:
+            return f"{self.get_tipo_display()} {self.numero}/{self.ano}"
         return f"{self.get_tipo_display()} {self.numero}"
 
     def status_style(self):
@@ -95,8 +111,10 @@ class NormaVigente(models.Model):
             return 'success'
         elif self.situacao == 'REVOGADA':
             return 'danger'
-        elif self.situacao == 'ALTERADA':
+        elif self.situacao == 'ALTERADA': # 'ALTERADA' está no seu status_style, mas não nos SITUACAO_CHOICES. Adicionei aos choices.
             return 'warning'
+        elif self.situacao == 'IRREGULAR': # Adicionado para consistência
+            return 'warning' # Ou outra cor
         return 'secondary'
     
     def save(self, *args, **kwargs):
@@ -111,7 +129,8 @@ class NormaVigente(models.Model):
             return detalhes
             
         for key, value in detalhes.items():
-            if isinstance(value, datetime):
+            # Verifique se value é uma instância de datetime.datetime, não apenas datetime (que é o módulo)
+            if isinstance(value, datetime): # Anteriormente 'datetime.datetime' não estava importado, agora 'datetime' está.
                 detalhes[key] = value.isoformat()
             elif isinstance(value, dict):
                 detalhes[key] = self._preprocessar_detalhes(value)
@@ -125,7 +144,12 @@ class Documento(models.Model):
     """
     titulo = models.CharField(max_length=255, verbose_name="Título")
     data_publicacao = models.DateField(verbose_name="Data de Publicação")
-    url_original = models.URLField(verbose_name="URL Original", max_length=500)
+    url_original = models.URLField(
+        verbose_name="URL Original", 
+        max_length=500, 
+        unique=True,  # <--- ADICIONE ISTO
+        db_index=True   # <--- ADICIONE ISTO (bom para performance)
+    )
     arquivo_pdf = models.FileField(
         upload_to='pdfs/',
         verbose_name="Arquivo PDF",

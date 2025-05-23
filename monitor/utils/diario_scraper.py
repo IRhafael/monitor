@@ -21,7 +21,6 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException # Adicionar import para tratamento de erros do Selenium
 from selenium.webdriver.chrome.service import Service # Para inicializar o ChromeDriver corretamente
-
 from bs4 import BeautifulSoup
 
 from monitor.models import Documento # Certifique-se que Documento está importado
@@ -370,7 +369,7 @@ class DiarioOficialScraper:
         return False
 
 
-    # --- MÉTODO QUE ESTAVA FALTANDO E PRECISA SER ADICIONADO/CORRIGIDO ---
+
     def coletar_e_salvar_documentos(self, data_inicio: date, data_fim: date) -> List[Documento]:
         """Versão modificada para filtrar por termos prioritários"""
         documentos_salvos = []
