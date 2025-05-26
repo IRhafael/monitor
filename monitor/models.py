@@ -3,6 +3,8 @@ from django.db import models
 from django.core.validators import MinValueValidator
 import os
 from datetime import datetime  # Adicione esta linha no início do arquivo
+from django.core.exceptions import ValidationError
+import re
 
 class TermoMonitorado(models.Model):
     """
@@ -137,11 +139,6 @@ class NormaVigente(models.Model):
             return 'warning' # Ou outra cor
         return 'secondary'
     
-    def save(self, *args, **kwargs):
-        """Pre-processa os dados antes de salvar"""
-        if self.detalhes and isinstance(self.detalhes, dict):
-            self.detalhes = self._preprocessar_detalhes(self.detalhes)
-        super().save(*args, **kwargs)
 
     def _preprocessar_detalhes(self, detalhes):
         """Converte objetos datetime para strings no campo detalhes"""
@@ -156,6 +153,22 @@ class NormaVigente(models.Model):
                 detalhes[key] = self._preprocessar_detalhes(value)
                 
         return detalhes
+    
+    def clean(self):
+        # Validação no nível do modelo
+        if not self.tipo or not self.numero:
+            raise ValidationError("Tipo e número são obrigatórios")
+            
+        if len(self.numero) < 3:
+            raise ValidationError("Número da norma muito curto")
+            
+        padrao_numero = re.compile(r'^(\d{1,4}[\/\-\.]?\d{0,4}|\d\/\d{2})$')
+        if not padrao_numero.match(self.numero):
+            raise ValidationError("Formato do número inválido")
+    
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
 
 
 class Documento(models.Model):

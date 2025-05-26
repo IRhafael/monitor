@@ -24,7 +24,7 @@ class IntegradorSEFAZ:
         self.timeout = 40
 
     def buscar_norma_especifica(self, tipo, numero):
-        """Verifica vigência de uma norma específica com tratamento robusto"""
+        """Verifica vigência de uma norma específica"""
         try:
             tipo = tipo.upper().strip()
             numero = self._padronizar_numero_norma(numero)
@@ -37,31 +37,26 @@ class IntegradorSEFAZ:
                 return cached_result
                 
             # Chama o método do scraper
-            resultado = self.scraper.check_norm_status(tipo, numero)
+            vigente = self.scraper.check_norm_status(tipo, numero)
             
-            if not resultado:
-                raise ValueError("Nenhum resultado retornado pelo scraper")
-                
-            resultado_completo = {
+            resultado = {
                 'tipo': tipo,
                 'numero': numero,
-                'vigente': resultado.get('vigente', False),
-                'data_consulta': timezone.now(),
-                'detalhes': resultado
+                'vigente': vigente if vigente is not None else False,
+                'data_consulta': timezone.now()
             }
             
             # Armazena no cache
-            cache.set(cache_key, resultado_completo, 86400)  # 24 horas
-            return resultado_completo
+            cache.set(cache_key, resultado, 86400)  # 24 horas
+            return resultado
             
         except Exception as e:
-            logger.error(f"Erro ao buscar norma {tipo} {numero}: {str(e)}")
+            logger.error(f"Erro ao buscar norma: {str(e)}")
             return {
                 'tipo': tipo,
                 'numero': numero,
                 'vigente': False,
-                'erro': str(e),
-                'data_consulta': timezone.now()
+                'erro': str(e)
             }
 
     def verificar_vigencia_normas(self, documento_id):
@@ -147,7 +142,8 @@ class IntegradorSEFAZ:
             cache_key = f"sefaz_{norma.tipo}_{norma.numero}"
             cached = cache.get(cache_key)
             if cached and (timezone.now() - cached['data_consulta']) < timedelta(hours=12):
-                return cached['vigente']
+                logger.debug(f"Cache encontrado para {norma.tipo} {norma.numero}")
+
             
             # 2. Tentar método rápido
             try:
@@ -169,8 +165,8 @@ class IntegradorSEFAZ:
             return vigente
             
         except Exception as e:
-            logger.error(f"Erro em _verificar_norma_eficiente para {norma}: {str(e)}")
-            return False
+            logger.error(f"Falha crítica ao verificar norma {norma.tipo} {norma.numero}: {str(e)}", exc_info=True)
+        return False
 
     def _determinar_tipo_norma(self, texto):
         """Determina o tipo da norma com base no texto"""
@@ -222,53 +218,64 @@ class IntegradorSEFAZ:
         numero = re.sub(r'[^\d/]', '', str(numero))
         return numero.strip()
     
-    def verificar_normas_em_lote(self, normas):
-        """Versão robusta com tratamento de erros completo"""
+    # sefaz_integracao.py
+    def verificar_normas_em_lote(self, normas, batch_size=3):
         resultados = []
+        normas_invalidas = []
         
-        try:
-            with self.scraper.browser_session():
-                for norma in normas:
-                    try:
-                        # Extrai componentes da norma
-                        tipo = norma.tipo.upper()
-                        numero = self._padronizar_numero_norma(norma.numero)
-                        
-                        # Verifica a norma
-                        resultado = self.scraper.check_norm_status(tipo, numero)
-                        
-                        # Processa resultado
-                        if resultado:
-                            vigente = resultado.get('vigente', False)
-                            norma.situacao = 'VIGENTE' if vigente else 'REVOGADA'
-                            norma.data_verificacao = timezone.now()
-                            norma.fonte_confirmacao = 'SEFAZ' if resultado.get('sefaz') else 'BING'
-                            norma.resumo_ia = resultado.get('resumo_ia')
-                            norma.detalhes = resultado
-                            norma.save()
-                            
-                            resultados.append(norma)
-                        else:
-                            logger.error(f"Resultado vazio para norma {norma.id}")
-                            
-                    except Exception as e:
-                        logger.error(f"Erro ao processar norma {norma.id}: {str(e)}")
+        with self.scraper.browser_session():
+            for norma in normas:
+                try:
+                    if not self._norma_e_valida(norma):
+                        normas_invalidas.append(norma)
                         continue
                         
-        except Exception as e:
-            logger.error(f"Erro geral na verificação em lote: {str(e)}")
+                    # Verificação especial para números curtos
+                    if len(norma.numero.strip()) < 4:  # Números muito curtos
+                        resultado = {
+                            "status": "NUMERO_CURTO",
+                            "vigente": False,
+                            "dados": None
+                        }
+                    else:
+                        resultado = self.scraper.check_norm_status(norma.tipo, norma.numero)
+                    
+                    # Atualiza apenas se for confirmação explícita
+                    if resultado.get('status') == "VIGENTE":
+                        norma.situacao = "VIGENTE"
+                    else:
+                        norma.situacao = "NAO_VIGENTE"
+                        
+                    norma.data_verificacao = timezone.now()
+                    norma.save()
+                    resultados.append(norma)
+                    
+                except Exception as e:
+                    logger.error(f"Erro crítico na norma {norma}: {e}", exc_info=True)
         
+        # Log de normas inválidas
+        if normas_invalidas:
+            logger.warning(f"Normas inválidas ignoradas: {len(normas_invalidas)}")
+            
         return resultados
 
-    def _extrair_components_norma(self, norma):
-        """Extrai tipo, número e ano de uma norma"""
-        tipo = norma.tipo.upper()
-        numero = norma.numero
+    def _norma_e_valida(self, norma):
+        """Verificação rigorosa dos critérios para uma norma válida"""
+        if not norma.tipo or not norma.numero:
+            return False
         
-        # Extrai ano do formato "NÚMERO/ANO"
-        if '/' in numero:
-            partes = numero.split('/')
-            if len(partes) == 2 and partes[1].isdigit():
-                return tipo, partes[0], partes[1]
+        # Tipos válidos (ajuste conforme sua necessidade)
+        tipos_validos = ["LEI", "DECRETO", "PORTARIA", "ATO NORMATIVO", "MP", "LC", "RESOLUCAO"]
+        if norma.tipo.upper() not in tipos_validos:
+            return False
         
-        return tipo, numero, None
+        # Validação do número - deve ter pelo menos 3 caracteres (ex: "1/21")
+        if len(norma.numero.strip()) < 3:
+            return False
+        
+        # Regex para validar formatos comuns de números de normas
+        padrao_numero = re.compile(r'^(\d{1,4}[\/\-\.]?\d{0,4}|\d\/\d{2})$')
+        if not padrao_numero.match(norma.numero):
+            return False
+        
+        return True
