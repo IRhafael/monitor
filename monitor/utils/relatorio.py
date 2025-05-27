@@ -7,6 +7,8 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 from monitor.models import Documento, NormaVigente
+from django.db.models import Case, When, Value, CharField
+
 
 logger = logging.getLogger(__name__)
 
@@ -269,19 +271,22 @@ class RelatorioGenerator:
     @staticmethod
     def _ajustar_colunas(worksheet):
         """Ajusta automaticamente a largura das colunas"""
-        for col in worksheet.columns:
+        for col_cells in worksheet.columns:
             max_length = 0
-            column = col[0].column_letter
-            
-            for cell in col:
+            column_letter = None
+            for cell in col_cells:
+                if not hasattr(cell, "column_letter"):
+                    continue  # ignora células mescladas
+                column_letter = cell.column_letter
                 try:
-                    value = str(cell.value) if cell.value else ""
-                    max_length = max(max_length, len(value))
+                    if cell.value:
+                        max_length = max(max_length, len(str(cell.value)))
                 except:
                     pass
-                
-            adjusted_width = (max_length + 2) * 1.1
-            worksheet.column_dimensions[column].width = min(adjusted_width, 50)
+            if column_letter:
+                adjusted_width = (max_length + 2) * 1.1
+                worksheet.column_dimensions[column_letter].width = min(adjusted_width, 50)
+
 
     @staticmethod
     def _aplicar_auto_filtro(worksheet):

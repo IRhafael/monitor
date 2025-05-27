@@ -80,7 +80,6 @@ class PDFProcessor:
         # Mapeamentos flexíveis para LEI
         mapping['lei'] = 'LEI'
         mapping['leis'] = 'LEI'
-        mapping['lc'] = 'LEI' 
         mapping['lei complementar'] = 'LEI'
         mapping['leis complementares'] = 'LEI'
 
@@ -121,7 +120,7 @@ class PDFProcessor:
         
         # Padrão para "LEI [COMPLEMENTAR] [Nº] [NÚMERO]"
         self.matcher.add("LEI_PADRAO", [
-            [{"LOWER": {"IN": ["lei", "leis", "lc"]}}, {"OP": "?"}, {"LOWER": "complementar", "OP": "?"}, 
+            [{"LOWER": {"IN": ["lei", "leis"]}}, {"OP": "?"}, {"LOWER": "complementar", "OP": "?"}, 
              {"LOWER": {"IN": ["n", "nº", "n°"]}, "OP": "?"}, {"IS_DIGIT": True}]
         ])
         # Padrão para "DECRETO [LEI] [Nº] [NÚMERO]"
@@ -182,7 +181,7 @@ class PDFProcessor:
         termo_lower = termo_para_buscar.lower()
 
         if 'lei' in termo_lower:
-            patterns.append(r'(lei complementar|lc|lei)')
+            patterns.append(r'(lei complementar|lei)')
         if 'decreto' in termo_lower:
             patterns.append(r'(decreto[\- ]?lei|decreto)')
         if 'portaria' in termo_lower:
@@ -218,7 +217,7 @@ class PDFProcessor:
         
         # Padrão regex melhorado para capturar números com pontos
         padrao_norma = re.compile(
-            r'(?i)(lei complementar|lc|lei|decreto[\- ]?lei|decreto|ato normativo|portaria|instrução normativa|in|emenda constitucional|ec)[\s:]*(?:n[º°o.]?\s*)?(\d+[\.,\/\-]?\d*(?:[\/\-]\d+)*)',
+            r'(?i)(lei complementar|lei|decreto[\- ]?lei|decreto|ato normativo|portaria|instrução normativa|in)[\s:]*(?:n[º°o.]?\s*)?(\d+[\.,\/\-]?\d*(?:[\/\-]\d+)*)',
             re.IGNORECASE
         )
         

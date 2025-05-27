@@ -1,102 +1,66 @@
-# test_normas.py
 import os
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'diario_oficial.settings')
 import django
+import pandas as pd
+from datetime import datetime, timedelta
+
+# Configuração do ambiente Django
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'diario_oficial.settings')  # Substitua pelo seu módulo de settings
 django.setup()
 
 from monitor.models import NormaVigente
-from monitor.utils.sefaz_integracao import IntegradorSEFAZ
-from datetime import datetime, timedelta
-import time
+from django.utils import timezone
 
-def criar_norma_testes():
-    NormaVigente.objects.filter(descricao__startswith='[TESTE]').delete()
+def gerar_relatorio_completo():
+    print("\n=== RELATÓRIO COMPLETO DE NORMAS ===")
     
-    dados_testes = [
-        # Normas válidas
-        {'tipo': 'DECRETO', 'numero': '21.866', 'descricao': '[TESTE] VP - Decreto válido'},
-        {'tipo': 'LEI', 'numero': '4.257', 'descricao': '[TESTE] VP - Lei válida'},
-        {'tipo': 'ATO NORMATIVO', 'numero': '25/21', 'descricao': '[TESTE] VP - Ato normativo válido'},
-        # Normas inválidas
-        {'tipo': 'INVALIDO', 'numero': '123', 'descricao': '[TESTE] FP - Tipo inválido'},
-        {'tipo': 'DECRETO', 'numero': '1', 'descricao': '[TESTE] FP - Número muito curto'},
-        {'tipo': 'DECRETO', 'numero': '999999', 'descricao': '[TESTE] FP - Número inexistente'},
-    ]
-    
-    # Criação individual com bypass
-    for dados in dados_testes:
-        norma = NormaVigente(**dados, situacao='NAO_VERIFICADO')
-        norma.save(force_insert=True)
-    
-    print(f"Criadas {len(dados_testes)} normas de teste (3 válidas e 3 inválidas)")
-
-def executar_testes():
-    integrador = IntegradorSEFAZ()
-    
-    # Seleciona apenas as normas de teste
-    normas_teste = NormaVigente.objects.filter(descricao__startswith='[TESTE]').order_by('descricao')
-    
-    print("\n=== Iniciando testes ===")
-    resultados = integrador.verificar_normas_em_lote(list(normas_teste))
-    
-    print("\n=== Resultados ===")
-    for norma in normas_teste:
-
-        norma.refresh_from_db()  # Atualiza com dados do banco
-        status_color = "\033[92m" if norma.situacao == 'VIGENTE' else "\033[91m" if norma.situacao != 'NAO_VIGENTE' else "\033[93m"
-        print(f"{norma.descricao.ljust(40)} | Tipo: {str(norma.tipo).ljust(10)} | Número: {str(norma.numero).ljust(8)} | Status: {status_color}{norma.situacao}\033[0m")
+    try:
+        # Dados consolidados
+        total_normas = NormaVigente.objects.count()
+        normas_verificadas = NormaVigente.objects.exclude(data_verificacao__isnull=True)
+        normas_nao_verificadas = NormaVigente.objects.filter(data_verificacao__isnull=True)
         
-    # Estatísticas
-    vp = normas_teste.filter(descricao__contains='VP', situacao='VIGENTE')
-    fp = normas_teste.filter(descricao__contains='FP', situacao='VIGENTE')
-    vn = normas_teste.filter(descricao__contains='FP').exclude(situacao='VIGENTE')
-    fn = normas_teste.filter(descricao__contains='VP').exclude(situacao='VIGENTE')
-
-    print("\n=== Estatísticas Detalhadas ===")
-    print(f"\033[92mVerdadeiros Positivos (VP): {vp.count()}/{normas_teste.filter(descricao__contains='VP').count()}\033[0m")
-    print(f"\033[91mFalsos Positivos (FP):     {fp.count()}/{normas_teste.filter(descricao__contains='FP').count()}\033[0m")
-    print(f"\033[93mVerdadeiros Negativos (VN): {vn.count()}/{normas_teste.filter(descricao__contains='FP').count()}\033[0m")
-    print(f"\033[91mFalsos Negativos (FN):     {fn.count()}/{normas_teste.filter(descricao__contains='VP').count()}\033[0m")
-
-    # Sugestões de melhoria baseadas nos resultados
-    if fp.count() > 0:
-        print("\n\033[91mALERTA: Falsos positivos detectados! Verifique:\033[0m")
-        for norma in fp:
-            print(f"- {norma.descricao} (Tipo: {norma.tipo}, Número: {norma.numero})")
-        print("\nRecomendações:")
-        print("1. Aumente a validação no método _norma_e_valida()")
-        print("2. Revise os critérios de vigência no SEFAZScraper")
-
-    if fn.count() > 0:
-        print("\n\033[91mALERTA: Falsos negativos detectados! Verifique:\033[0m")
-        for norma in fn:
-            print(f"- {norma.descricao} (Tipo: {norma.tipo}, Número: {norma.numero})")
-        print("\nRecomendações:")
-        print("1. Verifique se as normas existem no portal SEFAZ")
-        print("2. Ajuste os critérios de verificação de vigência")
-
-def limpar_testes():
-    deleted_count = NormaVigente.objects.filter(descricao__startswith='[TESTE]').delete()[0]
-    print(f"\033[93m{deleted_count} normas de teste removidas\033[0m")
+        # Cálculo de métricas
+        vigentes = normas_verificadas.filter(situacao='VIGENTE').count()
+        nao_vigentes = normas_verificadas.filter(situacao='NAO_VIGENTE').count()
+        invalidas = normas_verificadas.filter(situacao='DADOS_INVALIDOS').count()
+        
+        # Coleta de dados para DataFrame
+        dados = []
+        for norma in NormaVigente.objects.all().only('id', 'tipo', 'numero', 'situacao', 'data_verificacao'):
+            dados.append({
+                'ID': norma.id,
+                'Tipo': norma.tipo,
+                'Número': norma.numero,
+                'Situação': norma.situacao or 'NÃO VERIFICADA',
+                'Última Verificação': norma.data_verificacao.strftime('%d/%m/%Y') if norma.data_verificacao else 'Nunca verificada',
+                'Dias desde verificação': (timezone.now() - norma.data_verificacao).days if norma.data_verificacao else 'N/A'
+            })
+        
+        df = pd.DataFrame(dados)
+        
+        # Exibir relatório
+        print(f"\n🔍 Total de normas: {total_normas}")
+        print(f"✅ Vigentes: {vigentes} | ❌ Não vigentes: {nao_vigentes}")
+        print(f"⚠️ Inválidas: {invalidas} | � Não verificadas: {normas_nao_verificadas.count()}")
+        
+        print("\n📊 Distribuição por tipo:")
+        print(df['Tipo'].value_counts().to_string())
+        
+        print("\n📅 Status por verificação:")
+        print(pd.crosstab(df['Situação'], df['Última Verificação']))
+        
+        print("\n🧐 Normas que precisam de atenção:")
+        print(df[df['Situação'].isin(['NAO_VIGENTE', 'DADOS_INVALIDOS'])].to_string(index=False))
+        
+        # Salvar relatório
+        df.to_csv('relatorio_normas.csv', index=False)
+        print("\n💾 Relatório salvo como 'relatorio_normas.csv'")
+    
+    except Exception as e:
+        print(f"\n❌ Erro ao gerar relatório: {str(e)}")
+        if 'df' in locals():
+            print("\n⚠️ Dados parciais coletados:")
+            print(df.head().to_string())
 
 if __name__ == '__main__':
-    print("\n=== Teste de Verificação de Normas ===")
-    print("1. Criar normas de teste")
-    print("2. Executar testes")
-    print("3. Limpar testes")
-    print("4. Sair")
-    
-    while True:
-        opcao = input("\nSelecione uma opção (1-4): ").strip()
-        
-        if opcao == '1':
-            criar_norma_testes()
-        elif opcao == '2':
-            executar_testes()
-        elif opcao == '3':
-            limpar_testes()
-        elif opcao == '4':
-            print("Encerrando...")
-            break
-        else:
-            print("\033[91mOpção inválida. Tente novamente.\033[0m")
+    gerar_relatorio_completo()

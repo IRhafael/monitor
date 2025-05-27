@@ -154,7 +154,7 @@ def processar_documentos_pendentes_task(self, previous_task_result=None):
 
 
 @shared_task(bind=True)
-def verificar_normas_sefaz_task(self):
+def verificar_normas_sefaz_task(self,*args, **kwargs):
     task_id = self.request.id
     logger.info(f"[{task_id}] Tarefa Celery 'verificar_normas_sefaz_task' iniciada.")
     log_status = 'ERRO'
