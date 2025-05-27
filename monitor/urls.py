@@ -38,4 +38,12 @@ urlpatterns = [
     
     # Logs
     path('logs/', views.logs_execucao, name='logs_execucao'),
+
+
+    path('celery/control/', views.celery_control, name='celery_control'),
+path('celery/status/', views.celery_status, name='celery_status'),
+path('celery/start/', views.start_celery_worker, name='start_celery_worker'),
+path('celery/stop/', views.stop_celery_worker, name='stop_celery_worker'),
+path('celery/tasks/', views.get_celery_tasks, name='get_celery_tasks'),
+path('normas/verify-batch/', views.verify_normas_batch, name='verify_normas_batch'),
 ]

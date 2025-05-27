@@ -174,6 +174,20 @@ class NormaVigente(models.Model):
             self.full_clean()
             super().save(*args, **kwargs)
 
+    @property
+    def get_status_badge_class(self):
+        status_map = {
+            'VIGENTE': 'bg-success',
+            'REVOGADA': 'bg-danger',
+            'NÃO ENCONTRADA': 'bg-warning text-dark',
+            None: 'bg-secondary'
+        }
+        return status_map.get(self.situacao, 'bg-secondary')
+    
+    @property
+    def documentos_count(self):
+        return self.documentos.count()
+
 
 class Documento(models.Model):
     """

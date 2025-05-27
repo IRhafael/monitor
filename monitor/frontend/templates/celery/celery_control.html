@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+
+{% block page_title %}Controle do Celery{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-12">
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5>Status do Worker</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-4">
+                        <div class="card bg-light mb-3">
+                            <div class="card-body text-center">
+                                <h5>Worker Status</h5>
+                                <span id="worker-status" class="badge bg-secondary">Verificando...</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card bg-light mb-3">
+                            <div class="card-body text-center">
+                                <h5>Tarefas Ativas</h5>
+                                <span id="active-tasks" class="badge bg-info">0</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card bg-light mb-3">
+                            <div class="card-body text-center">
+                                <h5>Tarefas na Fila</h5>
+                                <span id="queued-tasks" class="badge bg-warning text-dark">0</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="d-grid gap-2 d-md-flex justify-content-md-center mt-3">
+                    <button id="start-worker-btn" class="btn btn-success me-md-2">
+                        <i class="bi bi-play-circle"></i> Iniciar Worker
+                    </button>
+                    <button id="stop-worker-btn" class="btn btn-danger">
+                        <i class="bi bi-stop-circle"></i> Parar Worker
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <h5>Histórico de Tarefas Recentes</h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover" id="tasks-table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Tipo</th>
+                                <th>Status</th>
+                                <th>Início</th>
+                                <th>Término</th>
+                                <th>Resultado</th>
+                                <th>Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- Será preenchido via AJAX -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+$(document).ready(function() {
+    // Função para atualizar o status do worker
+    function updateWorkerStatus() {
+        $.get('/celery/status/', function(data) {
+            $('#worker-status').removeClass('bg-secondary bg-success bg-danger')
+                              .addClass(data.is_running ? 'bg-success' : 'bg-danger')
+                              .text(data.is_running ? 'Ativo' : 'Inativo');
+            
+            $('#active-tasks').text(data.active_tasks);
+            $('#queued-tasks').text(data.queued_tasks);
+        });
+    }
+    
+    // Função para carregar tarefas recentes
+    function loadRecentTasks() {
+        $.get('/celery/tasks/', function(data) {
+            let tbody = $('#tasks-table tbody');
+            tbody.empty();
+            
+            data.tasks.forEach(task => {
+                let row = `<tr>
+                    <td>${task.id}</td>
+                    <td>${task.name}</td>
+                    <td><span class="badge ${getStatusBadgeClass(task.status)}">${task.status}</span></td>
+                    <td>${task.received ? new Date(task.received).toLocaleString() : '-'}</td>
+                    <td>${task.succeeded ? new Date(task.succeeded).toLocaleString() : '-'}</td>
+                    <td>${task.result || '-'}</td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-info view-task-btn" data-task-id="${task.id}">
+                            <i class="bi bi-eye"></i>
+                        </button>
+                    </td>
+                </tr>`;
+                tbody.append(row);
+            });
+        });
+    }
+    
+    function getStatusBadgeClass(status) {
+        const map = {
+            'SUCCESS': 'bg-success',
+            'FAILURE': 'bg-danger',
+            'PENDING': 'bg-secondary',
+            'STARTED': 'bg-info',
+            'RETRY': 'bg-warning text-dark'
+        };
+        return map[status] || 'bg-secondary';
+    }
+    
+    // Controles do worker
+    $('#start-worker-btn').click(function() {
+        $.post('/celery/start/', function() {
+            updateWorkerStatus();
+            showToast('Worker iniciado com sucesso', 'success');
+        }).fail(() => showToast('Erro ao iniciar worker', 'danger'));
+    });
+    
+    $('#stop-worker-btn').click(function() {
+        $.post('/celery/stop/', function() {
+            updateWorkerStatus();
+            showToast('Worker parado com sucesso', 'success');
+        }).fail(() => showToast('Erro ao parar worker', 'danger'));
+    });
+    
+    // Atualiza periodicamente
+    updateWorkerStatus();
+    loadRecentTasks();
+    setInterval(updateWorkerStatus, 5000);
+    setInterval(loadRecentTasks, 10000);
+    
+    function showToast(message, type) {
+        // Implementação simples de toast
+        let toast = $(`<div class="toast show align-items-center text-white bg-${type} border-0 position-fixed bottom-0 end-0 m-3" role="alert">
+            <div class="d-flex">
+                <div class="toast-body">${message}</div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+            </div>
+        </div>`);
+        
+        $('body').append(toast);
+        setTimeout(() => toast.remove(), 3000);
+    }
+});
+</script>
+{% endblock %}

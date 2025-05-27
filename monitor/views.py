@@ -21,6 +21,13 @@ from .models import Documento, NormaVigente, LogExecucao, RelatorioGerado
 from .utils.sefaz_integracao import IntegradorSEFAZ # Mantida se houver outras funções síncronas aqui que não sejam tarefas
 from .utils.relatorio import RelatorioGenerator
 from .utils.tasks import coletar_diario_oficial_task, processar_documentos_pendentes_task, verificar_normas_sefaz_task
+import subprocess
+from django.http import JsonResponse
+from celery.app.control import Control
+from diario_oficial.celery import app  # substitua `your_project` pelo nome correto do seu projeto
+
+inspector = app.control.inspect()
+
 
 
 
@@ -397,3 +404,101 @@ def marcar_documento_irrelevante(request, pk):
         messages.info(request, f"Documento '{documento.titulo}' marcado como irrelevante.")
         return redirect('analise_documentos') # Ou para onde for mais adequado após a ação
     return Http404("Método não permitido. Esta ação requer um POST.")
+
+
+
+@login_required
+def celery_control(request):
+    return render(request, 'celery_control.html')
+
+@login_required
+def celery_status(request):
+    try:
+        i = inspect()
+        active_tasks = len(i.active() or {})
+        scheduled_tasks = len(i.scheduled() or {})
+        
+        # Verifica se o worker está ativo
+        is_running = bool(i.ping())
+        
+        return JsonResponse({
+            'is_running': is_running,
+            'active_tasks': active_tasks,
+            'queued_tasks': scheduled_tasks
+        })
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+@login_required
+def start_celery_worker(request):
+    if request.method == 'POST':
+        try:
+            # Inicia o worker em segundo plano
+            subprocess.Popen(['celery', '-A', 'your_project', 'worker', '--loglevel=info'])
+            return JsonResponse({'status': 'success'})
+        except Exception as e:
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+    return JsonResponse({'status': 'error'}, status=405)
+
+@login_required
+def stop_celery_worker(request):
+    if request.method == 'POST':
+        try:
+            # Envia shutdown para todos os workers
+            i = inspect()
+            i.broadcast('shutdown')
+            return JsonResponse({'status': 'success'})
+        except Exception as e:
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+    return JsonResponse({'status': 'error'}, status=405)
+
+@login_required
+def get_celery_tasks(request):
+    try:
+        i = inspect()
+        active = i.active() or {}
+        scheduled = i.scheduled() or {}
+        
+        tasks = []
+        for worker, worker_tasks in active.items():
+            tasks.extend([{
+                'id': t['id'],
+                'name': t['name'],
+                'status': 'STARTED',
+                'received': t['time_start'],
+                'args': t['args'],
+                'worker': worker
+            } for t in worker_tasks])
+        
+        for worker, worker_tasks in scheduled.items():
+            tasks.extend([{
+                'id': t['request']['id'],
+                'name': t['request']['name'],
+                'status': 'SCHEDULED',
+                'eta': t['eta'],
+                'args': t['request']['args'],
+                'worker': worker
+            } for t in worker_tasks])
+        
+        return JsonResponse({'tasks': tasks})
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+@login_required
+def verify_normas_batch(request):
+    if request.method == 'POST':
+        norma_ids = request.POST.getlist('ids[]')
+        normas = NormaVigente.objects.filter(id__in=norma_ids)
+        
+        # Dispara tarefa assíncrona para verificar em lote
+        task = verificar_normas_sefaz_task.delay(
+            norma_ids=norma_ids
+        )
+        
+        return JsonResponse({
+            'status': 'success',
+            'task_id': task.id,
+            'count': len(norma_ids)
+        })
+    
+    return JsonResponse({'status': 'error'}, status=405)
