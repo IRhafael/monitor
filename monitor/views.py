@@ -1,4 +1,5 @@
 from datetime import timedelta, datetime
+import inspect
 from itertools import count
 from urllib import request
 from django.db.models import F, ExpressionWrapper, Q # Adicione Q para consultas complexas
@@ -25,6 +26,8 @@ import subprocess
 from django.http import JsonResponse
 from celery.app.control import Control
 from diario_oficial.celery import app  # substitua `your_project` pelo nome correto do seu projeto
+from django.views.decorators.http import require_POST
+from django.http import JsonResponse
 
 inspector = app.control.inspect()
 
@@ -502,3 +505,63 @@ def verify_normas_batch(request):
         })
     
     return JsonResponse({'status': 'error'}, status=405)
+
+
+
+
+from django.views.decorators.http import require_POST
+from django.http import JsonResponse
+
+@login_required
+def celery_status_view(request):
+    try:
+        i = inspect()
+        active = i.active() or {}
+        scheduled = i.scheduled() or {}
+        
+        return JsonResponse({
+            'is_running': bool(i.ping()),
+            'active_tasks': sum(len(tasks) for tasks in active.values()),
+            'queued_tasks': sum(len(tasks) for tasks in scheduled.values()),
+            'workers': len(active.keys())
+        })
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+@require_POST
+@login_required
+def process_document_batch(request):
+    try:
+        document_ids = request.POST.getlist('ids[]')
+        # Dispara tarefa assíncrona para processar os documentos
+        task = processar_documentos_pendentes_task.delay(document_ids=document_ids)
+        return JsonResponse({'success': True, 'task_id': task.id})
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+@require_POST
+@login_required
+def verify_normas_batch(request):
+    try:
+        norma_ids = request.POST.getlist('ids[]')
+        # Dispara tarefa assíncrona para verificar as normas
+        task = verificar_normas_sefaz_task.delay(norma_ids=norma_ids)
+        return JsonResponse({'success': True, 'task_id': task.id})
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+@login_required
+def document_preview(request, pk):
+    documento = get_object_or_404(Documento, pk=pk)
+    context = {'documento': documento}
+    return render(request, 'documentos/preview.html', context)
+
+@login_required
+def norma_history(request, pk):
+    norma = get_object_or_404(NormaVigente, pk=pk)
+    verificacoes = LogExecucao.objects.filter(
+        tipo_execucao='VERIFICACAO_SEFAZ',
+        detalhes__contains={'norma_id': norma.id}
+    ).order_by('-data_inicio')
+    context = {'norma': norma, 'verificacoes': verificacoes}
+    return render(request, 'normas/history.html', context)

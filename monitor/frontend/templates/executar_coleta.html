@@ -1,53 +1,136 @@
 {% extends 'base.html' %}
 {% block content %}
 <div class="container">
-    <h2>Executar Tarefas</h2>
-    
+    <div class="row">
+        <div class="col-md-6">
+            <div class="card mb-4">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5>Coletar Documentos</h5>
+                    <span class="badge bg-{% if celery_status.is_running %}success{% else %}danger{% endif %}">
+                        {% if celery_status.is_running %}Ativo{% else %}Inativo{% endif %}
+                    </span>
+                </div>
+                <div class="card-body">
+                    <form method="post" action="{% url 'executar_coleta' %}">
+                        {% csrf_token %}
+                        <div class="mb-3">
+                            <label class="form-label">Período</label>
+                            <select class="form-select" name="days_back">
+                                <option value="1">Últimas 24 horas</option>
+                                <option value="3" selected>Últimos 3 dias</option>
+                                <option value="7">Últimos 7 dias</option>
+                                <option value="15">Últimos 15 dias</option>
+                            </select>
+                        </div>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-cloud-download"></i> Executar Coleta
+                        </button>
+                    </form>
+                </div>
+                <div class="card-footer">
+                    <small class="text-muted">
+                        Última execução: {{ ultima_execucao_coleta.data_inicio|date:"d/m/Y H:i"|default:"Nunca" }}
+                    </small>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-md-6">
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5>Status do Worker</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row text-center mb-3">
+                        <div class="col-4">
+                            <div class="card">
+                                <div class="card-body">
+                                    <h6>Tarefas Ativas</h6>
+                                    <span class="badge bg-info">{{ celery_status.active_tasks }}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-4">
+                            <div class="card">
+                                <div class="card-body">
+                                    <h6>Na Fila</h6>
+                                    <span class="badge bg-warning text-dark">{{ celery_status.queued_tasks }}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-4">
+                            <div class="card">
+                                <div class="card-body">
+                                    <h6>Workers</h6>
+                                    <span class="badge bg-secondary">{{ celery_status.workers }}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="d-grid gap-2">
+                        <a href="{% url 'celery_control' %}" class="btn btn-outline-secondary">
+                            <i class="bi bi-gear"></i> Painel de Controle
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tarefas em andamento -->
     <div class="card mb-4">
         <div class="card-header">
-            <h5>Coletar Documentos</h5>
+            <h5>Tarefas Recentes</h5>
         </div>
         <div class="card-body">
-            <p>Coleta documentos do Diário Oficial dos últimos 7 dias.</p>
-            <form method="post" action="{% url 'executar_coleta' %}">
-                {% csrf_token %}
-                <button type="submit" class="btn btn-primary">
-                    Executar Coleta
-                </button>
-            </form>
+            <div class="table-responsive">
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Tipo</th>
+                            <th>Status</th>
+                            <th>Início</th>
+                            <th>Progresso</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for task in recent_tasks %}
+                        <tr>
+                            <td>{{ task.id|truncatechars:8 }}</td>
+                            <td>{{ task.name }}</td>
+                            <td>
+                                <span class="badge {{ task.status_badge }}">
+                                    {{ task.status }}
+                                </span>
+                            </td>
+                            <td>{{ task.received|date:"H:i:s" }}</td>
+                            <td>
+                                {% if task.status == 'PROGRESS' %}
+                                <div class="progress" style="height: 20px;">
+                                    <div class="progress-bar" role="progressbar" 
+                                         style="width: {{ task.result.progress }}%;" 
+                                         aria-valuenow="{{ task.result.progress }}" 
+                                         aria-valuemin="0" 
+                                         aria-valuemax="100">
+                                        {{ task.result.progress }}%
+                                    </div>
+                                </div>
+                                {% else %}
+                                -
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="5">Nenhuma tarefa recente</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
-    
-    <div class="card mb-4">
-        <div class="card-header">
-            <h5>Verificar Normas</h5>
-        </div>
-        <div class="card-body">
-            <p>Verifica o status de todas as normas não verificadas ou com verificação antiga.</p>
-            <form method="post" action="{% url 'verificar_normas' %}">
-                {% csrf_token %}
-                <button type="submit" class="btn btn-warning">
-                    Verificar Normas
-                </button>
-            </form>
-        </div>
-    </div>
-    
-    <!-- Mostrar status da última execução -->
-    {% if ultima_execucao %}
-    <div class="card">
-        <div class="card-header">
-            <h5>Última Execução</h5>
-        </div>
-        <div class="card-body">
-            <p><strong>Tipo:</strong> {{ ultima_execucao.get_tipo_display }}</p>
-            <p><strong>Status:</strong> {{ ultima_execucao.get_status_display }}</p>
-            <p><strong>Data:</strong> {{ ultima_execucao.data_criacao }}</p>
-            {% if ultima_execucao.detalhes %}
-                <pre>{{ ultima_execucao.detalhes|pprint }}</pre>
-            {% endif %}
-        </div>
-    </div>
-    {% endif %}
 </div>
 {% endblock %}

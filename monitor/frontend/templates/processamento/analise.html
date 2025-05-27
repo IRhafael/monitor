@@ -1,49 +1,296 @@
 {% extends "base.html" %}
 
+{% block page_title %}Análise de Documentos{% endblock %}
+
+{% block actions %}
+<div class="btn-group me-2">
+    <button class="btn btn-sm btn-success" id="processSelectedBtn">
+        <i class="bi bi-gear"></i> Processar Selecionados
+    </button>
+</div>
+
+<div class="btn-group me-2">
+    <button class="btn btn-sm btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown">
+        <i class="bi bi-funnel"></i> Filtrar
+    </button>
+    <ul class="dropdown-menu">
+        <li><a class="dropdown-item" href="?status=todos">Todos</a></li>
+        <li><hr class="dropdown-divider"></li>
+        <li><a class="dropdown-item" href="?status=pendentes">Pendentes</a></li>
+        <li><a class="dropdown-item" href="?status=processados">Processados</a></li>
+    </ul>
+</div>
+
+<a href="{% url 'resultados_analise' %}" class="btn btn-sm btn-outline-primary">
+    <i class="bi bi-check-circle"></i> Resultados
+</a>
+{% endblock %}
+
 {% block content %}
-<div class="container mt-4">
-    <h2>Análise de Documentos</h2>
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5>Documentos para Análise</h5>
+        <span class="badge bg-primary">{{ documentos.count }} documentos</span>
+    </div>
     
-    <div class="card mt-4">
-        <div class="card-header">
-            <h5>Documentos para Análise</h5>
-        </div>
-        <div class="card-body">
-            <div class="table-responsive">
-                <table class="table table-striped">
-                    <thead>
-                        <tr>
-                            <th>Título</th>
-                            <th>Data</th>
-                            <th>Status</th>
-                            <th>Ações</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for documento in documentos %}
-                        <tr>
-                            <td>{{ documento.titulo }}</td>
-                            <td>{{ documento.data_publicacao|date:"d/m/Y" }}</td>
-                            <td>
-                                <span class="badge bg-{% if documento.processado %}success{% else %}warning{% endif %}">
-                                    {% if documento.processado %}Processado{% else %}Pendente{% endif %}
-                                </span>
-                            </td>
-                            <td>
-                                <a href="{% url 'documento_detail' documento.id %}" class="btn btn-sm btn-primary">
-                                    Detalhes
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover" id="documentsTable">
+                <thead>
+                    <tr>
+                        <th width="40px"><input type="checkbox" id="selectAll"></th>
+                        <th>Título</th>
+                        <th>Data</th>
+                        <th>Status</th>
+                        <th>Relevância</th>
+                        <th>Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for documento in documentos %}
+                    <tr>
+                        <td>
+                            {% if not documento.processado %}
+                            <input type="checkbox" class="doc-checkbox" data-id="{{ documento.id }}">
+                            {% endif %}
+                        </td>
+                        <td>{{ documento.titulo|truncatechars:60 }}</td>
+                        <td>{{ documento.data_publicacao|date:"d/m/Y" }}</td>
+                        <td>
+                            <span class="badge bg-{% if documento.processado %}success{% else %}warning text-dark{% endif %}">
+                                {% if documento.processado %}Processado{% else %}Pendente{% endif %}
+                            </span>
+                        </td>
+                        <td>
+                            {% if documento.processado %}
+                            <span class="badge bg-{% if documento.relevante_contabil %}success{% else %}secondary{% endif %}">
+                                {% if documento.relevante_contabil %}Relevante{% else %}Irrelevante{% endif %}
+                            </span>
+                            {% else %}
+                            <span class="badge bg-light text-dark">Não analisado</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="btn-group btn-group-sm">
+                                <a href="{% url 'documento_detail' documento.id %}" 
+                                   class="btn btn-outline-primary" 
+                                   title="Detalhes">
+                                    <i class="bi bi-eye"></i>
                                 </a>
-                            </td>
-                        </tr>
-                        {% empty %}
-                        <tr>
-                            <td colspan="4">Nenhum documento pendente</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+                                {% if not documento.processado %}
+                                <button class="btn btn-outline-success process-btn" 
+                                        data-id="{{ documento.id }}"
+                                        title="Processar agora">
+                                    <i class="bi bi-lightning"></i>
+                                </button>
+                                {% endif %}
+                                <button class="btn btn-outline-info preview-btn" 
+                                        data-id="{{ documento.id }}"
+                                        title="Pré-visualizar">
+                                    <i class="bi bi-search"></i>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="6" class="text-center">Nenhum documento encontrado</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <div class="card-footer">
+        <div class="d-flex justify-content-between align-items-center">
+            <div>
+                <button class="btn btn-sm btn-outline-danger" id="markIrrelevantBtn">
+                    <i class="bi bi-x-circle"></i> Marcar como Irrelevantes
+                </button>
+            </div>
+            
+            {% if is_paginated %}
+            <nav aria-label="Page navigation">
+                <ul class="pagination pagination-sm mb-0">
+                    {% if page_obj.has_previous %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ page_obj.previous_page_number }}">Anterior</a>
+                    </li>
+                    {% endif %}
+                    
+                    {% for num in page_obj.paginator.page_range %}
+                    {% if page_obj.number == num %}
+                    <li class="page-item active"><a class="page-link" href="#">{{ num }}</a></li>
+                    {% else %}
+                    <li class="page-item"><a class="page-link" href="?page={{ num }}">{{ num }}</a></li>
+                    {% endif %}
+                    {% endfor %}
+                    
+                    {% if page_obj.has_next %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ page_obj.next_page_number }}">Próxima</a>
+                    </li>
+                    {% endif %}
+                </ul>
+            </nav>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- Modal para pré-visualização -->
+<div class="modal fade" id="previewModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Pré-visualização</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body" id="previewModalBody">
+                <div class="text-center my-5">
+                    <div class="spinner-border" role="status">
+                        <span class="visually-hidden">Carregando...</span>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Fechar</button>
             </div>
         </div>
     </div>
 </div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+$(document).ready(function() {
+    // Seleção/deseleção de todos os documentos
+    $('#selectAll').change(function() {
+        $('.doc-checkbox').prop('checked', this.checked);
+    });
+    
+    // Processamento individual
+    $('.process-btn').click(function() {
+        const btn = $(this);
+        const docId = btn.data('id');
+        
+        btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm"></span>');
+        
+        $.ajax({
+            url: `/documentos/${docId}/process/`,
+            method: 'POST',
+            headers: {'X-CSRFToken': '{{ csrf_token }}'},
+            success: function(data) {
+                if(data.success) {
+                    location.reload();
+                } else {
+                    alert('Erro: ' + (data.error || 'Desconhecido'));
+                    btn.prop('disabled', false).html('<i class="bi bi-lightning"></i>');
+                }
+            },
+            error: function() {
+                alert('Erro na requisição');
+                btn.prop('disabled', false).html('<i class="bi bi-lightning"></i>');
+            }
+        });
+    });
+    
+    // Processamento em lote
+    $('#processSelectedBtn').click(function() {
+        const selectedIds = $('.doc-checkbox:checked').map(function() {
+            return $(this).data('id');
+        }).get();
+        
+        if(selectedIds.length === 0) {
+            alert('Selecione pelo menos um documento para processar');
+            return;
+        }
+        
+        if(!confirm(`Deseja processar ${selectedIds.length} documento(s) selecionado(s)?`)) {
+            return;
+        }
+        
+        const btn = $(this);
+        btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm"></span> Processando...');
+        
+        $.ajax({
+            url: '/documentos/process-batch/',
+            method: 'POST',
+            data: {ids: selectedIds},
+            headers: {'X-CSRFToken': '{{ csrf_token }}'},
+            traditional: true,
+            success: function(data) {
+                if(data.success) {
+                    location.reload();
+                } else {
+                    alert('Erro: ' + (data.error || 'Desconhecido'));
+                    btn.prop('disabled', false).html('<i class="bi bi-gear"></i> Processar Selecionados');
+                }
+            },
+            error: function() {
+                alert('Erro na requisição');
+                btn.prop('disabled', false).html('<i class="bi bi-gear"></i> Processar Selecionados');
+            }
+        });
+    });
+    
+    // Marcar como irrelevantes
+    $('#markIrrelevantBtn').click(function() {
+        const selectedIds = $('.doc-checkbox:checked').map(function() {
+            return $(this).data('id');
+        }).get();
+        
+        if(selectedIds.length === 0) {
+            alert('Selecione pelo menos um documento para marcar como irrelevante');
+            return;
+        }
+        
+        if(!confirm(`Deseja marcar ${selectedIds.length} documento(s) selecionado(s) como irrelevantes?\n\nEles não serão processados.`)) {
+            return;
+        }
+        
+        const btn = $(this);
+        btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm"></span>');
+        
+        $.ajax({
+            url: '/documentos/mark-irrelevant-batch/',
+            method: 'POST',
+            data: {ids: selectedIds},
+            headers: {'X-CSRFToken': '{{ csrf_token }}'},
+            traditional: true,
+            success: function(data) {
+                if(data.success) {
+                    location.reload();
+                } else {
+                    alert('Erro: ' + (data.error || 'Desconhecido'));
+                    btn.prop('disabled', false).html('<i class="bi bi-x-circle"></i> Marcar como Irrelevantes');
+                }
+            },
+            error: function() {
+                alert('Erro na requisição');
+                btn.prop('disabled', false).html('<i class="bi bi-x-circle"></i> Marcar como Irrelevantes');
+            }
+        });
+    });
+    
+    // Pré-visualização
+    $('.preview-btn').click(function() {
+        const docId = $(this).data('id');
+        $('#previewModal').modal('show');
+        
+        $.ajax({
+            url: `/documentos/${docId}/preview/`,
+            method: 'GET',
+            success: function(data) {
+                $('#previewModalBody').html(data);
+            },
+            error: function() {
+                $('#previewModalBody').html('<div class="alert alert-danger">Erro ao carregar pré-visualização</div>');
+            }
+        });
+    });
+});
+</script>
 {% endblock %}
