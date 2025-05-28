@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard de Relatórios{% endblock %}
+
+{% block extra_css %}
+<link href="https://cdn.jsdelivr.net/npm/chart.js@3.7.0/dist/chart.min.css" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <h2 class="mb-4">Dashboard de Relatórios</h2>
+    
+    <!-- Cards Estatísticas -->
+    <div class="row mb-4">
+        <div class="col-md-3">
+            <div class="card bg-primary text-white">
+                <div class="card-body">
+                    <h5 class="card-title">Total</h5>
+                    <p class="card-text display-6">{{ total_relatorios }}</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card bg-success text-white">
+                <div class="card-body">
+                    <h5 class="card-title">Este Mês</h5>
+                    <p class="card-text display-6">{{ relatorios_mes }}</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card bg-info text-white">
+                <div class="card-body">
+                    <h5 class="card-title">Contábeis</h5>
+                    <p class="card-text display-6">{{ total_contabil }}</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card bg-warning text-dark">
+                <div class="card-body">
+                    <h5 class="card-title">Downloads</h5>
+                    <p class="card-text display-6">{{ total_downloads }}</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Gráficos -->
+    <div class="row">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">
+                    <h5>Relatórios por Tipo</h5>
+                </div>
+                <div class="card-body">
+                    <canvas id="tipoChart" height="300"></canvas>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">
+                    <h5>Atividade Mensal</h5>
+                </div>
+                <div class="card-body">
+                    <canvas id="monthlyChart" height="300"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.0/dist/chart.min.js"></script>
+<script>
+// Gráfico de Tipos
+const tipoCtx = document.getElementById('tipoChart').getContext('2d');
+new Chart(tipoCtx, {
+    type: 'pie',
+    data: {
+        labels: {{ tipos_labels|safe }},
+        datasets: [{
+            data: {{ tipos_data|safe }},
+            backgroundColor: [
+                '#4e73df', '#1cc88a', '#36b9cc', '#f6c23e'
+            ]
+        }]
+    }
+});
+
+// Gráfico Mensal
+const monthlyCtx = document.getElementById('monthlyChart').getContext('2d');
+new Chart(monthlyCtx, {
+    type: 'bar',
+    data: {
+        labels: {{ meses_labels|safe }},
+        datasets: [{
+            label: 'Relatórios Gerados',
+            data: {{ meses_data|safe }},
+            backgroundColor: '#4e73df'
+        }]
+    },
+    options: {
+        scales: {
+            y: {
+                beginAtZero: true
+            }
+        }
+    }
+});
+</script>
+{% endblock %}

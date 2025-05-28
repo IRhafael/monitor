@@ -20,14 +20,20 @@ from .utils.tasks import pipeline_coleta_e_processamento
 from .forms import DocumentoUploadForm
 from .models import Documento, NormaVigente, LogExecucao, RelatorioGerado
 from .utils.sefaz_integracao import IntegradorSEFAZ # Mantida se houver outras funções síncronas aqui que não sejam tarefas
-from .utils.relatorio import RelatorioGenerator
+from .utils.relatorio import RelatorioAvancado
 from .utils.tasks import coletar_diario_oficial_task, processar_documentos_pendentes_task, verificar_normas_sefaz_task
 import subprocess
 from django.http import JsonResponse
 from celery.app.control import Control
 from diario_oficial.celery import app  # substitua `your_project` pelo nome correto do seu projeto
 from django.views.decorators.http import require_POST
-from django.http import JsonResponse
+from django.views.generic import ListView
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.views.generic import TemplateView
+from django.db.models import Count, Sum
+import calendar
+from .utils.relatorio import RelatorioAvancado
+
 
 inspector = app.control.inspect()
 
@@ -244,13 +250,19 @@ def editar_documento(request, pk):
 def gerar_relatorio_contabil_view(request):
     if request.method == 'POST':
         try:
-            RelatorioGenerator.gerar_relatorio_contabil()  # Método estático
-            messages.success(request, "Relatório contábil gerado com sucesso!")
+            relatorio = RelatorioAvancado()
+            caminho_do_relatorio = relatorio.gerar_relatorio_completo()
+            
+            if caminho_do_relatorio:
+                messages.success(request, "Relatório contábil gerado com sucesso!")
+            else:
+                messages.error(request, "Falha ao gerar o relatório contábil.")
+
         except Exception as e:
+            logger.error(f"Erro ao gerar relatório contábil: {e}", exc_info=True)
             messages.error(request, f"Erro ao gerar relatório contábil: {e}")
         return redirect('dashboard_relatorios')
-    
-    # Para GET, renderiza um template com um botão para enviar POST
+
     return render(request, 'relatorios/gerar_relatorio.html')
 
 @login_required
@@ -565,3 +577,96 @@ def norma_history(request, pk):
     ).order_by('-data_inicio')
     context = {'norma': norma, 'verificacoes': verificacoes}
     return render(request, 'normas/history.html', context)
+
+
+
+class RelatorioListView(LoginRequiredMixin, ListView):
+    model = RelatorioGerado
+    template_name = 'relatorios/listar_relatorios.html'
+    context_object_name = 'relatorios'
+    paginate_by = 10
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        
+        # Filtros
+        tipo = self.request.GET.get('tipo')
+        data_inicio = self.request.GET.get('data_inicio')
+        data_fim = self.request.GET.get('data_fim')
+        
+        if tipo:
+            queryset = queryset.filter(tipo=tipo)
+        if data_inicio:
+            try:
+                data = datetime.strptime(data_inicio, '%Y-%m-%d').date()
+                queryset = queryset.filter(data_criacao__gte=data)
+            except ValueError:
+                pass
+        if data_fim:
+            try:
+                data = datetime.strptime(data_fim, '%Y-%m-%d').date()
+                queryset = queryset.filter(data_criacao__lte=data)
+            except ValueError:
+                pass
+        
+        return queryset.order_by('-data_criacao')
+    
+
+
+class RelatorioDashboardView(TemplateView):
+    template_name = 'relatorios/dashboard.html'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        
+        # Estatísticas básicas
+        context['total_relatorios'] = RelatorioGerado.objects.count()
+        context['total_contabil'] = RelatorioGerado.objects.filter(tipo='CONTABIL').count()
+        context['total_downloads'] = RelatorioGerado.objects.aggregate(
+            total=Sum('downloads')
+        )['total'] or 0
+        
+        # Relatórios deste mês
+        month_start = timezone.now().replace(day=1, hour=0, minute=0, second=0)
+        context['relatorios_mes'] = RelatorioGerado.objects.filter(
+            data_criacao__gte=month_start
+        ).count()
+        
+        # Dados para gráficos
+        tipos = RelatorioGerado.objects.values('tipo').annotate(
+            total=Count('id')
+        ).order_by('-total')
+        
+        context['tipos_labels'] = [t['tipo'] for t in tipos]
+        context['tipos_data'] = [t['total'] for t in tipos]
+        
+        # Últimos 12 meses
+        meses = []
+        data = []
+        hoje = timezone.now()
+        
+        for i in range(11, -1, -1):
+            month = hoje.month - i
+            year = hoje.year
+            if month < 1:
+                month += 12
+                year -= 1
+            
+            start_date = timezone.datetime(year, month, 1)
+            end_date = timezone.datetime(
+                year, month, 
+                calendar.monthrange(year, month)[1],
+                23, 59, 59
+            )
+            
+            count = RelatorioGerado.objects.filter(
+                data_criacao__range=(start_date, end_date)
+            ).count()
+            
+            meses.append(calendar.month_abbr[month])
+            data.append(count)
+        
+        context['meses_labels'] = meses
+        context['meses_data'] = data
+        
+        return context

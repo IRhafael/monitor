@@ -1,26 +1,123 @@
 {% extends "base.html" %}
+
 {% block title %}Relatórios Gerados{% endblock %}
-{% block page_title %}Relatórios Gerados{% endblock %}
 
 {% block content %}
-<div class="row">
-    {% for relatorio in relatorios %}
-        <div class="col-md-6 mb-4">
-            <div class="card shadow-sm">
-                <div class="card-body">
-                    <h5 class="card-title">{{ relatorio.get_tipo_display }}</h5>
-                    <p class="card-text">
-                        Criado em: {{ relatorio.data_criacao|date:"d/m/Y H:i" }}<br>
-                        Formato: {{ relatorio.formato }}
-                    </p>
-                    <a href="{% url 'download_relatorio' relatorio.id %}" class="btn btn-sm btn-primary">
-                        <i class="bi bi-download"></i> Baixar
-                    </a>
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>Relatórios Gerados</h2>
+        <a href="{% url 'gerar_relatorio' %}" class="btn btn-primary">
+            <i class="bi bi-plus-circle"></i> Novo Relatório
+        </a>
+    </div>
+
+    <!-- Filtros Avançados -->
+    <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="mb-0">Filtrar Relatórios</h5>
+        </div>
+        <div class="card-body">
+            <form method="get" class="row g-3">
+                <div class="col-md-3">
+                    <label for="tipo" class="form-label">Tipo</label>
+                    <select id="tipo" name="tipo" class="form-select">
+                        <option value="">Todos</option>
+                        <option value="CONTABIL">Contábil</option>
+                        <option value="MUDANCAS">Mudanças</option>
+                    </select>
                 </div>
+                <div class="col-md-3">
+                    <label for="data_inicio" class="form-label">Data Início</label>
+                    <input type="date" id="data_inicio" name="data_inicio" class="form-control">
+                </div>
+                <div class="col-md-3">
+                    <label for="data_fim" class="form-label">Data Fim</label>
+                    <input type="date" id="data_fim" name="data_fim" class="form-control">
+                </div>
+                <div class="col-md-3 d-flex align-items-end">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-funnel"></i> Filtrar
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Lista de Relatórios -->
+    <div class="card">
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-hover">
+                    <thead>
+                        <tr>
+                            <th>Nome</th>
+                            <th>Tipo</th>
+                            <th>Data</th>
+                            <th>Downloads</th>
+                            <th>Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for relatorio in relatorios %}
+                        <tr>
+                            <td>{{ relatorio.nome_arquivo }}</td>
+                            <td>
+                                <span class="badge bg-{{ relatorio.tipo|lower }}">
+                                    {{ relatorio.get_tipo_display }}
+                                </span>
+                            </td>
+                            <td>{{ relatorio.data_criacao|date:"d/m/Y H:i" }}</td>
+                            <td>{{ relatorio.downloads }}</td>
+                            <td>
+                                <a href="{% url 'download_relatorio' relatorio.pk %}" 
+                                   class="btn btn-sm btn-outline-primary" 
+                                   title="Download">
+                                    <i class="bi bi-download"></i>
+                                </a>
+                                <button class="btn btn-sm btn-outline-danger" 
+                                        title="Excluir"
+                                        onclick="confirmarExclusao({{ relatorio.pk }})">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="5" class="text-center">Nenhum relatório encontrado</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
             </div>
         </div>
-    {% empty %}
-        <p>Nenhum relatório encontrado.</p>
-    {% endfor %}
+    </div>
 </div>
+
+<!-- Modal de Confirmação -->
+<div class="modal fade" id="confirmModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Confirmar Exclusão</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p>Tem certeza que deseja excluir este relatório?</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <a id="deleteButton" href="#" class="btn btn-danger">Excluir</a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function confirmarExclusao(pk) {
+    const deleteUrl = `/relatorios/${pk}/excluir/`;
+    document.getElementById('deleteButton').href = deleteUrl;
+    const modal = new bootstrap.Modal(document.getElementById('confirmModal'));
+    modal.show();
+}
+</script>
 {% endblock %}

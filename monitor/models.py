@@ -44,6 +44,11 @@ class TermoMonitorado(models.Model):
 from django.db import models
 from django.utils import timezone # Importar timezone se for usar no save, etc.
 from datetime import datetime # Importar datetime para o _preprocessar_detalhes
+from django.db import models
+from django.utils import timezone # Importar timezone se for usar no save, etc.
+from datetime import datetime # Importar datetime para o _preprocessar_detalhes
+from django.core.exceptions import ValidationError # Para o método clean
+# Suas outras importações e modelos (TermoMonitorado, etc.) devem estar aqui
 
 class NormaVigente(models.Model):
     """
@@ -54,26 +59,24 @@ class NormaVigente(models.Model):
         ('DECRETO', 'Decreto'),
         ('PORTARIA', 'Portaria'),
         ('RESOLUCAO', 'Resolução'),
-        ('INSTRUCAO', 'Instrução Normativa'), # Mantido como INSTRUCAO para caber no max_length=20
+        ('INSTRUCAO', 'Instrução Normativa'),
         ('OUTROS', 'Outros'),
     ]
 
     SITUACAO_CHOICES = [
         ('VIGENTE', 'Vigente'),
         ('REVOGADA', 'Revogada'),
-        ('IRREGULAR', 'Irregular'), # Você tem este, mas não no status_style.
+        ('IRREGULAR', 'Irregular'),
         ('A_VERIFICAR', 'A verificar'),
-        ('ALTERADA', 'Alterada'), # Adicionado para corresponder ao status_style, se necessário
-        ('DESCONHECIDA', 'Desconhecida') # Adicionado para um default mais explícito se 'A_VERIFICAR' não for o estado inicial
+        ('ALTERADA', 'Alterada'),
+        ('DESCONHECIDA', 'Desconhecida')
     ]
 
-    tipo = models.CharField(max_length=20, choices=TIPO_CHOICES, db_index=True) # Adicionado db_index=True
-    numero = models.CharField(max_length=50, db_index=True) # Adicionado db_index=True
-    
-    # NOVO CAMPO PARA O ANO
-    ano = models.IntegerField(null=True, blank=True, db_index=True) # Ano pode ser nulo se não encontrado
+    tipo = models.CharField(max_length=20, choices=TIPO_CHOICES, db_index=True)
+    numero = models.CharField(max_length=50, db_index=True)
+    ano = models.IntegerField(null=True, blank=True, db_index=True)
     fonte_confirmacao = models.CharField(
-        max_length=10, 
+        max_length=10,
         choices=[('SEFAZ', 'SEFAZ'), ('BING', 'Bing')],
         null=True,
         blank=True
@@ -88,7 +91,6 @@ class NormaVigente(models.Model):
         null=True,
         blank=True
     )
-    # Em models.py, altere:
     data_verificacao = models.DateTimeField(
         'Data da última verificação',
         null=True,
@@ -100,30 +102,40 @@ class NormaVigente(models.Model):
     detalhes = models.JSONField(blank=True, null=True, help_text="Detalhes da consulta na SEFAZ")
     data_cadastro = models.DateTimeField(auto_now_add=True)
     fonte = models.CharField(
-        max_length=50, 
-        default='SEFAZ', 
+        max_length=50,
+        default='SEFAZ',
         choices=[('SEFAZ', 'SEFAZ'), ('DIARIO', 'Diário Oficial')]
     )
     observacoes = models.TextField(blank=True)
     data_ultima_mencao = models.DateField(null=True, blank=True)
     irregular = models.BooleanField(default=False, verbose_name="Norma Irregular")
 
+    # --- NOVOS CAMPOS ADICIONADOS À NORMAVIGENTE ---
+    ementa = models.TextField(
+        blank=True,
+        null=True,
+        verbose_name="Ementa da Norma"
+    )
+    data_vigencia = models.DateField(
+        null=True,
+        blank=True,
+        verbose_name="Data de Início da Vigência"
+    )
+   
+
     class Meta:
         verbose_name = "Norma Vigente"
         verbose_name_plural = "Normas Vigentes"
-        # ATUALIZADO ordering para incluir o ano (ex: mais recentes primeiro)
-        ordering = ['tipo', '-ano', 'numero'] 
-        # ATUALIZADO unique_together para incluir o ano
-        unique_together = [['tipo', 'numero', 'ano']] 
+        ordering = ['tipo', '-ano', 'numero']
+        unique_together = [['tipo', 'numero', 'ano']]
         indexes = [
-            # ATUALIZADO index principal para incluir o ano
-            models.Index(fields=['tipo', 'numero', 'ano']), 
+            models.Index(fields=['tipo', 'numero', 'ano']),
             models.Index(fields=['situacao']),
             models.Index(fields=['data_verificacao']),
+            models.Index(fields=['data_vigencia']), 
         ]
 
     def __str__(self):
-        # ATUALIZADO para incluir o ano, se existir
         if self.ano:
             return f"{self.get_tipo_display()} {self.numero}/{self.ano}"
         return f"{self.get_tipo_display()} {self.numero}"
@@ -133,29 +145,24 @@ class NormaVigente(models.Model):
             return 'success'
         elif self.situacao == 'REVOGADA':
             return 'danger'
-        elif self.situacao == 'ALTERADA': # 'ALTERADA' está no seu status_style, mas não nos SITUACAO_CHOICES. Adicionei aos choices.
+        elif self.situacao == 'ALTERADA':
             return 'warning'
-        elif self.situacao == 'IRREGULAR': # Adicionado para consistência
-            return 'warning' # Ou outra cor
+        elif self.situacao == 'IRREGULAR':
+            return 'warning'
         return 'secondary'
-    
+
 
     def _preprocessar_detalhes(self, detalhes):
-        """Converte objetos datetime para strings no campo detalhes"""
         if not detalhes:
             return detalhes
-            
         for key, value in detalhes.items():
-            # Verifique se value é uma instância de datetime.datetime, não apenas datetime (que é o módulo)
-            if isinstance(value, datetime): # Anteriormente 'datetime.datetime' não estava importado, agora 'datetime' está.
+            if isinstance(value, datetime): 
                 detalhes[key] = value.isoformat()
             elif isinstance(value, dict):
                 detalhes[key] = self._preprocessar_detalhes(value)
-                
         return detalhes
-    
+
     def clean(self):
-        """Validação personalizada que ignora normas de teste"""
         if not hasattr(self, 'descricao') or not self.descricao.startswith('[TESTE]'):
             if not self.tipo or not self.numero:
                 raise ValidationError("Tipo e número são obrigatórios")
@@ -163,14 +170,11 @@ class NormaVigente(models.Model):
                 raise ValidationError("Número da norma muito curto")
 
     def save(self, *args, **kwargs):
-        """Método save que ignora validação para normas de teste"""
         if hasattr(self, 'descricao') and self.descricao.startswith('[TESTE]'):
-            # Bypass para normas de teste
             if 'force_insert' not in kwargs:
                 kwargs['force_insert'] = True
             super().save(*args, **kwargs)
         else:
-            # Validação normal para outras normas
             self.full_clean()
             super().save(*args, **kwargs)
 
@@ -179,14 +183,20 @@ class NormaVigente(models.Model):
         status_map = {
             'VIGENTE': 'bg-success',
             'REVOGADA': 'bg-danger',
-            'NÃO ENCONTRADA': 'bg-warning text-dark',
-            None: 'bg-secondary'
+            'NÃO ENCONTRADA': 'bg-warning text-dark', 
+            'IRREGULAR': 'bg-warning text-dark',
+            'A_VERIFICAR': 'bg-secondary',
+            'ALTERADA': 'bg-info',
+            'DESCONHECIDA': 'bg-light text-dark',
+             None: 'bg-secondary'
         }
         return status_map.get(self.situacao, 'bg-secondary')
-    
+
     @property
     def documentos_count(self):
+        # Assumindo que o related_name de Documento.normas_relacionadas é 'documentos'
         return self.documentos.count()
+
 
 
 class Documento(models.Model):
@@ -196,10 +206,10 @@ class Documento(models.Model):
     titulo = models.CharField(max_length=255, verbose_name="Título")
     data_publicacao = models.DateField(verbose_name="Data de Publicação")
     url_original = models.URLField(
-        verbose_name="URL Original", 
-        max_length=500, 
-        unique=True,  # <--- ADICIONE ISTO
-        db_index=True   # <--- ADICIONE ISTO (bom para performance)
+        verbose_name="URL Original",
+        max_length=500,
+        unique=True,
+        db_index=True
     )
     arquivo_pdf = models.FileField(
         upload_to='pdfs/',
@@ -217,12 +227,41 @@ class Documento(models.Model):
         verbose_name="Relevante para Contabilidade?"
     )
     normas_relacionadas = models.ManyToManyField(
-        NormaVigente,
+        'NormaVigente', # Coloquei entre aspas se NormaVigente for definida depois no arquivo
         blank=True,
         related_name='documentos',
         verbose_name="Normas Relacionadas"
     )
     assunto = models.CharField(max_length=255, blank=True, null=True)
+
+    # --- NOVOS CAMPOS ADICIONADOS AO DOCUMENTO ---
+    TIPO_DOC_CHOICES = [
+        ('DIARIO_OFICIAL', 'Diário Oficial'),
+        ('PORTARIA_DOC', 'Portaria do Documento'), # Nomeado para diferenciar de NormaVigente.tipo='PORTARIA'
+        ('EDITAL', 'Edital'),
+        ('COMUNICADO', 'Comunicado'),
+        ('ATO_NORMATIVO_DOC', 'Ato Normativo do Documento'), # Nomeado para diferenciar
+        ('LEI_DOC', 'Lei do Documento'), # Nomeado para diferenciar
+        ('DECRETO_DOC', 'Decreto do Documento'), # Nomeado para diferenciar
+        ('RESOLUCAO_DOC', 'Resolução do Documento'), # Nomeado para diferenciar
+        ('INSTRUCAO_NORMATIVA_DOC', 'Instrução Normativa do Documento'), # Nomeado para diferenciar
+        ('OUTRO', 'Outro'),
+    ]
+    tipo_documento = models.CharField(
+        max_length=50, # Aumentado para acomodar 'INSTRUCAO_NORMATIVA_DOC'
+        choices=TIPO_DOC_CHOICES,
+        blank=True,
+        null=True,
+        verbose_name="Tipo do Documento"
+    )
+    fonte_documento = models.CharField(
+        max_length=250, # Aumentado um pouco por precaução
+        blank=True,
+        null=True,
+        verbose_name="Fonte do Documento" # Ex: "Diário Oficial do Estado do Piauí", "Site da SEFAZ-PI", etc.
+    )
+    # --- FIM DOS NOVOS CAMPOS ---
+
     metadata = models.JSONField(
         blank=True,
         null=True,
@@ -242,14 +281,17 @@ class Documento(models.Model):
             models.Index(fields=['processado']),
             models.Index(fields=['relevante_contabil']),
             models.Index(fields=['arquivo_removido']),
+            models.Index(fields=['tipo_documento']), # Index para o novo campo
+            # Adicione um índice para fonte_documento se você for filtrar muito por ele
+            # models.Index(fields=['fonte_documento']),
         ]
 
     def __str__(self):
         return f"{self.titulo} ({self.data_publicacao.strftime('%d/%m/%Y')})"
-    
+
     def delete(self, *args, **kwargs):
         """Remove o arquivo PDF associado ao deletar o documento"""
-        if self.arquivo_pdf and os.path.isfile(self.arquivo_pdf.path):
+        if self.arquivo_pdf and hasattr(self.arquivo_pdf, 'path') and os.path.isfile(self.arquivo_pdf.path):
             os.remove(self.arquivo_pdf.path)
         super().delete(*args, **kwargs)
 

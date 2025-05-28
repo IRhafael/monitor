@@ -1,114 +1,85 @@
 {% extends "base.html" %}
 
-{% block page_title %}Relatórios{% endblock %}
+{% block title %}Gerar Relatório{% endblock %}
 
 {% block content %}
-<div class="row">
-    <div class="col-md-6 mb-4">
-        <div class="card h-100">
-            <div class="card-header">
-                <h5>Relatório Contábil Completo</h5>
-            </div>
-            <div class="card-body">
-                <p>Gere um relatório completo com todos os documentos processados e normas identificadas.</p>
-                <form method="post" action="{% url 'gerar_relatorio' %}">
-                    {% csrf_token %}
-                    <input type="hidden" name="tipo_relatorio" value="completo">
-                    <div class="mb-3">
-                        <label for="dataInicio" class="form-label">Data Início</label>
-                        <input type="date" class="form-control" id="dataInicio" name="data_inicio">
-                    </div>
-                    <div class="mb-3">
-                        <label for="dataFim" class="form-label">Data Fim</label>
-                        <input type="date" class="form-control" id="dataFim" name="data_fim">
-                    </div>
-                    <div class="mb-3">
-                        <label for="formato" class="form-label">Formato</label>
-                        <select class="form-select" id="formato" name="formato">
-                            <option value="xlsx">Excel (.xlsx)</option>
-                            <option value="pdf">PDF (.pdf)</option>
-                        </select>
-                    </div>
-                    <button type="submit" class="btn btn-primary">
-                        <i class="bi bi-file-earmark-bar-graph"></i> Gerar Relatório
-                    </button>
-                </form>
-            </div>
+<div class="container-fluid">
+    <div class="card">
+        <div class="card-header">
+            <h4 class="mb-0">Gerar Novo Relatório</h4>
         </div>
-    </div>
-    
-    <div class="col-md-6 mb-4">
-        <div class="card h-100">
-            <div class="card-header">
-                <h5>Relatório de Mudanças</h5>
-            </div>
-            <div class="card-body">
-                <p>Identifique novas normas e alterações no período selecionado.</p>
-                <form method="post" action="{% url 'gerar_relatorio' %}">
-                    {% csrf_token %}
-                    <input type="hidden" name="tipo_relatorio" value="mudancas">
-                    <div class="mb-3">
-                        <label for="diasRetroativos" class="form-label">Período (dias)</label>
-                        <select class="form-select" id="diasRetroativos" name="dias_retroativos">
-                            <option value="7">Últimos 7 dias</option>
-                            <option value="15" selected>Últimos 15 dias</option>
-                            <option value="30">Últimos 30 dias</option>
-                            <option value="60">Últimos 60 dias</option>
+        <div class="card-body">
+            <form method="post" id="reportForm">
+                {% csrf_token %}
+                
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Tipo de Relatório</label>
+                        <select name="tipo" class="form-select" required>
+                            <option value="">Selecione...</option>
+                            <option value="CONTABIL">Contábil Completo</option>
+                            <option value="MUDANCAS">Mudanças nas Normas</option>
+                            <option value="CUSTOM">Personalizado</option>
                         </select>
                     </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Formato</label>
+                        <select name="formato" class="form-select" required>
+                            <option value="XLSX">Excel (.xlsx)</option>
+                            <option value="PDF">PDF (.pdf)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Período - Data Inicial</label>
+                        <input type="date" name="data_inicio" class="form-control">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Período - Data Final</label>
+                        <input type="date" name="data_fim" class="form-control">
+                    </div>
+                </div>
+
+                <!-- Opções avançadas (aparecem apenas para relatório personalizado) -->
+                <div id="customOptions" style="display: none;">
+                    <h5 class="mt-4 mb-3">Opções Avançadas</h5>
+                    
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Tipo de Norma</label>
+                            <select name="norma_tipo" class="form-select" multiple>
+                                <option value="LEI">Lei</option>
+                                <option value="DECRETO">Decreto</option>
+                                <option value="PORTARIA">Portaria</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Status</label>
+                            <select name="status" class="form-select">
+                                <option value="">Todos</option>
+                                <option value="VIGENTE">Vigente</option>
+                                <option value="REVOGADA">Revogada</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mt-4">
                     <button type="submit" class="btn btn-primary">
-                        <i class="bi bi-file-earmark-diff"></i> Gerar Relatório
+                        <i class="bi bi-gear"></i> Gerar Relatório
                     </button>
-                </form>
-            </div>
+                </div>
+            </form>
         </div>
     </div>
 </div>
 
-<!-- Histórico de Relatórios -->
-<div class="card">
-    <div class="card-header">
-        <h5>Histórico de Relatórios</h5>
-    </div>
-    <div class="card-body">
-        <div class="table-responsive">
-            <table class="table table-hover">
-                <thead>
-                    <tr>
-                        <th>Data</th>
-                        <th>Tipo</th>
-                        <th>Período</th>
-                        <th>Formato</th>
-                        <th>Ações</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for relatorio in relatorios %}
-                    <tr>
-                        <td>{{ relatorio.data_criacao|date:"d/m/Y H:i" }}</td>
-                        <td>{{ relatorio.get_tipo_display }}</td>
-                        <td>
-                            {% if relatorio.data_inicio %}
-                                {{ relatorio.data_inicio|date:"d/m/Y" }} a {{ relatorio.data_fim|date:"d/m/Y" }}
-                            {% else %}
-                                Últimos {{ relatorio.dias_retroativos }} dias
-                            {% endif %}
-                        </td>
-                        <td>{{ relatorio.get_formato_display }}</td>
-                        <td>
-                            <a href="{% url 'download_relatorio' relatorio.id %}" class="btn btn-sm btn-outline-primary">
-                                <i class="bi bi-download"></i> Baixar
-                            </a>
-                        </td>
-                    </tr>
-                    {% empty %}
-                    <tr>
-                        <td colspan="5" class="text-center">Nenhum relatório gerado ainda</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </div>
-</div>
+<script>
+document.querySelector('select[name="tipo"]').addEventListener('change', function() {
+    const customOptions = document.getElementById('customOptions');
+    customOptions.style.display = this.value === 'CUSTOM' ? 'block' : 'none';
+});
+</script>
 {% endblock %}
