@@ -1,0 +1,255 @@
+(TESTE DE PROCESSAMENTO DE PDF COM O MISTRAL AI)
+
+
+
+(venv311) PS C:\Users\RRCONTAS\Documents\GitHub\monitor> python  teste.py
+
+=== TESTE DO PDF PROCESSOR COM ARQUIVO REAL: DOEPI_96_2025_1.pdf ===
+Criando/Obtendo documento de teste e termos...
+Processando arquivo PDF real: C:\Users\RRCONTAS\Documents\GitHub\monitor\media\pdfs\DOEPI_96_2025_1.pdf
+Documento de teste (de arquivo) já existia: DOEPI 96 2025 1 (ID: 285)
+Termo Monitorado já existia/atualizado: icms
+Termo Monitorado já existia/atualizado: DECRETO
+
+Documento a ser processado:
+  ID: 285
+  Título: DOEPI 96 2025 1
+  Texto (início): Edição nº 96/2025TERESINA - PI, 22 de maio de 2025DOE/PI - ANO XCV - 136º DA REPÚBLICA
+SUMÁRIO
+
+LEIS
+
+DECRETOS
+
+NOMEAÇÕES E/OU EXONERAÇÕES
+
+PORTARIAS
+
+CONTRATOS
+
+LICITAÇÕES
+
+TERMOS
+
+ATAS
+
+EXTRATOS
+
+AVISOS
+
+REGULARIDADES
+
+ERRATAS
+
+ADITIVOS
+
+DECISÕES
+
+...
+
+Instanciando PDFProcessor...
+
+Processando documento com PDFProcessor...
+Norma ignorada por número muito curto: tipo=LEI, numero=56
+Norma ignorada por número muito curto: tipo=LEI, numero=13
+Norma ignorada por número muito curto: tipo=PORTARIA, numero=16
+Norma ignorada por número muito curto: tipo=LEI, numero=84
+Norma ignorada por número muito curto: tipo=PORTARIA, numero=80
+Norma ignorada por número muito curto: tipo=PORTARIA, numero=62
+
+------------------------------------
+  RESULTADO DO PROCESSAMENTO (PDFProcessor):
+------------------------------------
+  Status: SUCESSO
+  Mensagem: Documento processado com sucesso.
+  Relevante (IA): True
+  Justificativa Relevância (IA): N/A
+
+  Normas extraídas (Regex/spaCy):
+    - LEI 6.375/2013
+    - PORTARIA 030
+    - DECRETO 6.514/2008
+    - LEI 14.133
+    - LEI 13.303/2026
+    - LEI 8.699
+    - LEI 4320/64
+    - DECRETO 15.93/2013
+    - DECRETO 23.842
+    - PORTARIA 133/2025
+    - LEI 8.702
+    - LEI 13.19
+    - LEI 6.201/12
+    - PORTARIA 182/2025
+    - LEI 4.548
+    - DECRETO 23.834
+    - LEI 5.577/06
+    - LEI 8.666
+    - DECRETO 19.876
+    - LEI 14.133/2021
+    - PORTARIA 0702/2025
+    - DECRETO 15.93/13
+    - PORTARIA 139/2025
+    - PORTARIA 403
+    - LEI 8.666/2025
+    - DECRETO 17.83/2017
+    - LEI 6.388/13
+    - LEI 13.19/2014
+    - PORTARIA 253/2025
+    - LEI 8.652/2025
+    - LEI 8.667/2025
+    - LEI 7.716/21
+    - LEI 5.376/04
+    - LEI 5.726/08
+    - LEI 13.204
+    - PORTARIA 137
+    - PORTARIA 527/2018
+    - PORTARIA 214
+    - LEI 8.666/93
+    - DECRETO 6514/2008
+    - PORTARIA 023/2025
+    - PORTARIA 6209
+    - LEI 8.316/2024
+    - LEI 8.342/2024
+    - LEI 6.910
+    - PORTARIA 255
+    - LEI 8.700
+    - LEI 13.204/2014
+    - LEI 8.697
+    - LEI 9.613/1998
+    - PORTARIA 171/2025
+    - LEI 8.701
+    - PORTARIA 257
+    - LEI 8.158
+    - LEI 6.468/13
+    - LEI 13.303/2016
+    - LEI 14.133/21
+    - LEI 14.133/2023
+    - LEI 8.698
+    - PORTARIA 8/2025
+    - LEI 33/03
+    - PORTARIA 2438
+    - PORTARIA 256
+    - PORTARIA 138/2025
+    - PORTARIA 3238/2017
+    - LEI 8.934/94
+    - LEI 10.520/2002
+    - LEI 7.767/2022
+    - LEI 7.764/2022
+
+  Resumo IA (do resultado do processamento):
+    1. **Normas Referenciadas e Natureza da Mudança:**
+   - **Lei Estadual nº 8.158/2023:** Alterada para incluir novos itens como fonte de receita do Fundo Estadual de Segurança Pública (FESP).
+   - **Lei nº 9.613/1998:** Referenciada como base legal para a recuperação de ativos financeiros relacionados a crimes de lavagem de dinheiro e outras infrações penais.       
+   - **Natureza da Mudança:** Alteração do inciso X do artigo 43 da Lei nº 8.158/2023 para incluir novos itens como fonte de receita do FESP.
+
+2. **Alterações Legais Relevantes:**
+   - Inclusão de ativos financeiros, bens, direitos e valores relacionados a crimes previstos na Lei nº 9.613/1998 e outras infrações penais como fonte de receita do FESP.     
+   - Instituição do Sistema de Compensação pelo Cumprimento de Metas por Indicadores Estratégicos de Criminalidade para agentes de segurança pública.
+   - Criação da Comissão de Acompanhamento e Avaliação da Política de Compensação por Metas.
+
+3. **Principais Impactos Contábeis e Fiscais:**
+   - **FESP:** Aumento das receitas do Fundo Estadual de Segurança Pública, o que pode impactar a alocação de recursos para a segurança pública.
+   - **Despesas Públicas:** Instituição de uma nova despesa pública com a compensação pecuniária aos agentes de segurança pública, limitada a 75% do subsídio.
+   - **Obrigações Acessórias:** Necessidade de acompanhamento e avaliação das metas de criminalidade, o que pode gerar novas obrigações acessórias para a administração pública.
+
+4. **Prazos e Obrigações Importantes:**
+   - Não há menção explícita de prazos específicos para cumprimento de novas obrigações ou adaptação a novas regras no texto fornecido.
+
+5. **Consequências Práticas e Ações Recomendadas:**
+   - **Administração Pública:** Deve implementar o Sistema de Compensação pelo Cumprimento de Metas e a Comissão de Acompanhamento e Avaliação.
+   - **Agentes de Segurança Pública:** Devem estar cientes das novas metas e da possibilidade de compensação pecuniária.
+   - **Contabilidade Pública:** Deve ajustar os registros contábeis para refletir as novas fontes de receita e despesas do FESP.
+
+  Pontos Críticos (IA - do resultado do processamento):
+    N/A ou não retornado.
+------------------------------------
+
+
+------------------------------------
+  DOCUMENTO APÓS PROCESSAMENTO (DO BANCO DE DADOS):
+------------------------------------
+  ID: 285
+  Título: DOEPI 96 2025 1
+  Processado: True
+  Relevante contábil: True
+  Assunto: Contábil/Fiscal
+  Resumo IA (armazenado): 1. **Normas Referenciadas e Natureza da Mudança:**
+   - **Lei Estadual nº 8.158/2023:** Alterada para incluir novos itens como fonte de receita do Fundo Estadual de Segurança Pública (FESP).
+   - **Lei nº 9.613/1998:** Referenciada como base legal pa...
+  Campo 'metadata' não encontrado ou vazio no modelo Documento.
+
+  Normas relacionadas no banco:
+    - DECRETO 15.93/13 (Última menção: 2025-05-26)
+    - DECRETO 15.93/2013 (Última menção: 2025-05-26)
+    - DECRETO 17.83/2017 (Última menção: 2025-05-26)
+    - DECRETO 19.876 (Última menção: 2025-05-26)
+    - DECRETO 23.834 (Última menção: 2025-05-26)
+    - DECRETO 23.842 (Última menção: 2025-05-26)
+    - DECRETO 6.514/2008 (Última menção: 2025-05-26)
+    - DECRETO 6514/2008 (Última menção: 2025-05-26)
+    - LEI 10.520/2002 (Última menção: 2025-05-26)
+    - LEI 13.19 (Última menção: 2025-05-26)
+    - LEI 13.19/2014 (Última menção: 2025-05-26)
+    - LEI 13.204 (Última menção: 2025-05-26)
+    - LEI 13.204/2014 (Última menção: 2025-05-26)
+    - LEI 13.303/2016 (Última menção: 2025-05-26)
+    - LEI 13.303/2026 (Última menção: 2025-05-26)
+    - LEI 14.133 (Última menção: 2025-05-26)
+    - LEI 14.133/2021 (Última menção: 2025-05-26)
+    - LEI 14.133/2023 (Última menção: 2025-05-26)
+    - LEI 14.133/21 (Última menção: 2025-05-26)
+    - LEI 33/03 (Última menção: 2025-05-26)
+    - LEI 4.548 (Última menção: 2025-05-26)
+    - LEI 4320/64 (Última menção: 2025-05-26)
+    - LEI 5.376/04 (Última menção: 2025-05-26)
+    - LEI 5.577/06 (Última menção: 2025-05-26)
+    - LEI 5.726/08 (Última menção: 2025-05-26)
+    - LEI 6.201/12 (Última menção: 2025-05-26)
+    - LEI 6.375/2013 (Última menção: 2025-05-26)
+    - LEI 6.388/13 (Última menção: 2025-05-26)
+    - LEI 6.468/13 (Última menção: 2025-05-26)
+    - LEI 6.910 (Última menção: 2025-05-26)
+    - LEI 7.716/21 (Última menção: 2025-05-26)
+    - LEI 7.764/2022 (Última menção: 2025-05-26)
+    - LEI 7.767/2022 (Última menção: 2025-05-26)
+    - LEI 8.158 (Última menção: 2025-05-26)
+    - LEI 8.316/2024 (Última menção: 2025-05-26)
+    - LEI 8.342/2024 (Última menção: 2025-05-26)
+    - LEI 8.652/2025 (Última menção: 2025-05-26)
+    - LEI 8.666 (Última menção: 2025-05-26)
+    - LEI 8.666/2025 (Última menção: 2025-05-26)
+    - LEI 8.666/93 (Última menção: 2025-05-26)
+    - LEI 8.667/2025 (Última menção: 2025-05-26)
+    - LEI 8.697 (Última menção: 2025-05-26)
+    - LEI 8.698 (Última menção: 2025-05-26)
+    - LEI 8.699 (Última menção: 2025-05-26)
+    - LEI 8.700 (Última menção: 2025-05-26)
+    - LEI 8.701 (Última menção: 2025-05-26)
+    - LEI 8.702 (Última menção: 2025-05-26)
+    - LEI 8.934/94 (Última menção: 2025-05-26)
+    - LEI 9.613/1998 (Última menção: 2025-05-26)
+    - PORTARIA 023/2025 (Última menção: 2025-05-26)
+    - PORTARIA 030 (Última menção: 2025-05-26)
+    - PORTARIA 0702/2025 (Última menção: 2025-05-26)
+    - PORTARIA 133/2025 (Última menção: 2025-05-26)
+    - PORTARIA 137 (Última menção: 2025-05-26)
+    - PORTARIA 138/2025 (Última menção: 2025-05-26)
+    - PORTARIA 139/2025 (Última menção: 2025-05-26)
+    - PORTARIA 171/2025 (Última menção: 2025-05-26)
+    - PORTARIA 182/2025 (Última menção: 2025-05-26)
+    - PORTARIA 214 (Última menção: 2025-05-26)
+    - PORTARIA 2438 (Última menção: 2025-05-26)
+    - PORTARIA 253/2025 (Última menção: 2025-05-26)
+    - PORTARIA 255 (Última menção: 2025-05-26)
+    - PORTARIA 256 (Última menção: 2025-05-26)
+    - PORTARIA 257 (Última menção: 2025-05-26)
+    - PORTARIA 3238/2017 (Última menção: 2025-05-26)
+    - PORTARIA 403 (Última menção: 2025-05-26)
+    - PORTARIA 527/2018 (Última menção: 2025-05-26)
+    - PORTARIA 6209 (Última menção: 2025-05-26)
+    - PORTARIA 8/2025 (Última menção: 2025-05-26)
+------------------------------------
+
+
+=== TESTE CONCLUÍDO ===
+(venv311) PS C:\Users\RRCONTAS\Documents\GitHub\monitor>
