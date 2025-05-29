@@ -22,6 +22,39 @@ from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
+try:
+    from transformers import pipeline
+    IA_DISPONIVEL = True
+except ImportError:
+    IA_DISPONIVEL = False
+
+class IAGratuita:
+    def __init__(self):
+        if IA_DISPONIVEL:
+            self.resumidor = pipeline("summarization", model="facebook/bart-large-cnn")
+            self.sentimento = pipeline("sentiment-analysis", model="cardiffnlp/twitter-roberta-base-sentiment-latest")
+        else:
+            self.resumidor = None
+            self.sentimento = None
+
+    def gerar_resumo(self, texto, max_length=150):
+        if not self.resumidor or not texto:
+            return texto[:max_length] + "..."
+        try:
+            resultado = self.resumidor(texto, max_length=max_length, min_length=30, do_sample=False)
+            return resultado[0]['summary_text']
+        except Exception:
+            return texto[:max_length] + "..."
+
+    def analisar_sentimento(self, texto):
+        if not self.sentimento or not texto:
+            return "desconhecido"
+        try:
+            resultado = self.sentimento(texto)
+            return resultado[0]['label']
+        except Exception:
+            return "erro"
+
 @Language.component("norma_matcher")
 def norma_matcher_component(doc):
     """Componente de pipeline spaCy para identificar normas"""
@@ -269,67 +302,29 @@ class PDFProcessor:
         return score
 
    
-    # Método corrigido para is_relevante_contabil() em PDFProcessor
-    def is_relevante_contabil(self, texto: str) -> bool:
-        """Verifica se o documento contém termos monitorados ativos (TEXTO ou NORMA)"""
-        from monitor.models import TermoMonitorado
-        
-        # Converte para lowercase para comparações case-insensitive
-        texto_lower = texto.lower()
-        
-        # 1. Verificar termos do tipo TEXTO
-        termos_texto = TermoMonitorado.objects.filter(ativo=True, tipo='TEXTO')
-        for termo_obj in termos_texto:
-            # Verifica o termo principal
-            if termo_obj.termo.lower() in texto_lower:
-                return True
-                
-            # Verifica variações
-            if termo_obj.variacoes:
-                for variacao in termo_obj.variacoes.split(','):
-                    if variacao.strip().lower() in texto_lower:
-                        return True
-        
-        # 2. Verificar termos do tipo NORMA
-        termos_norma = TermoMonitorado.objects.filter(ativo=True, tipo='NORMA')
-        for termo_obj in termos_norma:
-            # Verifica o termo principal de forma exata
-            if termo_obj.termo.lower() in texto_lower:
-                return True
-                
-            # Verifica variações exatas
-            if termo_obj.variacoes:
-                for variacao in termo_obj.variacoes.split(','):
-                    if variacao.strip().lower() in texto_lower:
-                        return True
-            
-            # Para normas, precisamos de busca mais flexível
-            # Extrai partes do termo (exemplo: "DECRETO 21.866" -> tipo="DECRETO", numero="21.866")
-            partes = termo_obj.termo.split()
-            if len(partes) >= 2:
-                tipo_norma = partes[0].lower()  # "decreto"
-                numero_norma = ' '.join(partes[1:]).lower()  # "21.866"
-                
-                # Cria padrão regex para busca flexível
-                # Aceita variações como "Decreto nº 21.866", "DECRETO N. 21.866", "Decreto 21.866"
-                padrao = rf'{tipo_norma}\s+(?:n[º°.]?\s*)?{re.escape(numero_norma)}'
-                if re.search(padrao, texto_lower, re.IGNORECASE):
-                    return True
-                
-                # Busca mais permissiva para números com pontuação
-                numero_sem_pontuacao = re.sub(r'[^\d]', '', numero_norma)
-                if numero_sem_pontuacao:
-                    # Cria um padrão que aceita o número com ou sem pontuação
-                    padrao_num_flex = rf'{tipo_norma}\s+(?:n[º°.]?\s*)?(?:\d+[.\s]*)+{numero_sem_pontuacao[-4:]}'
-                    if re.search(padrao_num_flex, texto_lower, re.IGNORECASE):
-                        return True
-        
-        return False
+    
 
+    def is_relevante_contabil(self, texto: str) -> bool:
+        """
+        Verifica se o documento contém termos monitorados relevantes para contabilidade/fiscal,
+        considerando termos e variações cadastrados no banco.
+        """
+        texto_lower = texto.lower()
+        termos = TermoMonitorado.objects.filter(ativo=True)
+        for termo in termos:
+            # Checa o termo principal
+            if termo.termo.lower() in texto_lower:
+                return True
+            # Checa variações (se houver)
+            if termo.variacoes:
+                for variacao in [v.strip() for v in termo.variacoes.split(",")]:
+                    if variacao and variacao.lower() in texto_lower:
+                        return True
+        return False
 
     def process_document(self, documento: Documento) -> Dict[str, any]:
         logger.info(f"Processando documento ID: {documento.id}, Título: {documento.titulo[:50]}...")
-        
+
         if not documento.texto_completo:
             logger.warning(f"Documento ID {documento.id} não possui texto completo. Pulando processamento.")
             documento.processado = True
@@ -338,61 +333,180 @@ class PDFProcessor:
 
         try:
             texto = documento.texto_completo
-            
-            relevante_contabil = self.is_relevante_contabil(texto)
-            documento.relevante_contabil = relevante_contabil
-            documento.assunto = "Contábil/Fiscal" if relevante_contabil else "Geral"
 
-            if not relevante_contabil:
-                documento.processado = True 
-                documento.save()
-                logger.info(f"Documento ID {documento.id} marcado como irrelevante e processado.")
-                return {'status': 'IGNORADO_IRRELEVANTE', 'message': 'Documento não relevante para contabilidade/fiscal.'}
+            # 1. Extrair Normas do texto COMPLETO
+            normas_encontradas = self.extrair_normas(texto)
+            normas_objs_para_relacionar = []
+            normas_strings_para_resumo = []
 
-            # 2. Extrair Normas
-            normas_encontradas = self.extrair_normas(texto) 
-            normas_objs_para_relacionar = [] 
-            normas_strings_para_resumo = [] # Para o log e resumo
+            tipo_map = {
+                'LEI': 'LEI',
+                'LEI COMPLEMENTAR': 'LEI',
+                'DECRETO': 'DECRETO',
+                'DECRETO-LEI': 'DECRETO',
+                'PORTARIA': 'PORTARIA',
+                'RESOLUCAO': 'RESOLUCAO',
+                'RESOLUÇÃO': 'RESOLUCAO',
+                'INSTRUCAO': 'INSTRUCAO',
+                'INSTRUÇÃO': 'INSTRUCAO',
+                'INSTRUCAO NORMATIVA': 'INSTRUCAO',
+                'INSTRUÇÃO NORMATIVA': 'INSTRUCAO',
+            }
 
             for tipo_norma_modelo, numero in normas_encontradas:
-                # O 'tipo_norma_modelo' já vem mapeado e correto para o campo `tipo` de `NormaVigente`.
+                tipo_norma_modelo = tipo_norma_modelo.strip().upper()
+                tipo_norma_modelo = tipo_map.get(tipo_norma_modelo, 'OUTROS')
+                if not numero or len(str(numero)) < 3:
+                    logger.warning(f"Norma ignorada por número muito curto: tipo={tipo_norma_modelo}, numero={numero}")
+                    continue
                 norma_obj, created = NormaVigente.objects.get_or_create(
-                    tipo=tipo_norma_modelo, # Usa o tipo já mapeado (ex: 'LEI', 'DECRETO')
+                    tipo=tipo_norma_modelo,
                     numero=numero,
                     defaults={'data_ultima_mencao': documento.data_publicacao}
                 )
                 if not created:
-                    # Atualiza a data da última menção se for mais recente
                     if documento.data_publicacao and (not norma_obj.data_ultima_mencao or documento.data_publicacao > norma_obj.data_ultima_mencao):
                         norma_obj.data_ultima_mencao = documento.data_publicacao
                         norma_obj.save(update_fields=['data_ultima_mencao'])
-                
                 normas_objs_para_relacionar.append(norma_obj)
                 normas_strings_para_resumo.append(f"{tipo_norma_modelo} {numero}")
 
-            # 3. Gerar Resumo (simplificado para o exemplo)
-            resumo = texto[:500] + "..." if len(texto) > 500 else texto
-            documento.resumo = resumo
+            # 2. Selecionar parágrafos relevantes para o resumo (com contexto e palavras-chave de mudança)
+            def paragrafos_relevantes_com_contexto(texto, normas_encontradas):
+                # Limpeza agressiva de linhas irrelevantes
+                linhas = texto.splitlines()
+                linhas_limpa = []
+                for linha in linhas:
+                    l = linha.strip()
+                    if not l or len(l) < 4:
+                        continue
+                    if re.match(r'^Página \d+/\d+', l) or l.upper() in ["SUMÁRIO", "ERRATAS", "EXTRATOS", "LEIS", "DECRETOS"]:
+                        continue
+                    if "DIÁRIO OFICIAL" in l.upper() or "DOE/PI" in l or "PALÁCIO DE KARNAK" in l or "Publicado:" in l or "Disponibilizado:" in l:
+                        continue
+                    if "contPageBreak" in l or "www.diario.pi.gov.br" in l or "e-mail:" in l:
+                        continue
+                    if "Assinado Eletronicamente" in l or "assinado eletronicamente" in l:
+                        continue
+                    if l.isdigit():
+                        continue
+                    if l.isupper() and len(l.split()) < 6:
+                        continue
+                    if set(l) <= set("-_ ."):
+                        continue
+                    if re.match(r'^SEI nº', l):
+                        continue
+                    if "Transcrição da nota" in l:
+                        continue
+                    if "Iniciado:" in l:
+                        continue
+                    if "Diário nº" in l:
+                        continue
+                    if "ANO" in l or "EDIÇÃO" in l or "REPÚBLICA" in l:
+                        continue
+                    # Remove cabeçalhos e aberturas comuns
+                    if l.startswith("O GOVERNADOR") or l.startswith("R E S O L V E") or l.startswith("AUTORIZA") or l.startswith("DISPÕE"):
+                        continue
+                    linhas_limpa.append(l)
+
+                texto_limpo = "\n".join(linhas_limpa)
+
+                # Busca termos monitorados ativos e suas variações
+                termos = TermoMonitorado.objects.filter(ativo=True)
+                termos_busca = set()
+                for termo in termos:
+                    termos_busca.add(termo.termo.lower())
+                    if termo.variacoes:
+                        for variacao in [v.strip() for v in termo.variacoes.split(",")]:
+                            if variacao:
+                                termos_busca.add(variacao.lower())
+                normas_busca = set()
+                for tipo, numero in normas_encontradas:
+                    if tipo and numero:
+                        normas_busca.add(f"{tipo} {numero}".lower())
+                        normas_busca.add(numero.lower())
+
+                # Palavras-chave para mudanças legais
+                palavras_chave = [
+                    "altera", "revoga", "vigência", "vigencia", "acrescenta", "modifica", "fica alterado",
+                    "fica revogado", "passa a vigorar", "nova redação", "inclui", "exclui", "prorroga",
+                    "ratifica", "convalida", "alteração", "revogação", "prorrogado", "prorrogada", "prorrogadas"
+                ]
+
+                paragrafos = [p.strip() for p in re.split(r'\n{2,}', texto_limpo) if p.strip()]
+                indices_relevantes = set()
+                for idx, p in enumerate(paragrafos):
+                    p_lower = p.lower()
+                    if (
+                        any(term in p_lower for term in termos_busca)
+                        or any(norma in p_lower for norma in normas_busca)
+                        or any(palavra in p_lower for palavra in palavras_chave)
+                    ):
+                        indices_relevantes.add(idx)
+                        # Adiciona contexto só se o parágrafo for muito curto
+                        if len(p) < 100:
+                            if idx > 0:
+                                indices_relevantes.add(idx - 1)
+                            if idx < len(paragrafos) - 1:
+                                indices_relevantes.add(idx + 1)
+                paragrafos_finais = [paragrafos[i] for i in sorted(indices_relevantes)]
+                # Se não encontrar nada, pega os maiores parágrafos após a primeira norma/termo
+                if not paragrafos_finais:
+                    for idx, p in enumerate(paragrafos):
+                        p_lower = p.lower()
+                        if any(term in p_lower for term in termos_busca) or any(norma in p_lower for norma in normas_busca):
+                            paragrafos_finais = sorted(paragrafos[idx:], key=len, reverse=True)[:5]
+                            break
+                    else:
+                        paragrafos_finais = sorted(paragrafos, key=len, reverse=True)[:5]
+                return "\n\n".join(paragrafos_finais)[:6000]
+
+            texto_para_resumo = paragrafos_relevantes_com_contexto(texto, normas_encontradas)
+
+            ia = IAGratuita()
+            try:
+                resumo_ia = ia.gerar_resumo(texto_para_resumo, max_length=700)
+            except Exception as e:
+                logger.error(f"Erro ao gerar resumo IA: {e}", exc_info=True)
+                resumo_ia = texto_para_resumo[:700] + "..."
+
+            try:
+                sentimento_ia = ia.analisar_sentimento(texto_para_resumo)
+            except Exception as e:
+                logger.error(f"Erro ao analisar sentimento IA: {e}", exc_info=True)
+                sentimento_ia = "erro"
+
+            relevante_contabil = self.is_relevante_contabil(texto)
+            documento.relevante_contabil = relevante_contabil
+            documento.assunto = "Contábil/Fiscal" if relevante_contabil else "Geral"
+            documento.resumo_ia = resumo_ia
+            documento.sentimento_ia = sentimento_ia
+
+            if not relevante_contabil:
+                documento.processado = True
+                documento.save()
+                logger.info(f"Documento ID {documento.id} marcado como irrelevante e processado.")
+                return {'status': 'IGNORADO_IRRELEVANTE', 'message': 'Documento não relevante para contabilidade/fiscal.'}
 
             # 4. Atualizar o Documento
             documento.processado = True
-            documento.data_processamento = timezone.now() 
-            
-            documento.save() # Salva o documento antes de manipular o ManyToMany
-            documento.normas_relacionadas.set(normas_objs_para_relacionar) # Atribui os objetos NormaVigente
-            
-            documento.save() # Salva quaisquer outras alterações no documento
-            
+            documento.data_processamento = timezone.now()
+            documento.save()
+            documento.normas_relacionadas.set(normas_objs_para_relacionar)
+            documento.save()
+
             logger.info(f"Documento ID {documento.id} processado com sucesso.")
             return {
                 'status': 'SUCESSO',
                 'message': 'Documento processado com sucesso.',
                 'relevante_contabil': relevante_contabil,
-                'normas_extraidas': normas_strings_para_resumo 
+                'normas_extraidas': normas_strings_para_resumo,
+                'resumo_ia': resumo_ia,
+                'sentimento_ia': sentimento_ia,
             }
 
         except Exception as e:
             logger.error(f"Erro ao processar documento ID {documento.id}: {e}", exc_info=True)
-            documento.processado = True # Marcar como processado para evitar reprocessamento em loop (ou False para retry)
+            documento.processado = True
             documento.save()
             return {'status': 'ERRO', 'message': str(e), 'traceback': traceback.format_exc()}

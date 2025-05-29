@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 from collections import defaultdict, Counter
 from typing import Dict, List, Optional, Tuple
 import re
-
 from django.conf import settings
 from django.db.models import Count, Q, Max, Min, Avg, F, Case, When, Value, CharField
 from django.utils import timezone
@@ -14,6 +13,8 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side, NamedSty
 from openpyxl.utils import get_column_letter
 from openpyxl.chart import BarChart, PieChart, LineChart, Reference
 from openpyxl.drawing.image import Image
+from monitor.models import Documento, NormaVigente, TermoMonitorado, RelatorioGerado
+
 
 # Importações para IA gratuita
 try:
@@ -650,6 +651,7 @@ class RelatorioAvancado:
         
         return estilos
     
+    
     def gerar_relatorio_completo(self):
         """Gera relatório completo com todas as análises e dados"""
         try:
@@ -667,6 +669,8 @@ class RelatorioAvancado:
                 self.wb.remove(self.wb['Sheet'])
             
             # Gera planilhas
+            ws_resumo = self._criar_resumo_executivo(documentos, normas)
+            ws_ia = self._criar_analise_ia(documentos, normas)
             self._criar_resumo_executivo(documentos, normas)
             self._criar_analise_documentos(documentos)
             self._criar_analise_normas(normas)
@@ -674,6 +678,10 @@ class RelatorioAvancado:
             self._criar_tendencias_temporais(documentos)
             self._criar_analise_ia(documentos, normas)  # 🆕 Nova aba com IA
             self._criar_dashboard_visual(documentos, normas)
+            self._adicionar_analise_contextual(documentos, normas, ws_resumo)
+            self._adicionar_impacto_regulatorio(normas, ws_resumo)
+            #self._adicionar_resumos_especificos(documentos, ws_ia)
+            #self._adicionar_termos_contabeis(documentos, ws_ia)
             
             # Salva arquivo
             nome_arquivo = f"relatorio_compliance_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
@@ -690,6 +698,66 @@ class RelatorioAvancado:
         except Exception as e:
             logger.error(f"❌ Erro na geração do relatório completo: {e}")
             raise
+
+
+    def _adicionar_analise_contextual(self, documentos, normas, worksheet):
+        """Adiciona análise contextual ao resumo executivo"""
+        row = worksheet.max_row + 2
+        
+        # Análise contextual dos documentos
+        worksheet[f'A{row}'] = "ANÁLISE CONTEXTUAL"
+        self._aplicar_estilo(worksheet[f'A{row}'], self.estilos['cabecalho'])
+        row += 1
+        
+        # Resumo IA dos documentos mais relevantes
+        docs_relevantes = [d for d in documentos if d.relevante_contabil][:5]
+        texto_analise = ". ".join(d.resumo or d.titulo for d in docs_relevantes)
+        resumo_contexto = self.ia_gratuita.gerar_resumo_inteligente(texto_analise, 150)
+        
+        worksheet[f'A{row}'] = "Contexto Regulatório"
+        worksheet[f'B{row}'] = resumo_contexto
+        worksheet[f'B{row}'].alignment = Alignment(wrap_text=True)
+        row += 1
+        
+        # Mudanças desde o último relatório
+        ultimo_relatorio = RelatorioGerado.objects.order_by('-data_criacao').first()
+        if ultimo_relatorio:
+            worksheet[f'A{row}'] = "Principais Mudanças"
+            mudancas = self._analisar_mudancas(documentos, normas, ultimo_relatorio)
+            worksheet[f'B{row}'] = mudances
+            worksheet[f'B{row}'].alignment = Alignment(wrap_text=True)
+
+
+
+    def _adicionar_impacto_regulatorio(self, normas, worksheet):
+        """Adiciona análise de impacto regulatório"""
+        normas_vigentes = [n for n in normas if n.situacao == 'VIGENTE']
+        normas_novas = [n for n in normas_vigentes 
+                       if n.data_verificacao and (timezone.now() - n.data_verificacao).days < 30]
+        
+        if normas_novas:
+            row = worksheet.max_row + 2
+            worksheet[f'A{row}'] = "IMPACTO REGULATÓRIO"
+            self._aplicar_estilo(worksheet[f'A{row}'], self.estilos['cabecalho'])
+            row += 1
+            
+            worksheet[f'A{row}'] = "Novas Normas Vigentes"
+            worksheet[f'B{row}'] = f"{len(normas_novas)} normas vigentes identificadas nos últimos 30 dias"
+            
+            # Análise de impacto das novas normas
+            texto_normas = ". ".join(f"{n.tipo} {n.numero}: {n.ementa}" for n in normas_novas)
+            impacto = self.ia_gratuita.gerar_resumo_inteligente(
+                f"Análise de impacto contábil das seguintes normas: {texto_normas}", 
+                200
+            )
+            row += 1
+            worksheet[f'A{row}'] = "Análise de Impacto"
+            worksheet[f'B{row}'] = impacto
+            worksheet[f'B{row}'].alignment = Alignment(wrap_text=True)
+
+
+
+    
     
     def _criar_resumo_executivo(self, documentos, normas):
         """Cria aba com resumo executivo"""
@@ -822,7 +890,9 @@ class RelatorioAvancado:
         ws.column_dimensions['A'].width = 25
         ws.column_dimensions['B'].width = 20
         ws.column_dimensions['C'].width = 40
-    
+
+
+        return ws
     def _criar_analise_ia(self, documentos, normas):
         """🆕 Cria aba dedicada às análises de IA"""
         ws = self.wb.create_sheet(title="🤖 Análise IA")
@@ -957,6 +1027,8 @@ class RelatorioAvancado:
         for row_num in range(1, row + 1):
             ws.row_dimensions[row_num].height = 25
     
+            return ws 
+
     def _criar_analise_documentos(self, documentos):
         """Cria aba com análise detalhada dos documentos"""
         ws = self.wb.create_sheet(title="📄 Documentos")
@@ -990,7 +1062,7 @@ class RelatorioAvancado:
             ws[f'F{row}'] = "SIM" if doc.processado else "NÃO"
             ws[f'G{row}'] = resumo_ia
             ws[f'H{row}'] = palavras_chave
-            ws[f'I{row}'] = doc.fonte or 'N/A'
+            ws[f'I{row}'] = doc.fonte_documento or 'N/A'
             
             # Coloração
             if doc.relevante_contabil:
@@ -1246,6 +1318,48 @@ class RelatorioAvancado:
             # Se estilo for PatternFill direto
             cell.fill = estilo
 
+
+    def _formatar_resumo_ia_com_termos(self, documento_obj):
+        if not documento_obj:
+            return "Documento não disponível"
+
+        resumo_base = documento_obj.resumo or ""
+        texto_para_analise = documento_obj.texto_completo or resumo_base
+
+        # Formata o resumo base (como você já faz)
+        resumo_formatado = re.sub(r'\n+', ' ', resumo_base).strip()
+        if len(resumo_formatado) > 250: # Limite para o resumo principal
+            resumo_truncado = resumo_formatado[:250]
+            ultimo_ponto = resumo_truncado.rfind('.')
+            if ultimo_ponto > 150:
+                resumo_formatado = resumo_truncado[:ultimo_ponto + 1]
+            else:
+                resumo_formatado = resumo_truncado + "..."
+        
+        if not resumo_formatado:
+            resumo_formatado = "Resumo não gerado ou indisponível."
+
+        # Identifica termos monitorados encontrados
+        termos_encontrados = []
+        termos_monitorados_ativos = TermoMonitorado.objects.filter(ativo=True)
+        for termo_obj in termos_monitorados_ativos:
+            # Procura o termo principal e suas variações
+            termos_para_buscar = [termo_obj.termo.lower()]
+            if termo_obj.variacoes:
+                termos_para_buscar.extend([v.strip().lower() for v in termo_obj.variacoes.split(',')])
+            
+            for t_busca in termos_para_buscar:
+                if re.search(r'\b' + re.escape(t_busca) + r'\b', texto_para_analise.lower()):
+                    if termo_obj.termo not in termos_encontrados: # Adiciona apenas o termo principal
+                        termos_encontrados.append(termo_obj.termo)
+                    break # Para de procurar variações se o termo principal ou uma variação foi encontrada
+
+        output_final = resumo_formatado
+        if termos_encontrados:
+            output_final += f"\n\nTermos Relevantes Encontrados: {', '.join(termos_encontrados)}."
+        
+        return output_final
+
 class AnaliseIA:
     """Classe para análises com Inteligência Artificial"""
     
@@ -1440,7 +1554,7 @@ class AnaliseIA:
             fontes = defaultdict(int)
             for doc in documentos:
                 if doc.fonte:
-                    fontes[doc.fonte] += 1
+                    fontes[doc.fonte_documento] += 1
             
             # Retorna as 5 principais
             return dict(sorted(fontes.items(), key=lambda x: x[1], reverse=True)[:5])
