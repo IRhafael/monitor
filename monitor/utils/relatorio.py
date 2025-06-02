@@ -1,12 +1,12 @@
+# monitor/utils/relatorio.py
 import os
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from collections import defaultdict, Counter
 from typing import Dict, List, Optional, Tuple
 import re
-import requests # Usado pela sua classe MistralAI
-from urllib.parse import urlparse # Para extrair domínio da URL, se necessário
+from urllib.parse import urlparse
 
 from django.conf import settings
 from django.db.models import Count, Q, Max, Min, Avg, F, Case, When, Value, CharField
@@ -16,220 +16,247 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side, NamedSty
 from openpyxl.utils import get_column_letter
 from openpyxl.chart import BarChart, PieChart, LineChart, Reference
 from openpyxl.drawing.image import Image
-from datetime import datetime, timedelta, date # <--- ADICIONE 'date' AQUI
-from django.utils import timezone # Você já deve ter esta
-from .pdf_processor import MistralAI
-from monitor.models import Documento, NormaVigente, TermoMonitorado, RelatorioGerado # Adicionado TermoMonitorado e RelatorioGerado
+
+from monitor.models import Documento, NormaVigente, TermoMonitorado, RelatorioGerado
+
+# Importe a biblioteca da Anthropic
+import anthropic # Importe a biblioteca da Anthropic
+import time # Para retries
 
 logger = logging.getLogger(__name__)
 
-# --- INÍCIO DA CLASSE MistralAI (COPIADA DO SEU PDF_PROCESSOR.PY PARA CONTEXTO) ---
-# Se esta classe estiver em pdf_processor.py, você não precisa redefini-la aqui,
-# apenas certifique-se de que RelatorioAvancado possa instanciá-la ou receber uma instância.
-# Para este exemplo, vou incluir uma versão simplificada dela aqui para o código rodar.
-# No seu projeto real, a classe MistralAI definida em pdf_processor.py seria usada.
+# Remova referências a MISTRAL_API_KEY_RELATORIO e MISTRAL_API_URL_RELATORIO
 
-MISTRAL_API_KEY_RELATORIO = os.environ.get("MISTRAL_API_KEY", "AaODvu2cz9KAi55Jxal8NhjvpT1VyjBO") # Carregue de forma segura!
-MISTRAL_API_URL_RELATORIO = "https://api.mistral.ai/v1/chat/completions"
-
-class MistralAIRelatorioAdapter: # Renomeado para evitar conflito se você importar de pdf_processor
+class ClaudeRelatorioAdapter:
     def __init__(self):
-        self.headers = {
-            "Authorization": f"Bearer {MISTRAL_API_KEY_RELATORIO}",
-            "Content-Type": "application/json",
-            "Accept": "application/json"
-        }
-        self.default_model = "mistral-small-latest"
-        self.default_temperature = 0.2
-        if not MISTRAL_API_KEY_RELATORIO or MISTRAL_API_KEY_RELATORIO == "AaODvu2cz9KAi55Jxal8NhjvpT1VyjBO": # Exemplo de verificação
-             logger.warning("Chave da API Mistral para Relatório não parece ser uma chave de produção.")
-        # Não há um self.client aqui na sua implementação original, você usa requests.post diretamente
+        try:
+            api_key = getattr(settings, 'ANTHROPIC_API_KEY', os.environ.get("ANTHROPIC_API_KEY"))
+            if not api_key:
+                raise ValueError("Chave da API Anthropic (Claude) não encontrada.")
+            self.client = anthropic.Anthropic(api_key=api_key)
+        except Exception as e:
+            logger.error(f"Erro ao inicializar o cliente Anthropic Claude no RelatorioAdapter: {e}")
+            self.client = None
+        # Para relatórios consolidados, um modelo mais capaz é melhor.
+        # claude-3-sonnet-20240229 ou claude-3-5-sonnet-20240620 são boas opções
+        self.default_model = "claude-3-5-sonnet-20240620"
+        self.default_temperature = 0.3
+        self.default_max_tokens = 3000 # Aumentado para o prompt detalhado
 
+    def _call_claude(self, system_prompt: str, user_prompt: str, model: Optional[str] = None, temperature: Optional[float] = None, max_tokens: Optional[int] = None) -> Optional[str]:
+        if not self.client:
+            logger.error("Cliente Anthropic Claude (RelatorioAdapter) não inicializado.")
+            return "Erro: Cliente Anthropic Claude (Relatório) não configurado."
 
-    def _call_mistral(self, messages: List[Dict[str, str]], model: Optional[str] = None, temperature: Optional[float] = None, max_tokens: Optional[int] = None) -> Optional[str]:
-        if not MISTRAL_API_KEY_RELATORIO or MISTRAL_API_KEY_RELATORIO in ["SuaChaveAqui", "COLOQUE_SUA_CHAVE_AQUI"]:
-            logger.error("Chave da API Mistral não configurada corretamente para Relatório.")
-            return "Erro: Chave da API Mistral (Relatório) não configurada."
-        data = {
-            "model": model or self.default_model,
-            "messages": messages,
-            "temperature": temperature if temperature is not None else self.default_temperature,
-            "stream": False
-        }
-        if max_tokens: data["max_tokens"] = max_tokens
+        # (Mesma lógica de _call_claude da classe ClaudeProcessor, incluindo retries)
+        max_retries = 3
+        base_wait_time = 5  # segundos
 
-        max_retries = 5
-        for tentativa in range(max_retries):
+        for attempt in range(max_retries):
             try:
-                response = requests.post(MISTRAL_API_URL_RELATORIO, headers=self.headers, json=data, timeout=60)
-                if response.status_code == 429:
-                    wait_time = 2 ** tentativa
-                    logger.warning(f"Rate limit atingido (429). Tentativa {tentativa+1}/{max_retries}. Aguardando {wait_time}s antes de tentar novamente...")
+                response = self.client.messages.create(
+                    model=model or self.default_model,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": user_prompt}],
+                    temperature=temperature if temperature is not None else self.default_temperature,
+                    max_tokens=max_tokens or self.default_max_tokens
+                )
+                if response.content and isinstance(response.content, list) and len(response.content) > 0:
+                    block = response.content[0]
+                    if hasattr(block, 'text'): return block.text.strip()
+                    logger.warning(f"Bloco de conteúdo da API Claude (Relatório) não continha 'text': {block}")
+                    return "Resposta da IA (Relatório) não continha texto no bloco esperado."
+                logger.warning(f"Resposta da API Claude (Relatório) não continha 'content' ou estava vazia: {response}")
+                return "Resposta da IA (Relatório) com formato inesperado ou vazia."
+            except anthropic.APIStatusError as e:
+                logger.error(f"Erro de Status da API Anthropic (Relatório, tentativa {attempt + 1}/{max_retries}): {e.status_code} - {e.message}", exc_info=True)
+                if e.status_code == 429 and attempt < max_retries - 1:
+                    wait_time = base_wait_time * (2 ** attempt)
+                    logger.warning(f"Rate limit (Relatório). Aguardando {wait_time}s...")
                     time.sleep(wait_time)
                     continue
-                response.raise_for_status()
-                response_json = response.json()
-                if response_json.get("choices") and len(response_json["choices"]) > 0:
-                    content = response_json["choices"][0].get("message", {}).get("content")
-                    return content.strip() if content else "Resposta da IA vazia."
-                return "Formato de resposta da IA inesperado."
-            except requests.exceptions.HTTPError as http_err:
-                if response.status_code == 429 and tentativa < max_retries - 1:
-                    wait_time = 2 ** tentativa
-                    logger.warning(f"HTTP 429 novamente. Esperando {wait_time}s para nova tentativa.")
-                    time.sleep(wait_time)
-                    continue
-                logger.error(f"Erro HTTP Mistral: {http_err} - Resp: {response.text if 'response' in locals() else 'N/A'}", exc_info=True)
-                return f"Erro HTTP {http_err.response.status_code}."
+                return f"Erro API Claude (Relatório): {e.status_code} - {e.message}"
+            except anthropic.APIConnectionError as e:
+                logger.error(f"Erro de Conexão com API Anthropic (Relatório, tentativa {attempt + 1}/{max_retries}): {e}", exc_info=True)
+                if attempt < max_retries - 1: time.sleep(base_wait_time); continue
+                return "Erro API Claude (Relatório): Falha na conexão."
             except Exception as e:
-                logger.error(f"Erro chamada Mistral: {e}", exc_info=True)
-                return f"Erro API: {e}"
-        return "Erro: Limite de tentativas excedido ao comunicar com a API Mistral."
+                logger.error(f"Erro inesperado API Claude (Relatório, tentativa {attempt + 1}/{max_retries}): {e}", exc_info=True)
+                if attempt < max_retries - 1: time.sleep(base_wait_time); continue
+                return f"Erro inesperado API Claude (Relatório): {str(e)}"
+        return "Erro: Limite de tentativas excedido (Relatório) com API Claude."
+
 
     def gerar_insight_conjunto_documentos(self, documentos_para_analise: List[Dict]) -> str:
+        if not self.client:
+            return "Erro: Cliente Anthropic Claude (Relatório) não configurado para gerar insights."
         if not documentos_para_analise:
             return "Nenhum documento fornecido para análise consolidada."
 
         textos_concatenados = "\n\n---\n\n".join(
-            f"Documento Título: {d['titulo']}\nData: {d['data_publicacao']}\nResumo IA: {d['resumo_ia']}\nPontos Críticos IA: {'; '.join(d['pontos_criticos_ia'])}"
+            f"Documento Título: {d['titulo']}\nData: {d['data_publicacao']}\nResumo IA: {d.get('resumo_ia', 'N/A')}\nPontos Críticos IA: {'; '.join(d.get('pontos_criticos_ia', []))}"
             for d in documentos_para_analise
         )
+        # Limitar o tamanho do input para Claude. Claude 3.5 Sonnet tem 200K tokens.
+        # 60000 caracteres são aproximadamente 15k tokens, o que é seguro.
+        textos_concatenados_trunc = textos_concatenados[:60000]
+
 
         system_prompt = (
-            "Você é um Analista de Inteligência Regulatória Sênior, especializado em identificar padrões e "
-            "tendências em múltiplos documentos fiscais e contábeis do Piauí. Sua tarefa é fornecer um "
-            "insight consolidado sobre os documentos apresentados."
+            "Você é um Consultor Tributário Estratégico e Analista Regulatório Sênior, com vasta experiência na legislação fiscal e contábil do estado do Piauí. "
+            "Sua especialidade é analisar um conjunto de documentos oficiais (Diários Oficiais, Leis, Decretos, Portarias) e seus resumos, "
+            "identificando implicações, padrões, tendências e fornecendo aconselhamento prático e acionável para contadores e gestores fiscais."
         )
-        user_prompt = (
-            f"Com base na seguinte lista de documentos fiscais/contábeis relevantes e seus respectivos resumos e pontos críticos gerados por IA, "
-            f"forneça uma ANÁLISE CONSOLIDADA (1-3 parágrafos curtos) sobre os temas ou impactos mais recorrentes ou significativos "
-            f"que emergem do conjunto. Há alguma tendência notável ou alerta geral para os contadores?\n\n"
-            f"Dados dos Documentos:\n\"\"\"\n{textos_concatenados[:14000]}\n\"\"\"\n\n"
-            f"Análise Consolidada e Tendências Emergentes:"
-        )
-        messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-        return self._call_mistral(messages, max_tokens=500, temperature=0.3) or "Não foi possível gerar o insight consolidado."
 
-# --- FIM DA CLASSE MistralAIRelatorioAdapter ---
+        user_prompt_template = """Com base na seguinte coletânea de documentos fiscais/contábeis relevantes do Piauí (títulos, datas, resumos IA e pontos críticos IA), elabore uma ANÁLISE CONSOLIDADA E DETALHADA. Sua análise deve ser estruturada nas seguintes seções:
+
+DADOS DOS DOCUMENTOS PARA ANÁLISE:
+\"\"\"
+{document_data}
+\"\"\"
+
+--- ANÁLISE CONSOLIDADA DETALHADA ---
+
+**1. PRINCIPAIS TEMAS E ALTERAÇÕES LEGISLATIVAS IDENTIFICADAS:**
+   - Liste de 3 a 5 temas ou categorias de alterações mais proeminentes observados no conjunto de documentos (ex: Mudanças no ICMS-ST, Novas Obrigações Acessórias para o Setor X, Alterações em Processos de Licitação, etc.).
+   - Para cada tema, descreva sucintamente a natureza da mudança e, se possível, cite 1 ou 2 documentos como exemplo (apenas o título e data são suficientes para a citação).
+
+**2. TENDÊNCIAS REGULATÓRIAS EMERGENTES PARA O PIAUÍ:**
+   - Com base nos documentos, identifique de 2 a 3 tendências regulatórias que parecem estar se consolidando no estado do Piauí (ex: Maior digitalização de processos, Foco em determinado setor econômico, Aumento da fiscalização em X, Simplificação de Y).
+   - Justifique brevemente cada tendência com base nas informações dos documentos.
+
+**3. POTENCIAIS RISCOS E PONTOS DE ATENÇÃO CRÍTICOS:**
+   - Destaque quaisquer riscos significativos, ambiguidades, ou aumentos de complexidade que os documentos possam introduzir para as empresas e contadores.
+   - Há algum documento ou alteração que exige CAUTELA redobrada na interpretação ou implementação?
+
+**4. RECOMENDAÇÕES ESTRATÉGICAS E AÇÕES IMEDIATAS PARA CONTADORES:**
+   - Com base na sua análise, forneça de 3 a 5 recomendações práticas e acionáveis para a equipe contábil/fiscal.
+   - Ex: 'Revisar urgentemente os procedimentos internos para a nova obrigação X (vide Documento Y)', 'Alertar clientes do setor Z sobre a mudança na alíquota W', 'Capacitar a equipe sobre o novo sistema ABC'.
+
+**5. SÍNTESE DO SENTIMENTO GERAL (IMPACTO PREDOMINANTE):**
+   - Considerando o conjunto de documentos, qual o sentimento/impacto predominante para o ambiente de negócios e para a prática contábil no Piauí (POSITIVO, NEGATIVO, NEUTRO, MISTO COM CAUTELA)? Justifique brevemente.
+
+INSTRUÇÕES ADICIONAIS:
+- Seja objetivo, claro e utilize linguagem técnica apropriada para contadores.
+- Foque exclusivamente nas informações contidas ou inferíveis a partir dos dados dos documentos fornecidos.
+- Não inclua informações externas ou especulações não fundamentadas nos textos.
+- A resposta deve ser bem organizada e fácil de ler."""
+
+        user_prompt = user_prompt_template.format(document_data=textos_concatenados_trunc)
+
+        # max_tokens aumentado para permitir resposta detalhada
+        return self._call_claude(system_prompt, user_prompt, max_tokens=3000, temperature=0.3) or "Não foi possível gerar o insight consolidado detalhado com Claude."
 
 
-class AnaliseIA: # Sua classe AnaliseIA existente
-    """Classe responsável por análises avançadas com IA dos documentos e normas"""
+class AnaliseIA: # Mantém o nome, mas adapta o cliente interno
+    def __init__(self, claude_client_instance: Optional[ClaudeRelatorioAdapter] = None): # Alterado
+        # Alterado para usar ClaudeRelatorioAdapter
+        self.claude_adapter = claude_client_instance if claude_client_instance else ClaudeRelatorioAdapter()
 
-    def __init__(self, mistral_client_instance: Optional[MistralAIRelatorioAdapter] = None):
-        # Recebe uma instância do cliente Mistral para não recriá-lo sempre,
-        # ou cria uma nova se não for passada.
-        self.mistral_adapter = mistral_client_instance if mistral_client_instance else MistralAIRelatorioAdapter()
-
-    # Seus métodos estáticos _identificar_fontes_principais, _contar_tipos_normas,
-    # _analisar_sentimentos_agregados, _identificar_assuntos_emergentes,
-    # _calcular_risco_compliance, _gerar_recomendacoes_ia (precisarão de prompts para Mistral)
-    # e _gerar_insights_automaticos permanecem aqui.
-    # Vou adaptar _identificar_fontes_principais para usar 'fonte_documento'
-    # e _gerar_insights_automaticos para potencialmente usar a Mistral.
-
-    @staticmethod
-    def _identificar_fontes_principais(documentos: List[Documento]) -> Dict[str, int]:
-        logger.debug(f"Iniciando _identificar_fontes_principais para {len(documentos)} documentos.")
-        fontes = defaultdict(int)
-        try:
-            for doc in documentos:
-                fonte_val = None
-                if hasattr(doc, 'fonte_documento') and doc.fonte_documento:
-                    fonte_val = doc.fonte_documento.strip()
-                elif doc.url_original:
-                    try:
-                        parsed_url = urlparse(doc.url_original)
-                        fonte_val = parsed_url.netloc if parsed_url.netloc else doc.url_original
-                    except: fonte_val = doc.url_original[:70] # Fallback
+    # ... (métodos _identificar_fontes_principais e _contar_tipos_normas permanecem os mesmos)
+    @staticmethod #relatorio.py
+    def _identificar_fontes_principais(documentos: List[Documento]) -> Dict[str, int]: #relatorio.py
+        logger.debug(f"Iniciando _identificar_fontes_principais para {len(documentos)} documentos.") #relatorio.py
+        fontes = defaultdict(int) #relatorio.py
+        try: #relatorio.py
+            for doc in documentos: #relatorio.py
+                fonte_val = None #relatorio.py
+                if hasattr(doc, 'fonte_documento') and doc.fonte_documento: #relatorio.py
+                    fonte_val = doc.fonte_documento.strip() #relatorio.py
+                elif doc.url_original: #relatorio.py
+                    try: #relatorio.py
+                        parsed_url = urlparse(doc.url_original) #relatorio.py
+                        fonte_val = parsed_url.netloc if parsed_url.netloc else doc.url_original #relatorio.py
+                    except: fonte_val = doc.url_original[:70] # Fallback #relatorio.py
                 
-                if fonte_val:
-                    fontes[fonte_val] += 1
-                else:
-                    fontes["Fonte Não Especificada"] += 1
-            return dict(sorted(fontes.items(), key=lambda item: item[1], reverse=True)[:5])
-        except Exception as e:
-            logger.error(f"Erro em _identificar_fontes_principais: {e}", exc_info=True)
-            return {"Erro na análise de fontes": 1}
+                if fonte_val: #relatorio.py
+                    fontes[fonte_val] += 1 #relatorio.py
+                else: #relatorio.py
+                    fontes["Fonte Não Especificada"] += 1 #relatorio.py
+            return dict(sorted(fontes.items(), key=lambda item: item[1], reverse=True)[:5]) #relatorio.py
+        except Exception as e: #relatorio.py
+            logger.error(f"Erro em _identificar_fontes_principais: {e}", exc_info=True) #relatorio.py
+            return {"Erro na análise de fontes": 1} #relatorio.py
 
-    @staticmethod
-    def _contar_tipos_normas(normas: List[NormaVigente]) -> Dict[str, int]:
-        tipos = defaultdict(int)
-        for norma in normas:
-            tipos[norma.get_tipo_display()] += 1
-        return dict(sorted(tipos.items(), key=lambda item: item[1], reverse=True))
+    @staticmethod #relatorio.py
+    def _contar_tipos_normas(normas: List[NormaVigente]) -> Dict[str, int]: #relatorio.py
+        tipos = defaultdict(int) #relatorio.py
+        for norma in normas: #relatorio.py
+            tipos[norma.get_tipo_display()] += 1 #relatorio.py
+        return dict(sorted(tipos.items(), key=lambda item: item[1], reverse=True)) #relatorio.py
+
 
     def _gerar_insights_automaticos(self, documentos: List[Documento], normas: List[NormaVigente]) -> List[Dict[str, str]]:
-        """Gera insights com base em métricas e opcionalmente com IA para consolidação."""
-        insights = []
-        try:
-            # Seus insights baseados em contagem (mantidos)
-            if len(documentos) > 50: # Limite de exemplo
-                insights.append({
-                    'titulo': 'Alto Volume de Documentos',
-                    'descricao': f'Sistema analisou {len(documentos)} documentos no período, indicando atividade regulatória significativa.',
-                    'relevancia': 'alta'
-                })
+        insights = [] #relatorio.py
+        try: #relatorio.py
+            # Seus insights baseados em contagem (mantidos) #relatorio.py
+            if len(documentos) > 50: # Limite de exemplo #relatorio.py
+                insights.append({ #relatorio.py
+                    'titulo': 'Alto Volume de Documentos', #relatorio.py
+                    'descricao': f'Sistema analisou {len(documentos)} documentos no período, indicando atividade regulatória significativa.', #relatorio.py
+                    'relevancia': 'alta' #relatorio.py
+                }) #relatorio.py
             
-            normas_vigentes_count = len([n for n in normas if n.situacao == 'VIGENTE'])
-            if normas and normas_vigentes_count / len(normas) > 0.8:
-                insights.append({
-                    'titulo': 'Boa Taxa de Conformidade de Normas',
-                    'descricao': f'{(normas_vigentes_count/len(normas)*100):.1f}% das normas identificadas estão atualmente vigentes.',
-                    'relevancia': 'média'
-                })
+            normas_vigentes_count = len([n for n in normas if n.situacao == 'VIGENTE']) #relatorio.py
+            if normas and len(normas) > 0 and normas_vigentes_count / len(normas) > 0.8: # Adicionado len(normas) > 0 #relatorio.py
+                insights.append({ #relatorio.py
+                    'titulo': 'Boa Taxa de Conformidade de Normas', #relatorio.py
+                    'descricao': f'{(normas_vigentes_count/len(normas)*100):.1f}% das normas identificadas estão atualmente vigentes.', #relatorio.py
+                    'relevancia': 'média' #relatorio.py
+                }) #relatorio.py
             
-            # Insight Consolidado da Mistral
-            docs_para_insight_ia = []
-            for doc in documentos:
-                if doc.relevante_contabil and (hasattr(doc, 'resumo_ia') and doc.resumo_ia):
-                    docs_para_insight_ia.append({
-                        "titulo": doc.titulo,
-                        "data_publicacao": doc.data_publicacao.strftime("%d/%m/%Y") if doc.data_publicacao else "N/D",
-                        "resumo_ia": doc.resumo_ia[:300] + "..." if doc.resumo_ia and len(doc.resumo_ia) > 300 else doc.resumo_ia, # Envia resumos curtos
-                        "pontos_criticos_ia": doc.metadata.get('ia_pontos_criticos', []) if hasattr(doc, 'metadata') and doc.metadata else []
-                    })
+            # Insight Consolidado da Claude
+            docs_para_insight_ia = [] #relatorio.py
+            for doc in documentos: #relatorio.py
+                if doc.relevante_contabil and (hasattr(doc, 'resumo_ia') and doc.resumo_ia): #relatorio.py
+                    docs_para_insight_ia.append({ #relatorio.py
+                        "titulo": doc.titulo, #relatorio.py
+                        "data_publicacao": doc.data_publicacao.strftime("%d/%m/%Y") if doc.data_publicacao else "N/D", #relatorio.py
+                        "resumo_ia": doc.resumo_ia[:300] + "..." if doc.resumo_ia and len(doc.resumo_ia) > 300 else doc.resumo_ia, # Envia resumos curtos #relatorio.py
+                        "pontos_criticos_ia": doc.metadata.get('ia_pontos_criticos', []) if hasattr(doc, 'metadata') and doc.metadata else [] #relatorio.py
+                    }) #relatorio.py
             
-            if docs_para_insight_ia: # Se houver documentos relevantes com resumos IA
-                insight_consolidado_ia = self.mistral_adapter.gerar_insight_conjunto_documentos(docs_para_insight_ia[:5]) # Limita a 5 docs para o prompt
-                if insight_consolidado_ia and "Erro" not in insight_consolidado_ia:
+            if docs_para_insight_ia: # Se houver documentos relevantes com resumos IA #relatorio.py
+                # Alterado para usar self.claude_adapter
+                insight_consolidado_ia = self.claude_adapter.gerar_insight_conjunto_documentos(docs_para_insight_ia[:10]) # Limita a 10 docs para o prompt de exemplo
+                if insight_consolidado_ia and "Erro API Claude" not in insight_consolidado_ia and "Erro: Cliente Anthropic Claude" not in insight_consolidado_ia: #relatorio.py
+                    insights.append({ #relatorio.py
+                        'titulo': 'Análise Consolidada por IA (Claude)', # Alterado
+                        'descricao': insight_consolidado_ia, #relatorio.py
+                        'relevancia': 'alta' #relatorio.py
+                    }) #relatorio.py
+                elif insight_consolidado_ia: # Captura e mostra o erro da API, se houver
                     insights.append({
-                        'titulo': 'Análise Consolidada por IA (Mistral)',
-                        'descricao': insight_consolidado_ia,
-                        'relevancia': 'alta'
+                        'titulo': 'Falha na Análise Consolidada por IA (Claude)',
+                        'descricao': f"Não foi possível gerar a análise. Detalhe do erro: {insight_consolidado_ia}",
+                        'relevancia': 'crítica'
                     })
-            return insights
-        except Exception as e:
-            logger.error(f"Erro ao gerar insights automáticos: {e}", exc_info=True)
-            return [{'titulo': 'Erro nos Insights', 'descricao': str(e), 'relevancia': 'crítica'}]
-
-    # Outros métodos da AnaliseIA podem ser adaptados para usar self.mistral_adapter
-    # se precisarem de mais poder de IA.
+            return insights #relatorio.py
+        except Exception as e: #relatorio.py
+            logger.error(f"Erro ao gerar insights automáticos: {e}", exc_info=True) #relatorio.py
+            return [{'titulo': 'Erro nos Insights', 'descricao': str(e), 'relevancia': 'crítica'}] #relatorio.py
 
 
 class RelatorioAvancado:
-    """Gera um relatório avançado em formato Excel com múltiplas abas e análises."""
-
-    CORES = { # Mantido do seu original
-        'cabecalho': '4F81BD',
-        'subcabecalho': 'B8CCE4',
-        'destaque': 'FCD5B4',
-        'sucesso': 'C6EFCE',
-        'aviso': 'FFEB9C',
-        'erro': 'FFC7CE',
-        'neutro': 'D9D9D9',
-        'zebra': 'F2F2F2',
-    }
+    CORES = { #relatorio.py
+        'cabecalho': '4F81BD', #relatorio.py
+        'subcabecalho': 'B8CCE4', #relatorio.py
+        'destaque': 'FCD5B4', #relatorio.py
+        'sucesso': 'C6EFCE', #relatorio.py
+        'aviso': 'FFEB9C', #relatorio.py
+        'erro': 'FFC7CE', #relatorio.py
+        'neutro': 'D9D9D9', #relatorio.py
+        'zebra': 'F2F2F2', #relatorio.py
+    } #relatorio.py
 
     def __init__(self):
-        self.wb = Workbook()
-        self.wb.remove(self.wb.active) # Remove a planilha padrão
-        self.estilos = self._definir_estilos()
-        self.mistral_ai = MistralAIRelatorioAdapter() # Instancia o adaptador Mistral
-        self.analise_ia = AnaliseIA(mistral_client_instance=self.mistral_ai) # Passa a instância para AnaliseIA
-
-    # Em monitor/utils/relatorio.py
-# Dentro da classe RelatorioAvancado
+        self.wb = Workbook() #relatorio.py
+        self.wb.remove(self.wb.active) # Remove a planilha padrão #relatorio.py
+        self.estilos = self._definir_estilos() #relatorio.py
+        # Alterado para usar ClaudeRelatorioAdapter
+        self.claude_adapter = ClaudeRelatorioAdapter()
+        # Alterado para passar a instância correta
+        self.analise_ia = AnaliseIA(claude_client_instance=self.claude_adapter)
 
     def _definir_estilos(self) -> Dict[str, NamedStyle]:
         estilos = {}

@@ -60,6 +60,8 @@ TEMPLATES = [
 WSGI_APPLICATION = 'diario_oficial.wsgi.application'
 
 
+ANTHROPIC_API_KEY = "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" 
+
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
