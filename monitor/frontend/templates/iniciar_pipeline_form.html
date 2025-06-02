@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Iniciar Pipeline Completo Manualmente{% endblock %}
+{% block page_title %}Pipeline Completo Manual{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <h5>Definir Período para Coleta, Processamento e Verificação SEFAZ</h5>
+    </div>
+    <div class="card-body">
+        <form method="post" action="{% url 'iniciar_pipeline_completo_manual' %}">
+            {% csrf_token %}
+            <div class="row g-3 align-items-end">
+                <div class="col-md-5">
+                    <label for="id_data_inicio_pipeline" class="form-label">Data de Início:</label>
+                    <input type="date" name="data_inicio_pipeline" class="form-control" required id="id_data_inicio_pipeline" value="{{ request.POST.data_inicio_pipeline }}">
+                </div>
+                <div class="col-md-5">
+                    <label for="id_data_fim_pipeline" class="form-label">Data de Fim:</label>
+                    <input type="date" name="data_fim_pipeline" class="form-control" required id="id_data_fim_pipeline" value="{{ request.POST.data_fim_pipeline }}">
+                </div>
+                <div class="col-md-2">
+                    <button type="submit" class="btn btn-danger w-100">
+                        <i class="bi bi-play-circle-fill"></i> Iniciar
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

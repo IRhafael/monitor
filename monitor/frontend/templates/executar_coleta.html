@@ -127,6 +127,20 @@
                             <td colspan="5">Nenhuma tarefa recente</td>
                         </tr>
                         {% endfor %}
+                        <form method="post" action="{% url 'iniciar_apenas_coleta' %}" class="mt-2">
+                    {% csrf_token %}
+                    <div class="input-group input-group-sm mb-2">
+                        <label class="input-group-text" for="dias_retro_coleta_id">Coletar PDFs dos últimos:</label>
+                        <select name="dias_retroativos_apenas_coleta" id="dias_retro_coleta_id" class="form-select">
+                            <option value="1">1 dia</option>
+                            <option value="3" selected>3 dias</option>
+                            <option value="7">7 dias</option>
+                        </select>
+                        <button type="submit" class="btn btn-outline-primary">
+                            <i class="bi bi-cloud-download"></i> Iniciar Só Coleta
+                        </button>
+                    </div>
+                </form>
                     </tbody>
                 </table>
             </div>

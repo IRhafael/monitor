@@ -1,8 +1,9 @@
-from datetime import timedelta, datetime
+# monitor/views.py
+from datetime import timedelta, datetime, date # Certifique-se que date e datetime estão importados
 import inspect
 from itertools import count
 from urllib import request
-from django.db.models import F, ExpressionWrapper, Q # Adicione Q para consultas complexas
+from django.db.models import F, ExpressionWrapper, Q
 from django.forms import DurationField
 from django.http import Http404, HttpResponse, FileResponse, JsonResponse
 from django.contrib.auth.decorators import login_required
@@ -14,25 +15,30 @@ from django.urls import reverse
 from django.db import transaction
 import os
 import logging
-from .utils.tasks import coletar_diario_oficial_task, processar_documentos_pendentes_task
-from datetime import timedelta, date
-from .utils.tasks import pipeline_coleta_e_processamento
-from .forms import DocumentoUploadForm
+from django.views.decorators.http import require_POST
+# Importe a tarefa Celery correta do seu tasks.py refatorado
+from .utils.tasks import (
+    pipeline_coleta_e_processamento_automatica, # Nome da tarefa para pipeline padrão
+    pipeline_manual_completo,                   # Nome da tarefa para pipeline com datas manuais
+    coletar_diario_oficial_task,                # Para coleta isolada
+    processar_documentos_pendentes_task,        # Para processar todos os pendentes
+    verificar_normas_sefaz_task                 # Para verificar todas as normas SEFAZ
+)
+from .forms import DocumentoUploadForm #, PipelineManualForm # Você pode criar PipelineManualForm
 from .models import Documento, NormaVigente, LogExecucao, RelatorioGerado
-from .utils.sefaz_integracao import IntegradorSEFAZ # Mantida se houver outras funções síncronas aqui que não sejam tarefas
+from .utils.sefaz_integracao import IntegradorSEFAZ
 from .utils.relatorio import RelatorioAvancado
-from .utils.tasks import coletar_diario_oficial_task, processar_documentos_pendentes_task, verificar_normas_sefaz_task
+# A importação de verificar_normas_sefaz_task já está acima
 import subprocess
-from django.http import JsonResponse
-from celery.app.control import Control
-from diario_oficial.celery import app  # substitua `your_project` pelo nome correto do seu projeto
+from celery.app.control import Control # Removido app.control.inspect() daqui, movido para view se necessário
+from diario_oficial.celery import app # Importa o app Celery
 from django.views.decorators.http import require_POST
 from django.views.generic import ListView
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.views.generic import TemplateView
-from django.db.models import Count, Sum
+from django.db.models import Count, Sum # Count já estava, Sum adicionado
 import calendar
-from .utils.relatorio import RelatorioAvancado
+import platform
 
 
 inspector = app.control.inspect()
@@ -149,65 +155,49 @@ def verificar_norma_ajax(request, tipo, numero):
 
 
 @login_required
-def verificar_normas_view(request):
-    if request.method == 'POST':
-        # Dispara a tarefa Celery para verificar normas da SEFAZ
-        verificacao_task_info = verificar_normas_sefaz_task.delay()
-        logger.info(f"Tarefa de verificação de normas SEFAZ disparada com ID: {verificacao_task_info.id}")
-        
-        messages.success(request, "Verificação de normas SEFAZ iniciada em segundo plano. Verifique os logs do Celery worker para o progresso.")
-        return redirect('dashboard_vigencia') # Redireciona para o dashboard de vigência
-    
-    # Mostra informações sobre a última execução da verificação de normas para a view GET
-    ultima_execucao = LogExecucao.objects.filter(tipo_execucao='VERIFICACAO_SEFAZ').order_by('-data_inicio').first()
-    normas_para_verificar_count = NormaVigente.objects.filter(
-        Q(data_verificacao__isnull=True) |
-        Q(data_verificacao__lt=timezone.now() - timedelta(days=30))
-    ).count()
-
-    context = {
-        'ultima_execucao': ultima_execucao,
-        'normas_para_verificar_count': normas_para_verificar_count,
-    }
-    return render(request, 'normas/verificar_normas.html', context) # Assumindo um template específico
-
-
-@login_required
 def executar_coleta_view(request):
     if request.method == 'POST':
-        data_fim = date.today()
-        data_inicio = data_fim - timedelta(days=3)  # Sempre coleta dos últimos 3 dias
-
-        pipeline_task_info = pipeline_coleta_e_processamento.delay(
-            data_inicio_str=data_inicio.strftime('%Y-%m-%d'),
-            data_fim_str=data_fim.strftime('%Y-%m-%d')
-        )
-        
-        messages.success(request, 
-            f"Coleta dos últimos 3 dias (de {data_inicio} a {data_fim}) iniciada. "
-            f"ID da tarefa: {pipeline_task_info.id}"
-        )
+        try:
+            dias_retroativos = int(request.POST.get('days_back', 3))
+            
+            # Use o nome da tarefa refatorada
+            task_info = pipeline_coleta_e_processamento_automatica.delay(
+                dias_retroativos_coleta=dias_retroativos
+            )
+            
+            messages.success(request, 
+                f"Pipeline automático (coleta dos últimos {dias_retroativos} dias, processamento e verificação SEFAZ) iniciado. "
+                f"ID da tarefa: {task_info.id}"
+            )
+        except Exception as e:
+            logger.error(f"Erro ao disparar pipeline automático: {e}", exc_info=True)
+            messages.error(request, f"Erro ao iniciar pipeline: {str(e)}")
         return redirect('dashboard')
 
-    # Parte GET da view: mostra informações sobre a última execução
-    ultima_execucao_coleta = LogExecucao.objects.filter(tipo_execucao='COLETA').order_by('-data_inicio').first()
-    ultima_execucao_processamento = LogExecucao.objects.filter(tipo_execucao='PROCESSAMENTO_PDF').order_by('-data_inicio').first()
-    ultima_execucao_sefaz = LogExecucao.objects.filter(tipo_execucao='VERIFICACAO_SEFAZ').order_by('-data_inicio').first()
+    # ... (resto da lógica GET da view, incluindo a busca por celery_status)
+    # Certifique-se que 'app' (instância do Celery) está corretamente importada e usada para app.control.inspect()
+    celery_worker_status = {'is_running': False, 'active_tasks': 0, 'queued_tasks': 0, 'workers': 0}
+    try:
+        inspector = app.control.inspect(timeout=1) 
+        active = inspector.active()
+        scheduled = inspector.scheduled()
+        ping_result = inspector.ping()
 
-    documentos_nao_processados = Documento.objects.filter(processado=False).count()
-    normas_nao_verificadas = NormaVigente.objects.filter(data_verificacao__isnull=True).count()
-    normas_desatualizadas = NormaVigente.objects.filter(data_verificacao__lt=timezone.now() - timedelta(days=30)).count()
-
+        if ping_result:
+            celery_worker_status['is_running'] = True
+            celery_worker_status['workers'] = len(ping_result.keys())
+        if active:
+            celery_worker_status['active_tasks'] = sum(len(tasks) for tasks in active.values())
+        if scheduled:
+            celery_worker_status['queued_tasks'] = sum(len(tasks) for tasks in scheduled.values())
+    except Exception as e:
+        logger.warning(f"Não foi possível obter status do Celery em executar_coleta_view: {e}")
+        # Não mostre uma mensagem de erro aqui, a menos que seja crítico para esta view
 
     context = {
-        'ultima_execucao_coleta': ultima_execucao_coleta,
-        'ultima_execucao_processamento': ultima_execucao_processamento,
-        'ultima_execucao_sefaz': ultima_execucao_sefaz,
-        'documentos_nao_processados': documentos_nao_processados,
-        'normas_nao_verificadas': normas_nao_verificadas,
-        'normas_desatualizadas': normas_desatualizadas,
+        # ... (seu contexto existente) ...
+        'celery_status': celery_worker_status,
     }
-    # Ajuste o caminho do template se necessário
     return render(request, 'executar_coleta.html', context)
 
 @login_required
@@ -424,7 +414,7 @@ def marcar_documento_irrelevante(request, pk):
 
 @login_required
 def celery_control(request):
-    return render(request, 'celery_control.html')
+    return render(request, 'celery/celery_control.html')
 
 @login_required
 def celery_status(request):
@@ -444,60 +434,125 @@ def celery_status(request):
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
 
-@login_required
-def start_celery_worker(request):
-    if request.method == 'POST':
-        try:
-            # Inicia o worker em segundo plano
-            subprocess.Popen(['celery', '-A', 'your_project', 'worker', '--loglevel=info'])
-            return JsonResponse({'status': 'success'})
-        except Exception as e:
-            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
-    return JsonResponse({'status': 'error'}, status=405)
 
 @login_required
+@require_POST
+def start_celery_worker(request):
+    try:
+        # Usar settings.BASE_DIR que é a raiz do projeto Django (onde manage.py está)
+        project_root = str(settings.BASE_DIR)
+        logger.info(f"Project root: {project_root}")
+
+        # Confirme este caminho para o seu ambiente virtual
+        venv_scripts_path = os.path.join(project_root, 'venv311', 'Scripts')
+        venv_activate_path = os.path.join(venv_scripts_path, 'activate.bat')
+        celery_executable_path = os.path.join(venv_scripts_path, 'celery.exe') # Caminho explícito
+
+        logger.info(f"Venv activate path: {venv_activate_path}")
+        logger.info(f"Celery executable path: {celery_executable_path}")
+
+        if not os.path.exists(venv_activate_path):
+            logger.error(f"Script de ativação do Venv não encontrado: {venv_activate_path}")
+            return JsonResponse({'status': 'error', 'message': f'Venv activate script not found: {venv_activate_path}'}, status=500)
+        if not os.path.exists(celery_executable_path):
+            logger.error(f"Executável do Celery não encontrado: {celery_executable_path}")
+            return JsonResponse({'status': 'error', 'message': f'Celery executable not found: {celery_executable_path}'}, status=500)
+
+   
+        celery_command_args = [celery_executable_path, '-A', 'diario_oficial', 'worker', '--loglevel=info', '-P', 'solo']
+        celery_command_str = " ".join(f'"{arg}"' if " " in arg else arg for arg in celery_command_args) # Aspas em args com espaço
+
+        if platform.system() == "Windows":
+
+            full_command = f'start cmd /K "call "{venv_activate_path}" && cd /d "{project_root}" && {celery_command_str}"'
+            logger.info(f"Tentando iniciar Celery no Windows com o comando: {full_command}")
+
+            subprocess.Popen(full_command, shell=True, cwd=project_root)
+
+            message = 'Tentativa de iniciar o worker Celery em um novo terminal. Verifique o novo terminal e os logs do Django.'
+
+        # ... (resto da lógica para Linux/macOS, se aplicável) ...
+        elif platform.system() == "Linux" or platform.system() == "Darwin":
+            logger.warning("Iniciar worker Celery automaticamente via botão em um novo terminal no Linux/macOS é complexo. Recomenda-se iniciar manualmente.")
+            message = 'Para Linux/macOS, inicie o worker manualmente em um novo terminal.'
+            return JsonResponse({'status': 'info', 'message': message})
+        else:
+            logger.warning(f"Sistema operacional {platform.system()} não suportado para iniciar worker automaticamente.")
+            message = f'Sistema operacional {platform.system()} não suportado para esta ação.'
+            return JsonResponse({'status': 'error', 'message': message}, status=400)
+
+        return JsonResponse({'status': 'success', 'message': message})
+    except Exception as e:
+        logger.error(f"Erro ao tentar iniciar worker Celery: {e}", exc_info=True)
+        return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+
+
+@login_required
+@require_POST # Garante que esta ação seja via POST
 def stop_celery_worker(request):
-    if request.method == 'POST':
-        try:
-            # Envia shutdown para todos os workers
-            i = inspect()
-            i.broadcast('shutdown')
-            return JsonResponse({'status': 'success'})
-        except Exception as e:
-            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
-    return JsonResponse({'status': 'error'}, status=405)
+    try:
+        logger.info("Recebida solicitação para parar workers Celery...")
+        # Aumentar um pouco o timeout para dar mais chance de resposta
+        inspector = app.control.inspect(timeout=2.0) 
+        
+        ping_result = inspector.ping() # Tenta pingar os workers
+
+        if ping_result: # Se ping_result não for None e não for um dict vazio
+            workers_responsive = list(ping_result.keys()) # Pega os nomes dos workers que responderam
+            if workers_responsive:
+                logger.info(f"Workers respondendo ao ping: {workers_responsive}. Enviando comando de shutdown...")
+                app.control.broadcast('shutdown', destination=workers_responsive)
+                messages.success(request, f'Comando de shutdown enviado para {len(workers_responsive)} worker(s). Verifique os terminais dos workers.')
+                return JsonResponse({'status': 'success', 'message': f'Comando de shutdown enviado para {len(workers_responsive)} worker(s).'})
+            else:
+                logger.warning("Ping aos workers teve resposta, mas não listou workers. Não foi possível enviar shutdown.")
+                messages.warning(request, "Workers Celery parecem estar online, mas não foi possível identificá-los para parada.")
+                return JsonResponse({'status': 'warning', 'message': 'Workers Celery parecem estar online, mas não foi possível identificá-los para parada.'})
+        else:
+            logger.warning("Nenhum worker Celery respondeu ao ping. O comando de shutdown não foi enviado. Verifique se os workers estão rodando e conectados ao broker.")
+            messages.warning(request, "Nenhum worker Celery ativo/responsivo encontrado para parar.")
+            return JsonResponse({'status': 'warning', 'message': 'Nenhum worker Celery ativo/responsivo encontrado para parar.'})
+    except ConnectionRefusedError:
+         logger.error("Não foi possível conectar ao broker Celery (Redis) ao tentar parar workers. Verifique se o Redis está em execução.", exc_info=True)
+         messages.error(request, 'Falha ao conectar ao broker Celery (Redis).')
+         return JsonResponse({'status': 'error', 'message': 'Falha ao conectar ao broker Celery (Redis).'}, status=500)
+    except Exception as e:
+        logger.error(f"Erro excepcional ao tentar parar workers Celery: {e}", exc_info=True)
+        messages.error(request, f'Erro ao comunicar com workers: {str(e)}')
+        return JsonResponse({'status': 'error', 'message': f'Erro ao comunicar com workers: {str(e)}'}, status=500)
 
 @login_required
 def get_celery_tasks(request):
     try:
-        i = inspect()
+        i = app.control.inspect(timeout=1) # Adicione timeout
         active = i.active() or {}
         scheduled = i.scheduled() or {}
-        
-        tasks = []
-        for worker, worker_tasks in active.items():
-            tasks.extend([{
-                'id': t['id'],
-                'name': t['name'],
-                'status': 'STARTED',
-                'received': t['time_start'],
-                'args': t['args'],
-                'worker': worker
-            } for t in worker_tasks])
-        
-        for worker, worker_tasks in scheduled.items():
-            tasks.extend([{
-                'id': t['request']['id'],
-                'name': t['request']['name'],
-                'status': 'SCHEDULED',
-                'eta': t['eta'],
-                'args': t['request']['args'],
-                'worker': worker
-            } for t in worker_tasks])
-        
+        tasks = [] #
+        for worker, worker_tasks in active.items(): #
+            tasks.extend([{ #
+                'id': t['id'], #
+                'name': t['name'], #
+                'status': 'STARTED', #
+                'received': t['time_start'], #
+                'args': t['args'], #
+                'worker': worker #
+            } for t in worker_tasks]) #
+
+        for worker, worker_tasks in scheduled.items(): #
+            tasks.extend([{ #
+                'id': t['request']['id'], #
+                'name': t['request']['name'], #
+                'status': 'SCHEDULED', #
+                'eta': t['eta'], #
+                'args': t['request']['args'], #
+                'worker': worker #
+            } for t in worker_tasks]) #
+
         return JsonResponse({'tasks': tasks})
     except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)
+        logger.error(f"Erro ao obter lista de tarefas Celery: {e}", exc_info=True) # Adicionado log
+        return JsonResponse({'error': str(e), 'tasks': []}, status=500)
 
 @login_required
 def verify_normas_batch(request):
@@ -521,24 +576,29 @@ def verify_normas_batch(request):
 
 
 
-from django.views.decorators.http import require_POST
-from django.http import JsonResponse
 
 @login_required
-def celery_status_view(request):
+def celery_status(request): # Esta é chamada pela view celery_status_view
     try:
-        i = inspect()
-        active = i.active() or {}
-        scheduled = i.scheduled() or {}
-        
+        # A linha abaixo foi a que eu sugeri na refatoração de executar_coleta_view
+        # 'app' deve ser a sua instância Celery importada de diario_oficial.celery
+        i = app.control.inspect(timeout=1) # Adicione um timeout aqui também!
+        active_tasks = i.active()
+        scheduled_tasks = i.scheduled() # Nota: i.scheduled() retorna tarefas agendadas pelo Celery, não necessariamente as da fila do broker.
+
+        is_running = bool(i.ping())
+
         return JsonResponse({
-            'is_running': bool(i.ping()),
-            'active_tasks': sum(len(tasks) for tasks in active.values()),
-            'queued_tasks': sum(len(tasks) for tasks in scheduled.values()),
-            'workers': len(active.keys())
+            'is_running': is_running,
+            # Contar corretamente as tarefas ativas e na fila
+            'active_tasks': sum(len(tasks) for tasks in active_tasks.values()) if active_tasks else 0,
+            'queued_tasks': sum(len(tasks) for tasks in scheduled_tasks.values()) if scheduled_tasks else 0, # Pode não ser a "fila" real do broker
+             # Adicionar contagem de workers
+            'workers': len(i.ping().keys()) if is_running and i.ping() else 0
         })
     except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)
+        logger.error(f"Erro ao obter status do Celery: {e}", exc_info=True) # Adicionado log
+        return JsonResponse({'error': str(e), 'is_running': False}, status=500) # Retorna um status claro de erro
 
 @require_POST
 @login_required
@@ -670,3 +730,85 @@ class RelatorioDashboardView(TemplateView):
         context['meses_data'] = data
         
         return context
+    
+
+@login_required
+@require_POST
+def iniciar_apenas_coleta_view(request):
+    try:
+        dias_retroativos = int(request.POST.get('dias_retroativos_apenas_coleta', 3))
+        
+        task = coletar_diario_oficial_task.delay(dias_retroativos=dias_retroativos)
+        messages.success(request, f"Tarefa de coleta de Diários Oficiais (últimos {dias_retroativos} dias) iniciada. ID da Tarefa: {task.id}")
+    except Exception as e:
+        logger.error(f"Erro ao iniciar tarefa de coleta isolada: {e}", exc_info=True)
+        messages.error(request, f"Erro ao iniciar tarefa de coleta: {str(e)}")
+    return redirect(request.META.get('HTTP_REFERER', 'dashboard'))
+
+@login_required
+@require_POST
+def processar_todos_pendentes_view(request):
+    try:
+        task = processar_documentos_pendentes_task.delay() 
+        messages.success(request, f"Tarefa para processar todos os documentos pendentes foi iniciada. ID: {task.id}")
+    except Exception as e:
+        logger.error(f"Erro ao iniciar processamento de todos pendentes: {e}", exc_info=True)
+        messages.error(request, f"Erro ao iniciar processamento de todos os pendentes: {str(e)}")
+    return redirect('analise_documentos')
+
+@login_required
+@require_POST # Esta view já existe e lida com POST para verificar todas as normas
+def verificar_normas_view(request): # Renomeada de verificar_todas_normas_sefaz_view para reusar a existente
+    # A lógica original do POST já dispara a tarefa para todas as normas pendentes
+    if request.method == 'POST':
+        try:
+            verificacao_task_info = verificar_normas_sefaz_task.delay() # Sem norma_ids, verifica todas as necessárias
+            logger.info(f"Tarefa de verificação de todas as normas SEFAZ (pendentes/desatualizadas) disparada com ID: {verificacao_task_info.id}")
+            messages.success(request, "Verificação de todas as normas SEFAZ (pendentes/desatualizadas) iniciada em segundo plano.")
+        except Exception as e:
+            logger.error(f"Erro ao disparar tarefa de verificação SEFAZ: {e}", exc_info=True)
+            messages.error(request, f"Erro ao iniciar tarefa de verificação SEFAZ: {str(e)}")
+        return redirect('dashboard_vigencia') 
+    
+    # A lógica GET original para mostrar informações sobre a última execução pode ser mantida
+    ultima_execucao = LogExecucao.objects.filter(tipo_execucao='VERIFICACAO_SEFAZ').order_by('-data_inicio').first()
+    normas_para_verificar_count = NormaVigente.objects.filter(
+        Q(data_verificacao__isnull=True) |
+        Q(data_verificacao__lt=timezone.now() - timedelta(days=30))
+    ).count()
+
+    context = {
+        'ultima_execucao': ultima_execucao,
+        'normas_para_verificar_count': normas_para_verificar_count,
+    }
+    return render(request, 'monitor/normas/verificar_normas.html', context) # Seu template existente
+
+
+@login_required
+def iniciar_pipeline_completo_manual_view(request): # Renomeada de iniciar_pipeline_manual_view
+    # from .forms import PipelineManualForm # Se você criar um form
+    if request.method == 'POST':
+        data_inicio_str = request.POST.get('data_inicio_pipeline')
+        data_fim_str = request.POST.get('data_fim_pipeline')
+
+        if not data_inicio_str or not data_fim_str:
+            messages.error(request, "Datas de início e fim são obrigatórias para o pipeline manual.")
+        else:
+            try:
+                data_i = datetime.strptime(data_inicio_str, '%Y-%m-%d').date()
+                data_f = datetime.strptime(data_fim_str, '%Y-%m-%d').date()
+                if data_i > data_f:
+                    messages.error(request, "Data de início não pode ser posterior à data de fim.")
+                else:
+                    task = pipeline_manual_completo.delay(data_inicio_str=data_inicio_str, data_fim_str=data_fim_str)
+                    messages.success(request, f"Pipeline manual completo (de {data_inicio_str} a {data_fim_str}) iniciado. ID da Tarefa: {task.id}")
+                    return redirect('logs_execucao')
+            except ValueError:
+                messages.error(request, "Formato de data inválido. Use AAAA-MM-DD.")
+            except Exception as e:
+                logger.error(f"Erro ao iniciar pipeline manual completo: {e}", exc_info=True)
+                messages.error(request, f"Erro ao iniciar pipeline manual: {str(e)}")
+        # Se houver erro ou for GET, renderiza o formulário novamente
+        return render(request, 'monitor/iniciar_pipeline_form.html', {'data_inicio': data_inicio_str, 'data_fim': data_fim_str})
+
+    return render(request, 'monitor/iniciar_pipeline_form.html')

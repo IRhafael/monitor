@@ -47,9 +47,14 @@ urlpatterns = [
     path('celery/tasks/', views.get_celery_tasks, name='get_celery_tasks'),
     path('normas/verify-batch/', views.verify_normas_batch, name='verify_normas_batch'),
 
-    path('celery/status/', views.celery_status_view, name='celery_status'),
     path('documentos/process-batch/', views.process_document_batch, name='process_document_batch'),
     path('documentos/<int:pk>/preview/', views.document_preview, name='document_preview'),
     path('normas/verify-batch/', views.verify_normas_batch, name='verify_normas_batch'),
     path('normas/<int:pk>/history/', views.norma_history, name='norma_history'),
+    path('coleta/iniciar-apenas-coleta/', views.iniciar_apenas_coleta_view, name='iniciar_apenas_coleta'),
+    path('documentos/processar-todos-pendentes/', views.processar_todos_pendentes_view, name='processar_todos_pendentes'),
+    path('pipeline/iniciar-completo-manual/', views.iniciar_pipeline_completo_manual_view, name='iniciar_pipeline_completo_manual'),
+
+
+
     ]

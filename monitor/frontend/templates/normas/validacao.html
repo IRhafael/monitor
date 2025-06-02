@@ -15,6 +15,12 @@
                     <button class="btn btn-sm btn-success" id="verify-all-btn">
                         <i class="bi bi-check-all"></i> Verificar Todas
                     </button>
+                    <form method="post" action="{% url 'verificar_normas' %}" class="d-inline">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-sm btn-info">
+                        <i class="bi bi-shield-fill-check"></i> Verificar Todas Normas Pendentes na SEFAZ
+                    </button>
+                    </form>                 
                 </div>
             </div>
             <div class="card-body">

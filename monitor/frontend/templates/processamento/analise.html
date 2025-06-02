@@ -108,6 +108,12 @@
                 <button class="btn btn-sm btn-outline-danger" id="markIrrelevantBtn">
                     <i class="bi bi-x-circle"></i> Marcar como Irrelevantes
                 </button>
+                        <form method="post" action="{% url 'processar_todos_pendentes' %}" class="d-inline">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm btn-warning">
+                <i class="bi bi-arrow-clockwise"></i> Processar Todos os Pendentes
+            </button>
+        </form>
             </div>
             
             {% if is_paginated %}
