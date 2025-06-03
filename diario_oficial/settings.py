@@ -1,6 +1,10 @@
 # diario_oficial/settings.py
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Carrega variáveis do .env
+load_dotenv()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -60,7 +64,9 @@ TEMPLATES = [
 WSGI_APPLICATION = 'diario_oficial.wsgi.application'
 
 
-ANTHROPIC_API_KEY = "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" 
+
+
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
