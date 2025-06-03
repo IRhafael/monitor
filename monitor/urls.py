@@ -35,7 +35,8 @@ urlpatterns = [
     path('relatorios/', views.dashboard_relatorios, name='dashboard_relatorios'), # Dashboard dos relatórios gerados
     path('relatorios/gerar/', views.gerar_relatorio_contabil_view, name='gerar_relatorio'), # Renomeada
     path('relatorios/<int:pk>/download/', views.download_relatorio, name='download_relatorio'), 
-    
+    path('relatorios/<int:pk>/excluir/', views.excluir_relatorio_view, name='excluir_relatorio'),
+
     # Logs
     path('logs/', views.logs_execucao, name='logs_execucao'),
 

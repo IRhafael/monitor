@@ -39,6 +39,13 @@ from django.views.generic import TemplateView
 from django.db.models import Count, Sum # Count já estava, Sum adicionado
 import calendar
 import platform
+from django.shortcuts import get_object_or_404, redirect
+from django.contrib.auth.decorators import login_required
+from django.views.decorators.http import require_POST # Para garantir que a exclusão seja via POST
+from django.contrib import messages
+from .models import RelatorioGerado
+import os # Para remover o arquivo
+from django.conf import settings # Para construir o caminho do arquivo
 
 
 inspector = app.control.inspect()
@@ -812,3 +819,40 @@ def iniciar_pipeline_completo_manual_view(request): # Renomeada de iniciar_pipel
         return render(request, 'monitor/iniciar_pipeline_form.html', {'data_inicio': data_inicio_str, 'data_fim': data_fim_str})
 
     return render(request, 'monitor/iniciar_pipeline_form.html')
+
+
+@login_required
+@require_POST # É uma boa prática que ações destrutivas como excluir sejam feitas via POST
+def excluir_relatorio_view(request, pk):
+    relatorio = get_object_or_404(RelatorioGerado, pk=pk)
+    nome_arquivo_log = relatorio.nome_arquivo() # Pega o nome antes de deletar o arquivo
+
+    try:
+
+        if relatorio.caminho_arquivo and hasattr(relatorio.caminho_arquivo, 'path'):
+            caminho_fisico_arquivo = relatorio.caminho_arquivo.path
+            if os.path.exists(caminho_fisico_arquivo):
+                try:
+                    os.remove(caminho_fisico_arquivo)
+                    logger.info(f"Arquivo físico '{caminho_fisico_arquivo}' removido com sucesso.")
+                except OSError as e:
+                    logger.error(f"Erro ao tentar remover o arquivo físico '{caminho_fisico_arquivo}': {e}")
+                    messages.error(request, f"Erro ao remover o arquivo físico do relatório. O registro do relatório foi excluído, mas o arquivo pode permanecer no servidor.")
+            else:
+                logger.warning(f"Arquivo físico para o relatório ID {pk} não encontrado em '{caminho_fisico_arquivo}'. Apenas o registro será excluído.")
+        else:
+            logger.warning(f"Relatório ID {pk} não possui um caminho de arquivo associado para exclusão física.")
+            
+        if relatorio.caminho_arquivo:
+            relatorio.caminho_arquivo.delete(save=False) # save=False para não salvar o modelo agora
+
+        relatorio.delete() # Deleta o registro do banco
+
+        messages.success(request, f"Relatório '{nome_arquivo_log}' excluído com sucesso.")
+        logger.info(f"Relatório ID {pk} ('{nome_arquivo_log}') excluído do banco de dados.")
+
+    except Exception as e:
+        logger.error(f"Erro ao excluir o relatório ID {pk}: {e}", exc_info=True)
+        messages.error(request, f"Ocorreu um erro ao tentar excluir o relatório: {str(e)}")
+    
+    return redirect('dashboard_relatorios') # Redireciona de volta para a lista de relatórios

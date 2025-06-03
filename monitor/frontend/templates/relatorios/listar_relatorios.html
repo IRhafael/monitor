@@ -106,7 +106,9 @@
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
-                <a id="deleteButton" href="#" class="btn btn-danger">Excluir</a>
+                <form id="deleteForm" method="post" action="#"> {% csrf_token %}
+                    <button type="submit" class="btn btn-danger">Excluir</button>
+                </form>
             </div>
         </div>
     </div>
@@ -114,8 +116,9 @@
 
 <script>
 function confirmarExclusao(pk) {
-    const deleteUrl = `/relatorios/${pk}/excluir/`;
-    document.getElementById('deleteButton').href = deleteUrl;
+    const deleteUrl = `/relatorios/${pk}/excluir/`; 
+    // Define o 'action' do formulário para a URL correta
+    document.getElementById('deleteForm').action = deleteUrl; 
     const modal = new bootstrap.Modal(document.getElementById('confirmModal'));
     modal.show();
 }
