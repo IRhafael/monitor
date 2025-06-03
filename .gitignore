@@ -13,3 +13,4 @@ __pycache__/
 /venv/lib/python3.11
 /venv/lib
 /venv
+.env
