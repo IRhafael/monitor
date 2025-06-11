@@ -560,11 +560,11 @@ def get_celery_tasks(request):
     except Exception as e:
         logger.error(f"Erro ao obter lista de tarefas Celery: {e}", exc_info=True) # Adicionado log
         return JsonResponse({'error': str(e), 'tasks': []}, status=500)
-
 @login_required
 def verify_normas_batch(request):
     if request.method == 'POST':
-        norma_ids = request.POST.getlist('ids[]')
+        # Filtra apenas IDs numéricos
+        norma_ids = [int(i) for i in request.POST.getlist('ids[]') if str(i).isdigit()]
         normas = NormaVigente.objects.filter(id__in=norma_ids)
         
         # Dispara tarefa assíncrona para verificar em lote
@@ -579,6 +579,18 @@ def verify_normas_batch(request):
         })
     
     return JsonResponse({'status': 'error'}, status=405)
+
+@require_POST
+@login_required
+def process_document_batch(request):
+    try:
+        # Filtra apenas IDs numéricos
+        document_ids = [int(i) for i in request.POST.getlist('ids[]') if str(i).isdigit()]
+        # Dispara tarefa assíncrona para processar os documentos
+        task = processar_documentos_pendentes_task.delay(document_ids=document_ids)
+        return JsonResponse({'success': True, 'task_id': task.id})
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
 
 
 
@@ -607,27 +619,7 @@ def celery_status(request): # Esta é chamada pela view celery_status_view
         logger.error(f"Erro ao obter status do Celery: {e}", exc_info=True) # Adicionado log
         return JsonResponse({'error': str(e), 'is_running': False}, status=500) # Retorna um status claro de erro
 
-@require_POST
-@login_required
-def process_document_batch(request):
-    try:
-        document_ids = request.POST.getlist('ids[]')
-        # Dispara tarefa assíncrona para processar os documentos
-        task = processar_documentos_pendentes_task.delay(document_ids=document_ids)
-        return JsonResponse({'success': True, 'task_id': task.id})
-    except Exception as e:
-        return JsonResponse({'success': False, 'error': str(e)}, status=500)
 
-@require_POST
-@login_required
-def verify_normas_batch(request):
-    try:
-        norma_ids = request.POST.getlist('ids[]')
-        # Dispara tarefa assíncrona para verificar as normas
-        task = verificar_normas_sefaz_task.delay(norma_ids=norma_ids)
-        return JsonResponse({'success': True, 'task_id': task.id})
-    except Exception as e:
-        return JsonResponse({'success': False, 'error': str(e)}, status=500)
 
 @login_required
 def document_preview(request, pk):

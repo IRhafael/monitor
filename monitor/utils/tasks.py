@@ -197,8 +197,10 @@ def verificar_normas_sefaz_task(self, norma_ids: Optional[List[int]] = None): #
     try: #
         integrador_sefaz = IntegradorSEFAZ() #
         
-        if norma_ids: #
-            normas_para_verificar_qs = NormaVigente.objects.filter(id__in=norma_ids).annotate( #
+        if norma_ids:
+            # Filtra apenas IDs numéricos válidos
+            norma_ids_filtrados = [int(i) for i in norma_ids if str(i).isdigit()]
+            normas_para_verificar_qs = NormaVigente.objects.filter(id__in=norma_ids_filtrados).annotate( #
                 numero_len=Length('numero') #
             ).exclude( #
                 Q(tipo__isnull=True) | Q(tipo='') | #
@@ -206,7 +208,7 @@ def verificar_normas_sefaz_task(self, norma_ids: Optional[List[int]] = None): #
                 Q(numero_len__lt=3)  #
             ).order_by('data_verificacao') #
             log_entry.detalhes['tipo_selecao'] = 'IDs específicos' #
-            log_entry.detalhes['ids_solicitados'] = norma_ids #
+            log_entry.detalhes['ids_solicitados'] = norma_ids_filtrados #
         else: # Verifica normas que precisam de atualização (não verificadas ou verificadas há muito tempo) #
             trinta_dias_atras = timezone.now() - timedelta(days=30) #
             normas_para_verificar_qs = NormaVigente.objects.annotate( #
