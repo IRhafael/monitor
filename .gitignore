@@ -16,3 +16,7 @@ __pycache__/
 .env
 media/relatorios/relatorio_compliance_20250603_074705.xlsx
 media/relatorios/~$relatorio_compliance_20250611_140313.xlsx
+*.bak
+*.dir
+celerybeat-schedule.dat
+*.dat
