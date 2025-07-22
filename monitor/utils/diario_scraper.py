@@ -149,18 +149,11 @@ class DiarioOficialScraper:
             import logging
             import re
             import traceback
-            
-            # Tente usar PyPDF2/PyPDF4 como backup se disponível
+
+            # Tentar importar PyPDF2 (mais comum e mantido)
             try:
-                # Tentar importar PyPDF4 primeiro (mais recente)
-                try:
-                    from PyPDF4 import PdfFileReader
-                    pdf_reader_class = PdfFileReader
-                except ImportError:
-                    # Cair para PyPDF2 se PyPDF4 não estiver disponível
-                    from PyPDF2 import PdfFileReader
-                    pdf_reader_class = PdfFileReader
-                
+                from PyPDF2 import PdfFileReader
+                pdf_reader_class = PdfFileReader
                 use_pypdf = True
             except ImportError:
                 use_pypdf = False

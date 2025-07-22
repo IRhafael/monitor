@@ -103,26 +103,38 @@ class ClaudeProcessor:
 
 
     def _extrair_paragrafos_relevantes(self, texto: str) -> str:
-        # Reduzido para economizar tokens nesta etapa inicial
-        texto_para_analise = texto[:10000] # Antes era 20000
+        # Alterado para usar Claude
+        if not self.claude_processor or not self.claude_processor.client:
+            logger.warning("ClaudeProcessor não inicializado em _extrair_paragrafos_relevantes. Usando fallback de termos.")
+            termos = TermoMonitorado.objects.filter(ativo=True)
+            termos_busca = set(termo.termo.lower() for termo in termos)
+            paragrafos_texto = [p.strip() for p in re.split(r'\n{2,}', texto) if p.strip()]
+            relevantes = [p for p in paragrafos_texto if any(termo in p.lower() for termo in termos_busca)]
+            if not relevantes:
+                relevantes = sorted(paragrafos_texto, key=len, reverse=True)[:5]
+            return "\n\n".join(relevantes)[:10000]
 
+        texto_para_analise = texto[:10000]
         system_prompt = "Você é um especialista em seleção de conteúdo jurídico-fiscal relevante para contabilidade, com foco em documentos do Piauí."
         user_prompt = (
-            "Analise o texto completo fornecido abaixo. Identifique e retorne APENAS os 3 a 5 parágrafos que você considera os MAIS RELEVANTES para um contador ou analista fiscal, " # Instrução mais flexível
+            "Analise o texto completo fornecido abaixo. Identifique e retorne APENAS os 3 a 5 parágrafos que você considera os MAIS RELEVANTES para um contador ou analista fiscal, "
             "focando em menções a: nomes de tributos (ICMS, ISS, PIS, COFINS, IRPJ, CSLL, etc.), alíquotas, bases de cálculo, obrigações acessórias (SPED, EFD, DCTF, etc.), prazos, penalidades, benefícios fiscais, "
             "ou qualquer alteração direta na legislação tributária ou contábil do Piauí. "
             "Não adicione introduções, conclusões ou qualquer texto seu. Apenas os parágrafos selecionados, separados por uma linha em branco dupla (uma quebra de linha extra entre eles).\n\n"
             f"Texto:\n{texto_para_analise}"
         )
-        # Reduzir max_tokens se esperamos menos parágrafos
-        paragrafos_selecionados = self._call_claude(system_prompt, user_prompt, temperature=0.1, max_tokens=1500) # Antes era 2000
-
+        paragrafos_selecionados = self._call_claude(system_prompt, user_prompt, temperature=0.1, max_tokens=1500)
         if paragrafos_selecionados and "Erro API Claude" not in paragrafos_selecionados and "Erro: Cliente Anthropic Claude" not in paragrafos_selecionados:
             return paragrafos_selecionados
         else:
-            logger.error(f"Erro ao extrair parágrafos relevantes com API Claude: {paragrafos_selecionados}. Usando fallback de primeiros caracteres.")
-            # Fallback mais simples para evitar muitos tokens no fallback também
-            return texto[:5000] # Antes era um fallback complexo com termos
+            logger.error(f"Erro ao extrair parágrafos relevantes com API Claude: {paragrafos_selecionados}. Usando fallback.")
+            termos = TermoMonitorado.objects.filter(ativo=True)
+            termos_busca = set(termo.termo.lower() for termo in termos)
+            paragrafos_texto = [p.strip() for p in re.split(r'\n{2,}', texto) if p.strip()]
+            relevantes = [p for p in paragrafos_texto if any(termo in p.lower() for termo in termos_busca)]
+            if not relevantes:
+                relevantes = sorted(paragrafos_texto, key=len, reverse=True)[:5]
+            return "\n\n".join(relevantes)[:10000]
 
     def gerar_resumo_contabil(self, texto_relevante: str, termos_monitorados: Optional[List[str]] = None) -> str:
         if not texto_relevante: # Alterado para receber texto já filtrado
@@ -224,8 +236,18 @@ class ClaudeProcessor:
 
 
     def _extrair_paragrafos_relevantes(self, texto: str) -> str: #
-        texto_para_analise = texto[:20000] #
+        # Alterado para usar Claude
+        if not self.claude_processor or not self.claude_processor.client:
+            logger.warning("ClaudeProcessor não inicializado em _extrair_paragrafos_relevantes. Usando fallback de termos.")
+            termos = TermoMonitorado.objects.filter(ativo=True)
+            termos_busca = set(termo.termo.lower() for termo in termos)
+            paragrafos_texto = [p.strip() for p in re.split(r'\n{2,}', texto) if p.strip()]
+            relevantes = [p for p in paragrafos_texto if any(termo in p.lower() for termo in termos_busca)]
+            if not relevantes:
+                relevantes = sorted(paragrafos_texto, key=len, reverse=True)[:5]
+            return "\n\n".join(relevantes)[:10000]
 
+        texto_para_analise = texto[:10000]
         system_prompt = "Você é um especialista em seleção de conteúdo jurídico-fiscal relevante para contabilidade, com foco em documentos do Piauí." #
         user_prompt = ( #
             "Analise o texto completo fornecido abaixo. Identifique e retorne APENAS os 5 (cinco) parágrafos que você considera os MAIS RELEVANTES para um contador ou analista fiscal, " #
@@ -452,20 +474,15 @@ class PDFProcessor:
         # Alterado para usar Claude
         if not self.claude_processor or not self.claude_processor.client:
             logger.warning("ClaudeProcessor não inicializado em _extrair_paragrafos_relevantes. Usando fallback de termos.")
-            # Fallback (seu código original para fallback)
-            termos = TermoMonitorado.objects.filter(ativo=True) #
-            termos_busca = set(termo.termo.lower() for termo in termos) #
-            paragrafos_texto = [p.strip() for p in re.split(r'\n{2,}', texto) if p.strip()] #
-            relevantes = [] #
-            for p in paragrafos_texto: #
-                p_lower = p.lower() #
-                if any(termo in p_lower for termo in termos_busca): #
-                    relevantes.append(p) #
-            if not relevantes: #
-                relevantes = sorted(paragrafos_texto, key=len, reverse=True)[:5] #
-            return "\n\n".join(relevantes)[:10000] #
+            termos = TermoMonitorado.objects.filter(ativo=True)
+            termos_busca = set(termo.termo.lower() for termo in termos)
+            paragrafos_texto = [p.strip() for p in re.split(r'\n{2,}', texto) if p.strip()]
+            relevantes = [p for p in paragrafos_texto if any(termo in p.lower() for termo in termos_busca)]
+            if not relevantes:
+                relevantes = sorted(paragrafos_texto, key=len, reverse=True)[:5]
+            return "\n\n".join(relevantes)[:10000]
 
-        texto_para_analise = texto[:20000] #
+        texto_para_analise = texto[:10000]
         system_prompt = "Você é um especialista em seleção de conteúdo jurídico-fiscal relevante para contabilidade, com foco em documentos do Piauí." #
         user_prompt = ( #
             "Analise o texto completo fornecido abaixo. Identifique e retorne APENAS os 5 (cinco) parágrafos que você considera os MAIS RELEVANTES para um contador ou analista fiscal, " #
@@ -474,13 +491,12 @@ class PDFProcessor:
             "Não adicione introduções, conclusões ou qualquer texto seu. Apenas os parágrafos selecionados, separados por uma linha em branco dupla (uma quebra de linha extra entre eles).\n\n" #
             f"Texto:\n{texto_para_analise}" #
         ) #
-        paragrafos_selecionados = self.claude_processor._call_claude(system_prompt, user_prompt, temperature=0.1, max_tokens=2000) #
+        paragrafos_selecionados = self._call_claude(system_prompt, user_prompt, temperature=0.1, max_tokens=2000) #
 
         if paragrafos_selecionados and "Erro API Claude" not in paragrafos_selecionados and "Erro: Cliente Anthropic Claude" not in paragrafos_selecionados: #
             return paragrafos_selecionados #
         else: #
             logger.error(f"Erro ao extrair parágrafos relevantes com API Claude: {paragrafos_selecionados}. Usando fallback.") #
-            # Fallback (seu código original para fallback) #
             termos = TermoMonitorado.objects.filter(ativo=True) #
             termos_busca = set(termo.termo.lower() for termo in termos) #
             paragrafos_texto = [p.strip() for p in re.split(r'\n{2,}', texto) if p.strip()] #

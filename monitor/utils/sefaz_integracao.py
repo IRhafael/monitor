@@ -1,5 +1,3 @@
-import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Silencia completamente o TensorFlow
 import re
 import logging
 from datetime import timedelta
@@ -20,9 +18,16 @@ logger = logging.getLogger(__name__)
 
 class IntegradorSEFAZ:
     def __init__(self):
-        self.scraper = SEFAZScraper()
+        self._scraper = None
         self.max_tentativas = 2
         self.timeout = 40
+
+    @property
+    def scraper(self):
+        # Lazy load do scraper
+        if self._scraper is None:
+            self._scraper = SEFAZScraper()
+        return self._scraper
 
     def buscar_norma_especifica(self, tipo, numero):
         try:
@@ -33,12 +38,13 @@ class IntegradorSEFAZ:
             cached_result = cache.get(cache_key)
             if cached_result:
                 return cached_result
-            vigente = self.scraper.check_norm_status(tipo, numero)
+            vigente_info = self.scraper.check_norm_status(tipo, numero)
             resultado = {
                 'tipo': tipo,
                 'numero': numero,
-                'vigente': vigente if vigente is not None else False,
-                'data_consulta': timezone.now()
+                'vigente': vigente_info.get('vigente', False) if isinstance(vigente_info, dict) else bool(vigente_info),
+                'data_consulta': timezone.now(),
+                'detalhes': vigente_info if isinstance(vigente_info, dict) else {}
             }
             cache.set(cache_key, resultado, 86400)
             return resultado
@@ -179,7 +185,7 @@ class IntegradorSEFAZ:
         numero = re.sub(r'[^\d/]', '', str(numero))
         return numero.strip()
 
-    def verificar_normas_em_lote(self, normas, batch_size=3):
+    def verificar_normas_em_lote(self, normas, batch_size=2):  # batch_size menor para evitar lentidão
         resultados = []
         with transaction.atomic():
             for norma in normas:
@@ -199,23 +205,26 @@ class IntegradorSEFAZ:
                 except Exception as e:
                     logger.error(f"Erro ao classificar norma {norma}: {str(e)}")
                     continue
-        with self.scraper.browser_session():
-            normas_para_verificar = [n for n in normas if n.situacao == "EM_VERIFICACAO"]
-            for norma in normas_para_verificar:
-                try:
-                    resultado = self.scraper.check_norm_status(norma.tipo, norma.numero)
-                    nova_situacao = "VIGENTE" if resultado.get('status') == "VIGENTE" else "NAO_VIGENTE"
-                    with transaction.atomic():
-                        NormaVigente.objects.filter(pk=norma.pk).update(
-                            situacao=nova_situacao,
-                            data_verificacao=timezone.now()
-                        )
-                        norma.situacao = nova_situacao
-                        norma.data_verificacao = timezone.now()
-                    resultados.append(norma)
-                except Exception as e:
-                    logger.error(f"Erro ao verificar norma {norma}: {str(e)}")
-                    continue
+        # Processa em lotes menores para não travar o browser
+        normas_para_verificar = [n for n in normas if n.situacao == "EM_VERIFICACAO"]
+        for i in range(0, len(normas_para_verificar), batch_size):
+            batch = normas_para_verificar[i:i+batch_size]
+            with self.scraper.browser_session():
+                for norma in batch:
+                    try:
+                        resultado = self.scraper.check_norm_status(norma.tipo, norma.numero)
+                        nova_situacao = "VIGENTE" if resultado.get('status') == "VIGENTE" else "NAO_VIGENTE"
+                        with transaction.atomic():
+                            NormaVigente.objects.filter(pk=norma.pk).update(
+                                situacao=nova_situacao,
+                                data_verificacao=timezone.now()
+                            )
+                            norma.situacao = nova_situacao
+                            norma.data_verificacao = timezone.now()
+                        resultados.append(norma)
+                    except Exception as e:
+                        logger.error(f"Erro ao verificar norma {norma}: {str(e)}")
+                        continue
         resultados.extend([n for n in normas if n.situacao == "DADOS_INVALIDOS"])
         return resultados
 

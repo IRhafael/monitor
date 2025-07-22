@@ -70,33 +70,34 @@ class SEFAZScraper:
 
     @contextmanager
     def browser_session(self):
-        self.driver = None
         tentativas = 0
         max_tentativas = 3
-        
-        while tentativas < max_tentativas:
-            try:
-                service = Service(ChromeDriverManager().install())
-                self.driver = webdriver.Chrome(
-                    service=service,
-                    options=self.chrome_options
-                )
-                self.driver.set_page_load_timeout(self.timeout)
-                yield self.driver
-                break
-            except Exception as e:
-                tentativas += 1
-                self.logger.error(f"Erro na sessão do navegador (tentativa {tentativas}/{max_tentativas}): {str(e)}")
-                if tentativas >= max_tentativas:
-                    raise
-                time.sleep(5)  # Espera antes de tentar novamente
-            finally:
-                if self.driver:
-                    try:
-                        self.driver.quit()
-                    except Exception as e:
-                        self.logger.warning(f"Erro ao fechar navegador: {str(e)}")
-                    self.driver = None
+        driver = None
+        try:
+            while tentativas < max_tentativas:
+                try:
+                    service = Service(ChromeDriverManager().install())
+                    driver = webdriver.Chrome(
+                        service=service,
+                        options=self.chrome_options
+                    )
+                    driver.set_page_load_timeout(self.timeout)
+                    self.driver = driver
+                    yield driver
+                    break
+                except Exception as e:
+                    tentativas += 1
+                    self.logger.error(f"Erro na sessão do navegador (tentativa {tentativas}/{max_tentativas}): {str(e)}")
+                    if tentativas >= max_tentativas:
+                        raise
+                    time.sleep(5)
+        finally:
+            if driver:
+                try:
+                    driver.quit()
+                except Exception as e:
+                    self.logger.warning(f"Erro ao fechar navegador: {str(e)}")
+            self.driver = None
 
     def _wait_for_element(self, by, value, timeout=30):
         """Espera por um elemento específico"""

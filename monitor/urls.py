@@ -8,7 +8,6 @@ urlpatterns = [
 
     # Documentos
     # Adaptei 'documentos_list' para 'analise_documentos' que lista os não processados
-    # Se você precisar de uma lista de TODOS os documentos, precisará criar uma nova view em views.py
     path('documentos/analise/', views.analise_documentos, name='analise_documentos'),
     path('documentos/resultados/', views.resultados_analise, name='resultados_analise'), # Documentos já processados
     path('documentos/upload/', views.upload_documento, name='upload_documento'), # Renomeada
