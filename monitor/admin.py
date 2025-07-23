@@ -135,8 +135,12 @@ class DocumentoAdmin(admin.ModelAdmin):
     processar_documentos.short_description = "Processar documentos selecionados"
 
     def marcar_como_relevante(self, request, queryset):
-        updated = queryset.update(relevante_contabil=True)
-        self.message_user(request, f"{updated} documentos marcados como relevantes.")
+        count = 0
+        for doc in queryset:
+            doc.relevante_contabil = True
+            doc.save(update_fields=['relevante_contabil'])
+            count += 1
+        self.message_user(request, f"{count} documentos marcados como relevantes.")
     marcar_como_relevante.short_description = "Marcar como relevantes"
 
 admin.site.register(Documento, DocumentoAdmin)

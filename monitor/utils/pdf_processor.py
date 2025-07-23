@@ -383,23 +383,20 @@ class PDFProcessor:
             r'([\d]+(?:[\.,\/\-]\d+)*[\w]*)', # Número: dígitos, pontos, barras, hífens, opcionalmente terminando com letra
             re.IGNORECASE
         )
-        
         for match in padrao_norma.finditer(texto):
-            tipo_bruto = match.group(1).strip() 
-            numero_bruto = match.group(2).strip() 
-
-
+            tipo_bruto = match.group(1).strip()
+            numero_bruto = match.group(2).strip()
             tipo_normalizado = self.norma_type_choices_map.get(tipo_bruto.lower(), 'OUTROS')
-            
             numero_padronizado = self._padronizar_numero_norma(numero_bruto)
-
-            # Adiciona uma verificação extra para garantir que o tipo normalizado é válido
+            ano_norma = self._extrair_ano_norma(numero_padronizado)
             valid_tipos = [choice[0] for choice in NormaVigente.TIPO_CHOICES]
             if tipo_normalizado not in valid_tipos:
                 logger.warning(f"Tipo de norma '{tipo_bruto}' normalizado para '{tipo_normalizado}' não é um TIPO_CHOICES válido. Marcando como OUTROS ou ignorando. Número: {numero_padronizado}")
-
-            if numero_padronizado: 
-                normas_encontradas_set.add((tipo_normalizado, numero_padronizado))
+            if numero_padronizado:
+                if ano_norma:
+                    normas_encontradas_set.add((tipo_normalizado, f"{numero_padronizado}/{ano_norma}"))
+                else:
+                    normas_encontradas_set.add((tipo_normalizado, numero_padronizado))
             else:
                 logger.warning(f"Número de norma '{numero_bruto}' resultou em vazio após padronização para tipo '{tipo_normalizado}'.")
 
@@ -426,49 +423,44 @@ class PDFProcessor:
         return 0 #
 
 
-    def is_relevante_contabil(self, texto: str) -> bool: #
-        if not self.claude_processor or not self.claude_processor.client: #
-            logger.warning("ClaudeProcessor não inicializado em is_relevante_contabil. Defaulting to manual term check.") #
-            texto_lower = texto.lower() #
-            termos_monit = TermoMonitorado.objects.filter(ativo=True, tipo='TEXTO') #
-            for termo_obj in termos_monit: #
-                if termo_obj.termo.lower() in texto_lower: return True #
-                if termo_obj.variacoes: #
-                    for var in termo_obj.variacoes.split(','): #
-                        if var.strip().lower() in texto_lower: return True #
-            return False #
 
-        texto_lower = texto.lower() #
-        termos = TermoMonitorado.objects.filter(ativo=True) #
-        
-        for termo in termos: #
-            if termo.termo.lower() in texto_lower: #
-                logger.debug(f"Documento relevante encontrado pelo termo direto: {termo.termo}") #
-                return True #
-            if termo.variacoes: #
-                for variacao in [v.strip() for v in termo.variacoes.split(",")]: #
-                    if variacao and variacao.lower() in texto_lower: #
-                        logger.debug(f"Documento relevante encontrado pela variação '{variacao}' do termo '{termo.termo}'") #
-                        return True #
-        
-        logger.debug("Nenhum termo manual de relevância encontrado. Consultando IA (Claude)...") #
-        system_prompt_relevancia = "Você é um classificador especialista em identificar a relevância de documentos para as áreas contábil e fiscal." #
-        user_prompt_relevancia = ( #
-            "Analise se o texto a seguir é relevante para as áreas de contabilidade ou fiscal de empresas no Brasil, especialmente no estado do Piauí. " #
-            "Considere termos técnicos contábeis/fiscais, menções a leis tributárias, decretos, portarias, alterações de alíquotas, " #
-            "novas obrigações acessórias, ou qualquer informação que impacte diretamente a rotina de um contador. " #
-            "Responda APENAS com 'SIM' ou 'NÃO'.\n\n" #
-            f"Texto (primeiros 8000 caracteres para análise rápida):\n {texto[:8000]}" #
-        ) #
-            
-        resposta = self.claude_processor._call_claude(system_prompt_relevancia, user_prompt_relevancia, model="claude-3-haiku-20240307", temperature=0.1, max_tokens=5) #
-        
-        if resposta and "SIM" in resposta.upper(): #
-            logger.debug(f"IA (Claude) classificou como relevante. Resposta: {resposta}") #
-            return True #
-        
-        logger.debug(f"IA (Claude) classificou como NÃO relevante ou houve erro. Resposta: {resposta}") #
-        return False #
+    def is_relevante_contabil(self, texto: str, termos_monitorados: Optional[List[str]] = None) -> bool:
+        """
+        Verifica se o texto é relevante usando explicitamente os termos monitorados como parâmetro.
+        Se não fornecido, busca os termos monitorados ativos do banco.
+        """
+        texto_lower = texto.lower()
+        if termos_monitorados is None:
+            termos_objs = TermoMonitorado.objects.filter(ativo=True, tipo='TEXTO')
+            termos_monitorados = [termo.termo for termo in termos_objs]
+            variacoes = []
+            for termo in termos_objs:
+                if termo.variacoes:
+                    variacoes.extend([v.strip() for v in termo.variacoes.split(",") if v.strip()])
+            termos_monitorados.extend(variacoes)
+
+        for termo in termos_monitorados:
+            if termo.lower() in texto_lower:
+                logger.debug(f"Documento relevante encontrado pelo termo monitorado: {termo}")
+                return True
+
+        # Se não encontrou por termo, pode usar IA como fallback
+        if self.claude_processor and self.claude_processor.client:
+            logger.debug("Nenhum termo monitorado encontrado. Consultando IA (Claude)...")
+            system_prompt_relevancia = "Você é um classificador especialista em identificar a relevância de documentos para as áreas contábil e fiscal."
+            termos_str = ', '.join(termos_monitorados)
+            user_prompt_relevancia = (
+                f"Analise se o texto a seguir é relevante para as áreas de contabilidade ou fiscal de empresas no Brasil, especialmente no estado do Piauí. "
+                f"Considere os seguintes termos monitorados: {termos_str}. "
+                "Responda APENAS com 'SIM' ou 'NÃO'.\n\n"
+                f"Texto (primeiros 8000 caracteres para análise rápida):\n {texto[:8000]}"
+            )
+            resposta = self.claude_processor._call_claude(system_prompt_relevancia, user_prompt_relevancia, model="claude-3-haiku-20240307", temperature=0.1, max_tokens=5)
+            if resposta and "SIM" in resposta.upper():
+                logger.debug(f"IA (Claude) classificou como relevante. Resposta: {resposta}")
+                return True
+            logger.debug(f"IA (Claude) classificou como NÃO relevante ou houve erro. Resposta: {resposta}")
+        return False
 
     def _extrair_paragrafos_relevantes(self, texto: str) -> str: #
         # Alterado para usar Claude
