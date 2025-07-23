@@ -1,6 +1,19 @@
 {% extends 'base.html' %}
 {% block content %}
 <div class="container">
+    <!-- Mensagens de feedback -->
+    {% if messages %}
+    <div class="row">
+        <div class="col-12">
+            {% for message in messages %}
+                <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                    {{ message }}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Fechar"></button>
+                </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
     <div class="row">
         <div class="col-md-6">
             <div class="card mb-4">
@@ -16,10 +29,10 @@
                         <div class="mb-3">
                             <label class="form-label">Período</label>
                             <select class="form-select" name="days_back">
-                                <option value="1">Últimas 24 horas</option>
-                                <option value="3" selected>Últimos 3 dias</option>
-                                <option value="7">Últimos 7 dias</option>
-                                <option value="15">Últimos 15 dias</option>
+                                <option value="1" {% if request.POST.days_back == '1' %}selected{% endif %}>Últimas 24 horas</option>
+                                <option value="3" {% if request.POST.days_back == '3' or not request.POST.days_back %}selected{% endif %}>Últimos 3 dias</option>
+                                <option value="7" {% if request.POST.days_back == '7' %}selected{% endif %}>Últimos 7 dias</option>
+                                <option value="15" {% if request.POST.days_back == '15' %}selected{% endif %}>Últimos 15 dias</option>
                             </select>
                         </div>
                         <button type="submit" class="btn btn-primary">
@@ -107,7 +120,7 @@
                             </td>
                             <td>{{ task.received|date:"H:i:s" }}</td>
                             <td>
-                                {% if task.status == 'PROGRESS' %}
+                                {% if task.result.progress %}
                                 <div class="progress" style="height: 20px;">
                                     <div class="progress-bar" role="progressbar" 
                                          style="width: {{ task.result.progress }}%;" 
@@ -132,9 +145,9 @@
                     <div class="input-group input-group-sm mb-2">
                         <label class="input-group-text" for="dias_retro_coleta_id">Coletar PDFs dos últimos:</label>
                         <select name="dias_retroativos_apenas_coleta" id="dias_retro_coleta_id" class="form-select">
-                            <option value="1">1 dia</option>
-                            <option value="3" selected>3 dias</option>
-                            <option value="7">7 dias</option>
+                                    <option value="1" {% if request.POST.dias_retroativos_apenas_coleta == '1' %}selected{% endif %}>1 dia</option>
+                                    <option value="3" {% if request.POST.dias_retroativos_apenas_coleta == '3' or not request.POST.dias_retroativos_apenas_coleta %}selected{% endif %}>3 dias</option>
+                                    <option value="7" {% if request.POST.dias_retroativos_apenas_coleta == '7' %}selected{% endif %}>7 dias</option>
                         </select>
                         <button type="submit" class="btn btn-outline-primary">
                             <i class="bi bi-cloud-download"></i> Iniciar Só Coleta
