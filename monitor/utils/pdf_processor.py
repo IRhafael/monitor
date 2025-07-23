@@ -104,7 +104,7 @@ class ClaudeProcessor:
 
     def _extrair_paragrafos_relevantes(self, texto: str) -> str:
         # Alterado para usar Claude
-        if not self.claude_processor or not self.claude_processor.client:
+        if not self.client:
             logger.warning("ClaudeProcessor não inicializado em _extrair_paragrafos_relevantes. Usando fallback de termos.")
             termos = TermoMonitorado.objects.filter(ativo=True)
             termos_busca = set(termo.termo.lower() for termo in termos)
