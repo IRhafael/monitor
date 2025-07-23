@@ -13,34 +13,53 @@
     <!-- Cards Estatísticas -->
     <div class="row mb-4">
         <div class="col-md-3">
-            <div class="card bg-primary text-white">
-                <div class="card-body">
-                    <h5 class="card-title">Total</h5>
-                    <p class="card-text display-6">{{ total_relatorios }}</p>
+
+{% extends "base.html" %}
+{% block title %}Dashboard de Relatórios{% endblock %}
+{% block extra_css %}
+<link href="https://cdn.jsdelivr.net/npm/chart.js@3.7.0/dist/chart.min.css" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2><i class="bi bi-bar-chart-line me-2"></i>Dashboard de Relatórios</h2>
+    </div>
+    <!-- Cards Estatísticas -->
+    <div class="row mb-4">
+        <div class="col-md-3">
+            <div class="card shadow-sm border-0 bg-primary text-white">
+                <div class="card-body text-center">
+                    <h5 class="card-title"><i class="bi bi-collection me-2"></i>Total</h5>
+                    <h2 class="fw-bold">{{ total_relatorios }}</h2>
+                    <p class="mb-0">Relatórios gerados</p>
                 </div>
             </div>
         </div>
         <div class="col-md-3">
-            <div class="card bg-success text-white">
-                <div class="card-body">
-                    <h5 class="card-title">Este Mês</h5>
-                    <p class="card-text display-6">{{ relatorios_mes }}</p>
+            <div class="card shadow-sm border-0 bg-success text-white">
+                <div class="card-body text-center">
+                    <h5 class="card-title"><i class="bi bi-journal-check me-2"></i>Contábeis</h5>
+                    <h2 class="fw-bold">{{ total_contabil }}</h2>
+                    <p class="mb-0">Relatórios contábeis</p>
                 </div>
             </div>
         </div>
         <div class="col-md-3">
-            <div class="card bg-info text-white">
-                <div class="card-body">
-                    <h5 class="card-title">Contábeis</h5>
-                    <p class="card-text display-6">{{ total_contabil }}</p>
+            <div class="card shadow-sm border-0 bg-info text-white">
+                <div class="card-body text-center">
+                    <h5 class="card-title"><i class="bi bi-download me-2"></i>Downloads</h5>
+                    <h2 class="fw-bold">{{ total_downloads }}</h2>
+                    <p class="mb-0">Downloads totais</p>
                 </div>
             </div>
         </div>
         <div class="col-md-3">
-            <div class="card bg-warning text-dark">
-                <div class="card-body">
-                    <h5 class="card-title">Downloads</h5>
-                    <p class="card-text display-6">{{ total_downloads }}</p>
+            <div class="card shadow-sm border-0 bg-warning text-dark">
+                <div class="card-body text-center">
+                    <h5 class="card-title"><i class="bi bi-calendar-event me-2"></i>Este Mês</h5>
+                    <h2 class="fw-bold">{{ relatorios_mes }}</h2>
+                    <p class="mb-0">Relatórios do mês</p>
                 </div>
             </div>
         </div>
@@ -48,23 +67,23 @@
 
     <!-- Gráficos -->
     <div class="row">
-        <div class="col-md-6">
-            <div class="card">
-                <div class="card-header">
-                    <h5>Relatórios por Tipo</h5>
+        <div class="col-md-6 mb-4">
+            <div class="card shadow-sm border-0">
+                <div class="card-header bg-gradient bg-primary text-white">
+                    <h5 class="mb-0"><i class="bi bi-pie-chart me-2"></i>Por Tipo</h5>
                 </div>
                 <div class="card-body">
-                    <canvas id="tipoChart" height="300"></canvas>
+                    <canvas id="tipoChart" height="220"></canvas>
                 </div>
             </div>
         </div>
-        <div class="col-md-6">
-            <div class="card">
-                <div class="card-header">
-                    <h5>Atividade Mensal</h5>
+        <div class="col-md-6 mb-4">
+            <div class="card shadow-sm border-0">
+                <div class="card-header bg-gradient bg-info text-white">
+                    <h5 class="mb-0"><i class="bi bi-bar-chart me-2"></i>Mensal</h5>
                 </div>
                 <div class="card-body">
-                    <canvas id="monthlyChart" height="300"></canvas>
+                    <canvas id="monthlyChart" height="220"></canvas>
                 </div>
             </div>
         </div>
@@ -84,7 +103,7 @@ new Chart(tipoCtx, {
         datasets: [{
             data: {{ tipos_data|safe }},
             backgroundColor: [
-                '#4e73df', '#1cc88a', '#36b9cc', '#f6c23e'
+                '#4e73df', '#1cc88a', '#36b9cc', '#f6c23e', '#e83e8c', '#fd7e14', '#20c997', '#6610f2'
             ]
         }]
     }

@@ -46,94 +46,93 @@
                         <th>Última Verificação</th>
                         <th>Documentos</th>
                         <th>Ações</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for norma in normas %}
-                    <tr>
-                        <td><input type="checkbox" class="norm-checkbox" data-id="{{ norma.id }}"></td>
-                        <td>{{ norma.tipo }}</td>
-                        <td>{{ norma.numero }}</td>
-                        <td>
-                            <span class="badge {{ norma.get_status_badge_class }}">
-                                {{ norma.situacao|default:"NÃO VERIFICADA" }}
-                            </span>
-                        </td>
-                        <td>
-                            {% if norma.data_verificacao %}
-                                <span title="{{ norma.data_verificacao|date:'d/m/Y H:i' }}">
-                                    {{ norma.data_verificacao|timesince }}
-                                </span>
-                            {% else %}
-                                <span class="text-muted">Nunca</span>
-                            {% endif %}
-                        </td>
-                        <td>
-                            <span class="badge bg-primary">{{ norma.documentos.count }}</span>
-                        </td>
-                        <td>
-                            <div class="btn-group btn-group-sm">
-                                <a href="{% url 'detalhe_norma' norma.pk %}" 
-                                   class="btn btn-outline-primary" 
-                                   title="Detalhes">
-                                    <i class="bi bi-eye"></i>
-                                </a>
-                                <button class="btn btn-outline-success verify-btn" 
-                                        data-id="{{ norma.id }}"
-                                        title="Verificar agora">
-                                    <i class="bi bi-arrow-repeat"></i>
-                                </button>
-                                <button class="btn btn-outline-info history-btn" 
-                                        data-id="{{ norma.id }}"
-                                        title="Histórico">
-                                    <i class="bi bi-clock-history"></i>
-                                </button>
-                            </div>
-                        </td>
-                    </tr>
-                    {% empty %}
-                    <tr>
-                        <td colspan="7" class="text-center">Nenhuma norma encontrada</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+
+{% extends "base.html" %}
+{% block page_title %}Gestão de Normas{% endblock %}
+
+{% block actions %}
+<div class="btn-group me-2">
+    <button class="btn btn-sm btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown">
+        <i class="bi bi-funnel"></i> Filtrar
+    </button>
+    <ul class="dropdown-menu">
+        <li><a class="dropdown-item" href="?status=todas">Todas</a></li>
+        <li><hr class="dropdown-divider"></li>
+        <li><a class="dropdown-item" href="?status=vigentes">Vigentes</a></li>
+        <li><a class="dropdown-item" href="?status=revogadas">Revogadas</a></li>
+        <li><a class="dropdown-item" href="?status=nao_verificadas">Não verificadas</a></li>
+    </ul>
+</div>
+<div class="btn-group me-2">
+    <button class="btn btn-sm btn-success" id="verifySelectedBtn">
+        <i class="bi bi-check-circle"></i> Verificar Selecionadas
+    </button>
+</div>
+<a href="{% url 'normas_revogadas' %}" class="btn btn-sm btn-outline-danger me-2">
+    <i class="bi bi-exclamation-triangle"></i> Revogadas
+</a>
+{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="card shadow-sm border-0">
+        <div class="card-header bg-gradient bg-info text-white d-flex justify-content-between align-items-center">
+            <h4 class="mb-0"><i class="bi bi-journal-bookmark me-2"></i>Lista de Normas</h4>
+            <span class="badge bg-primary">{{ normas.count }} normas</span>
         </div>
-    </div>
-    
-    <div class="card-footer">
-        <div class="d-flex justify-content-between">
-            <div>
-                <button class="btn btn-sm btn-outline-danger" id="revokeSelectedBtn">
-                    <i class="bi bi-x-circle"></i> Marcar como Revogadas
-                </button>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-hover align-middle table-bordered table-striped">
+                    <thead class="table-light">
+                        <tr>
+                            <th><input type="checkbox" id="selectAll"></th>
+                            <th>Tipo</th>
+                            <th>Número</th>
+                            <th>Situação</th>
+                            <th>Última Verificação</th>
+                            <th>Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for norma in normas %}
+                        <tr>
+                            <td><input type="checkbox" class="norm-checkbox" data-id="{{ norma.id }}"></td>
+                            <td>{{ norma.get_tipo_display }}</td>
+                            <td class="fw-bold">{{ norma.numero }}{% if norma.ano %}/{{ norma.ano }}{% endif %}</td>
+                            <td>
+                                <span class="badge rounded-pill bg-{% if norma.situacao == 'VIGENTE' %}success{% elif norma.situacao == 'REVOGADA' %}danger{% else %}secondary{% endif %} px-3 py-2">
+                                    {{ norma.get_situacao_display|default:"Não Verificada" }}
+                                </span>
+                            </td>
+                            <td>
+                                {% if norma.data_verificacao %}
+                                    <span class="text-primary">{{ norma.data_verificacao|date:"d/m/Y H:i" }}</span>
+                                {% else %}
+                                    <span class="text-muted">Nunca</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <a href="{% url 'norma_historico' norma.id %}" class="btn btn-sm btn-outline-info history-btn" data-id="{{ norma.id }}">
+                                    <i class="bi bi-clock-history"></i> Histórico
+                                </a>
+                                <button class="btn btn-sm btn-outline-success verify-btn" data-id="{{ norma.id }}">
+                                    <i class="bi bi-search"></i> Verificar
+                                </button>
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="6" class="text-center text-muted">Nenhuma norma encontrada.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
             </div>
-            
-            {% if is_paginated %}
-            <nav aria-label="Page navigation">
-                <ul class="pagination pagination-sm mb-0">
-                    {% if page_obj.has_previous %}
-                    <li class="page-item">
-                        <a class="page-link" href="?page={{ page_obj.previous_page_number }}">Anterior</a>
-                    </li>
-                    {% endif %}
-                    
-                    {% for num in page_obj.paginator.page_range %}
-                    {% if page_obj.number == num %}
-                    <li class="page-item active"><a class="page-link" href="#">{{ num }}</a></li>
-                    {% else %}
-                    <li class="page-item"><a class="page-link" href="?page={{ num }}">{{ num }}</a></li>
-                    {% endif %}
-                    {% endfor %}
-                    
-                    {% if page_obj.has_next %}
-                    <li class="page-item">
-                        <a class="page-link" href="?page={{ page_obj.next_page_number }}">Próxima</a>
-                    </li>
-                    {% endif %}
-                </ul>
-            </nav>
-            {% endif %}
+        </div>
+        <div class="card-footer">
+            <div class="d-flex justify-content-between">
+                <!-- Paginação se necessário -->
+            </div>
         </div>
     </div>
 </div>
@@ -141,6 +140,79 @@
 <!-- Modal para histórico -->
 <div class="modal fade" id="historyModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <!-- Conteúdo do histórico será carregado via AJAX -->
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+$(document).ready(function() {
+    // Seleção/deseleção de todas as normas
+    $('#selectAll').change(function() {
+        $('.norm-checkbox').prop('checked', this.checked);
+    });
+
+    // Verificação individual
+    $('.verify-btn').click(function() {
+        const btn = $(this);
+        const normId = btn.data('id');
+        btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm"></span>');
+        $.ajax({
+            url: `/normas/${normId}/verificar/`,
+            method: 'POST',
+            headers: {'X-CSRFToken': '{{ csrf_token }}'},
+            success: function(response) {
+                location.reload();
+            },
+            error: function() {
+                alert('Erro ao verificar norma.');
+                btn.prop('disabled', false).html('<i class="bi bi-search"></i> Verificar');
+            }
+        });
+    });
+
+    // Verificação em lote
+    $('#verifySelectedBtn').click(function() {
+        const selectedIds = $('.norm-checkbox:checked').map(function() {
+            return $(this).data('id');
+        }).get();
+        if(selectedIds.length === 0) {
+            alert('Selecione pelo menos uma norma para verificar.');
+            return;
+        }
+        if(confirm(`Deseja verificar ${selectedIds.length} norma(s) selecionada(s)?`)) {
+            $.ajax({
+                url: '/normas/verify-batch/',
+                method: 'POST',
+                data: {ids: selectedIds},
+                traditional: true,
+                headers: {'X-CSRFToken': '{{ csrf_token }}'},
+                success: function(response) {
+                    location.reload();
+                },
+                error: function() {
+                    alert('Erro ao verificar normas em lote.');
+                }
+            });
+        }
+    });
+
+    // Carregar histórico
+    $('.history-btn').click(function(e) {
+        e.preventDefault();
+        const normId = $(this).data('id');
+        $('#historyModal .modal-content').html('<div class="text-center p-5"><span class="spinner-border"></span> Carregando...</div>');
+        $('#historyModal').modal('show');
+        $.get(`/normas/${normId}/historico/`, function(data) {
+            $('#historyModal .modal-content').html(data);
+        });
+    });
+});
+</script>
+{% endblock %}
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">Histórico de Verificações</h5>

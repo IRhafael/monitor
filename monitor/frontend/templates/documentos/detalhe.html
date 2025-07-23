@@ -1,23 +1,39 @@
+
 {% extends "base.html" %}
 {% block title %}Detalhes do Documento{% endblock %}
 {% block page_title %}Detalhes do Documento{% endblock %}
 
 {% block content %}
-<div class="card">
-    <div class="card-header">
-        <h5>{{ documento.titulo }}</h5>
-    </div>
-    <div class="card-body">
-        <p><strong>Data de Publicação:</strong> {{ documento.data_publicacao|date:"d/m/Y" }}</p>
-        <p><strong>Status:</strong>
-            {% if documento.processado %}
-                <span class="badge bg-success">Processado</span>
-            {% else %}
-                <span class="badge bg-warning text-dark">Pendente</span>
+<div class="container mt-4">
+    <div class="card shadow-sm border-0">
+        <div class="card-header bg-gradient bg-primary text-white d-flex justify-content-between align-items-center">
+            <h5 class="mb-0"><i class="bi bi-file-earmark-text me-2"></i>{{ documento.titulo }}</h5>
+            <span class="badge rounded-pill bg-{% if documento.processado %}success{% else %}warning text-dark{% endif %} px-3 py-2">
+                {% if documento.processado %}<i class="bi bi-check-circle me-1"></i>Processado{% else %}<i class="bi bi-hourglass-split me-1"></i>Pendente{% endif %}
+            </span>
+        </div>
+        <div class="card-body">
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    <p><strong>Data de Publicação:</strong> <span class="text-primary fw-bold">{{ documento.data_publicacao|date:"d/m/Y" }}</span></p>
+                </div>
+                <div class="col-md-6 text-end">
+                    <a href="{% url 'analise_documentos' %}" class="btn btn-outline-secondary">
+                        <i class="bi bi-arrow-left"></i> Voltar
+                    </a>
+                </div>
+            </div>
+            <hr>
+            <h6 class="mb-2">Resumo</h6>
+            <div class="bg-light p-3 rounded border mb-3">
+                {{ documento.resumo|default:"(sem resumo disponível)" }}
+            </div>
+            {% if documento.arquivo %}
+            <a href="{{ documento.arquivo.url }}" class="btn btn-primary" target="_blank">
+                <i class="bi bi-file-earmark-pdf"></i> Visualizar PDF
+            </a>
             {% endif %}
-        </p>
-        <p><strong>Resumo:</strong><br>{{ documento.resumo|default:"(sem resumo disponível)" }}</p>
-        <a href="{% url 'analise_documentos' %}" class="btn btn-secondary mt-3">Voltar</a>
+        </div>
     </div>
 </div>
 {% endblock %}

@@ -1,13 +1,14 @@
+
 {% extends 'base.html' %}
 {% block content %}
-<div class="container">
+<div class="container mt-4">
     <div class="row">
         <div class="col-md-6">
-            <div class="card mb-4">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <h5>Coletar Documentos</h5>
-                    <span class="badge bg-{% if celery_status.is_running %}success{% else %}danger{% endif %}">
-                        {% if celery_status.is_running %}Ativo{% else %}Inativo{% endif %}
+            <div class="card shadow-sm border-0 mb-4">
+                <div class="card-header bg-gradient bg-primary text-white d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0"><i class="bi bi-cloud-download me-2"></i>Coletar Documentos</h5>
+                    <span class="badge bg-{% if celery_status.is_running %}success{% else %}danger{% endif %} px-3 py-2">
+                        {% if celery_status.is_running %}<i class="bi bi-check-circle me-1"></i>Ativo{% else %}<i class="bi bi-x-circle me-1"></i>Inativo{% endif %}
                     </span>
                 </div>
                 <div class="card-body">
@@ -34,40 +35,38 @@
                 </div>
             </div>
         </div>
-        
         <div class="col-md-6">
-            <div class="card mb-4">
-                <div class="card-header">
-                    <h5>Status do Worker</h5>
+            <div class="card shadow-sm border-0 mb-4">
+                <div class="card-header bg-gradient bg-info text-white">
+                    <h5 class="mb-0"><i class="bi bi-gear-wide-connected me-2"></i>Status do Worker</h5>
                 </div>
                 <div class="card-body">
                     <div class="row text-center mb-3">
                         <div class="col-4">
-                            <div class="card">
+                            <div class="card bg-light border-0">
                                 <div class="card-body">
-                                    <h6>Tarefas Ativas</h6>
-                                    <span class="badge bg-info">{{ celery_status.active_tasks }}</span>
+                                    <h6><i class="bi bi-lightning-charge me-1"></i>Tarefas Ativas</h6>
+                                    <span class="badge bg-info px-3 py-2">{{ celery_status.active_tasks }}</span>
                                 </div>
                             </div>
                         </div>
                         <div class="col-4">
-                            <div class="card">
+                            <div class="card bg-light border-0">
                                 <div class="card-body">
-                                    <h6>Na Fila</h6>
-                                    <span class="badge bg-warning text-dark">{{ celery_status.queued_tasks }}</span>
+                                    <h6><i class="bi bi-list-task me-1"></i>Na Fila</h6>
+                                    <span class="badge bg-warning text-dark px-3 py-2">{{ celery_status.queued_tasks }}</span>
                                 </div>
                             </div>
                         </div>
                         <div class="col-4">
-                            <div class="card">
+                            <div class="card bg-light border-0">
                                 <div class="card-body">
-                                    <h6>Workers</h6>
-                                    <span class="badge bg-secondary">{{ celery_status.workers }}</span>
+                                    <h6><i class="bi bi-cpu me-1"></i>Workers</h6>
+                                    <span class="badge bg-secondary px-3 py-2">{{ celery_status.workers }}</span>
                                 </div>
                             </div>
                         </div>
                     </div>
-                    
                     <div class="d-grid gap-2">
                         <a href="{% url 'celery_control' %}" class="btn btn-outline-secondary">
                             <i class="bi bi-gear"></i> Painel de Controle
@@ -79,14 +78,14 @@
     </div>
 
     <!-- Tarefas em andamento -->
-    <div class="card mb-4">
-        <div class="card-header">
-            <h5>Tarefas Recentes</h5>
+    <div class="card shadow-sm border-0 mb-4">
+        <div class="card-header bg-gradient bg-success text-white">
+            <h5 class="mb-0"><i class="bi bi-clock-history me-2"></i>Tarefas Recentes</h5>
         </div>
         <div class="card-body">
             <div class="table-responsive">
-                <table class="table table-sm">
-                    <thead>
+                <table class="table table-sm align-middle table-bordered table-striped">
+                    <thead class="table-light">
                         <tr>
                             <th>ID</th>
                             <th>Tipo</th>
@@ -98,14 +97,14 @@
                     <tbody>
                         {% for task in recent_tasks %}
                         <tr>
-                            <td>{{ task.id|truncatechars:8 }}</td>
+                            <td class="fw-bold">{{ task.id|truncatechars:8 }}</td>
                             <td>{{ task.name }}</td>
                             <td>
-                                <span class="badge {{ task.status_badge }}">
+                                <span class="badge {{ task.status_badge }} px-3 py-2">
                                     {{ task.status }}
                                 </span>
                             </td>
-                            <td>{{ task.received|date:"H:i:s" }}</td>
+                            <td><span class="text-primary">{{ task.received|date:"H:i:s" }}</span></td>
                             <td>
                                 {% if task.status == 'PROGRESS' %}
                                 <div class="progress" style="height: 20px;">
@@ -124,23 +123,23 @@
                         </tr>
                         {% empty %}
                         <tr>
-                            <td colspan="5">Nenhuma tarefa recente</td>
+                            <td colspan="5" class="text-center text-muted">Nenhuma tarefa recente</td>
                         </tr>
                         {% endfor %}
                         <form method="post" action="{% url 'iniciar_apenas_coleta' %}" class="mt-2">
-                    {% csrf_token %}
-                    <div class="input-group input-group-sm mb-2">
-                        <label class="input-group-text" for="dias_retro_coleta_id">Coletar PDFs dos últimos:</label>
-                        <select name="dias_retroativos_apenas_coleta" id="dias_retro_coleta_id" class="form-select">
-                            <option value="1">1 dia</option>
-                            <option value="3" selected>3 dias</option>
-                            <option value="7">7 dias</option>
-                        </select>
-                        <button type="submit" class="btn btn-outline-primary">
-                            <i class="bi bi-cloud-download"></i> Iniciar Só Coleta
-                        </button>
-                    </div>
-                </form>
+                            {% csrf_token %}
+                            <div class="input-group input-group-sm mb-2">
+                                <label class="input-group-text" for="dias_retro_coleta_id">Coletar PDFs dos últimos:</label>
+                                <select name="dias_retroativos_apenas_coleta" id="dias_retro_coleta_id" class="form-select">
+                                    <option value="1">1 dia</option>
+                                    <option value="3" selected>3 dias</option>
+                                    <option value="7">7 dias</option>
+                                </select>
+                                <button type="submit" class="btn btn-outline-primary">
+                                    <i class="bi bi-cloud-download"></i> Iniciar Só Coleta
+                                </button>
+                            </div>
+                        </form>
                     </tbody>
                 </table>
             </div>

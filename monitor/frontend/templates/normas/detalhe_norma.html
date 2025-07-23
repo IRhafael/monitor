@@ -1,111 +1,109 @@
+
 {% extends "base.html" %}
-
 {% block title %}Detalhes da Norma {{ norma }}{% endblock %}
-
 {% block page_title %}Detalhes da Norma: {{ norma.get_tipo_display }} {{ norma.numero }}{% if norma.ano %}/{{ norma.ano }}{% endif %}{% endblock %}
 
 {% block content %}
-<div class="card">
-    <div class="card-header d-flex justify-content-between align-items-center">
-        <h5>Informações da Norma</h5>
-        <span class="badge {{ norma.get_status_badge_class }}">{{ norma.get_situacao_display|default:"Não Verificada" }}</span>
-    </div>
-    <div class="card-body">
-        <div class="row">
-            <div class="col-md-6">
-                <p><strong>Tipo:</strong> {{ norma.get_tipo_display }}</p>
-                <p><strong>Número:</strong> {{ norma.numero }}</p>
-                <p><strong>Ano:</strong> {{ norma.ano|default:"N/A" }}</p>
-                <p><strong>Situação:</strong> {{ norma.get_situacao_display|default:"Não Verificada" }}</p>
-                <p><strong>Data da Última Verificação:</strong> {{ norma.data_verificacao|date:"d/m/Y H:i"|default:"Nunca verificada" }}</p>
-                <p><strong>Fonte da Confirmação:</strong> {{ norma.get_fonte_confirmacao_display|default:"N/A" }}</p>
-                 <p><strong>Data de Início da Vigência:</strong> {{ norma.data_vigencia|date:"d/m/Y"|default:"N/A" }}</p>
-            </div>
-            <div class="col-md-6">
-                <p><strong>URL da Norma (se disponível):</strong> 
-                    {% if norma.url %}
-                        <a href="{{ norma.url }}" target="_blank">{{ norma.url }}</a>
-                    {% else %}
-                        N/A
-                    {% endif %}
-                </p>
-                 <p><strong>URL de Consulta (SEFAZ/Fonte):</strong> 
-                    {% if norma.url_consulta %}
-                        <a href="{{ norma.url_consulta }}" target="_blank">{{ norma.url_consulta }}</a>
-                    {% else %}
-                        N/A
-                    {% endif %}
-                </p>
-                <p><strong>Data de Cadastro no Sistema:</strong> {{ norma.data_cadastro|date:"d/m/Y H:i" }}</p>
-                <p><strong>Última Menção em Documento:</strong> {{ norma.data_ultima_mencao|date:"d/m/Y"|default:"N/A" }}</p>
-            </div>
+<div class="container mt-4">
+    <div class="card shadow-sm border-0">
+        <div class="card-header bg-gradient bg-info text-white d-flex justify-content-between align-items-center">
+            <h4 class="mb-0"><i class="bi bi-journal-bookmark me-2"></i>Informações da Norma</h4>
+            <span class="badge {{ norma.get_status_badge_class }} px-3 py-2">{{ norma.get_situacao_display|default:"Não Verificada" }}</span>
         </div>
+        <div class="card-body">
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    <ul class="list-group mb-3">
+                        <li class="list-group-item"><strong>Tipo:</strong> {{ norma.get_tipo_display }}</li>
+                        <li class="list-group-item"><strong>Número:</strong> {{ norma.numero }}</li>
+                        <li class="list-group-item"><strong>Ano:</strong> {{ norma.ano|default:"N/A" }}</li>
+                        <li class="list-group-item"><strong>Situação:</strong> {{ norma.get_situacao_display|default:"Não Verificada" }}</li>
+                        <li class="list-group-item"><strong>Data da Última Verificação:</strong> {{ norma.data_verificacao|date:"d/m/Y H:i"|default:"Nunca verificada" }}</li>
+                        <li class="list-group-item"><strong>Fonte da Confirmação:</strong> {{ norma.get_fonte_confirmacao_display|default:"N/A" }}</li>
+                        <li class="list-group-item"><strong>Data de Início da Vigência:</strong> {{ norma.data_vigencia|date:"d/m/Y"|default:"N/A" }}</li>
+                    </ul>
+                </div>
+                <div class="col-md-6">
+                    <ul class="list-group mb-3">
+                        <li class="list-group-item"><strong>URL da Norma:</strong> 
+                            {% if norma.url %}
+                                <a href="{{ norma.url }}" target="_blank">{{ norma.url }}</a>
+                            {% else %}N/A{% endif %}
+                        </li>
+                        <li class="list-group-item"><strong>URL de Consulta (SEFAZ/Fonte):</strong> 
+                            {% if norma.url_consulta %}
+                                <a href="{{ norma.url_consulta }}" target="_blank">{{ norma.url_consulta }}</a>
+                            {% else %}N/A{% endif %}
+                        </li>
+                        <li class="list-group-item"><strong>Data de Cadastro no Sistema:</strong> {{ norma.data_cadastro|date:"d/m/Y H:i" }}</li>
+                        <li class="list-group-item"><strong>Última Menção em Documento:</strong> {{ norma.data_ultima_mencao|date:"d/m/Y"|default:"N/A" }}</li>
+                    </ul>
+                </div>
+            </div>
+            <hr>
+            <h6 class="mb-2"><i class="bi bi-info-circle me-1"></i>Descrição/Objeto</h6>
+            <div class="bg-light p-3 rounded border mb-3">{{ norma.descricao|default:"Sem descrição."|linebreaksbr }}</div>
 
-        <hr>
-        <h6>Descrição/Objeto:</h6>
-        <p>{{ norma.descricao|default:"Sem descrição."|linebreaksbr }}</p>
+            <h6 class="mb-2"><i class="bi bi-file-earmark-text me-1"></i>Ementa da Norma</h6>
+            <div class="bg-light p-3 rounded border mb-3">{{ norma.ementa|default:"Sem ementa registrada."|linebreaksbr }}</div>
 
-        <h6>Ementa da Norma:</h6>
-        <p>{{ norma.ementa|default:"Sem ementa registrada."|linebreaksbr }}</p>
+            <h6 class="mb-2"><i class="bi bi-robot me-1"></i>Resumo da IA (se disponível)</h6>
+            <div class="bg-light p-2 border rounded mb-3">
+                <small>{{ norma.resumo_ia|default:"Sem resumo da IA."|linebreaksbr }}</small>
+            </div>
 
-        <h6>Resumo da IA (se disponível):</h6>
-        <div class="bg-light p-2 border rounded mb-3">
-            <small>{{ norma.resumo_ia|default:"Sem resumo da IA."|linebreaksbr }}</small>
+            <h6 class="mb-2"><i class="bi bi-chat-left-text me-1"></i>Observações</h6>
+            <div class="bg-light p-3 rounded border mb-3">{{ norma.observacoes|default:"Sem observações."|linebreaksbr }}</div>
+
+            {% if norma.detalhes %}
+                <h6 class="mb-2"><i class="bi bi-file-earmark-code me-1"></i>Detalhes Adicionais (JSON)</h6>
+                <pre class="bg-light p-2 border rounded"><small>{{ norma.detalhes|pprint }}</small></pre>
+            {% endif %}
+
+            <h5 class="mt-4"><i class="bi bi-journals me-2"></i>Documentos Relacionados ({{ norma.documentos.count }})</h5>
+            {% if norma.documentos.all %}
+                <ul class="list-group mb-3">
+                    {% for doc in norma.documentos.all %}
+                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                            <a href="{% url 'documento_detail' doc.pk %}" class="fw-bold">{{ doc.titulo }}</a>
+                            <span class="badge bg-secondary">{{ doc.data_publicacao|date:"d/m/Y" }}</span>
+                        </li>
+                    {% endfor %}
+                </ul>
+            {% else %}
+                <div class="list-group-item text-muted">Nenhum documento relacionado a esta norma no sistema.</div>
+            {% endif %}
         </div>
-        
-        <h6>Observações:</h6>
-        <p>{{ norma.observacoes|default:"Sem observações."|linebreaksbr }}</p>
-
-        {% if norma.detalhes %}
-            <h6>Detalhes Adicionais (JSON):</h6>
-            <pre class="bg-light p-2 border rounded"><small>{{ norma.detalhes|pprint }}</small></pre> {% endif %}
-
-
-        <h5 class="mt-4">Documentos Relacionados ({{ norma.documentos.count }})</h5>
-        {% if norma.documentos.all %}
-            <ul class="list-group">
-                {% for doc in norma.documentos.all %}
-                    <li class="list-group-item">
-                        <a href="{% url 'documento_detail' doc.pk %}">{{ doc.titulo }}</a> ({{ doc.data_publicacao|date:"d/m/Y" }})
-                    </li>
-                {% endfor %}
-            </ul>
-        {% else %}
-            <p>Nenhum documento relacionado a esta norma no sistema.</p>
-        {% endif %}
-
-    </div>
-    <div class="card-footer">
-        <a href="{% url 'validacao_normas' %}" class="btn btn-secondary">Voltar para Lista de Normas</a>
-        <form method="post" action="{% url 'verificar_norma_ajax' tipo=norma.tipo numero=norma.numero %}" class="d-inline ms-2" id="formVerificarNorma">
-            {% csrf_token %}
-            <button type="button" class="btn btn-sm btn-info" onclick="verificarNormaIndividual()">Verificar Vigência Agora</button>
-        </form>
+        <div class="card-footer d-flex justify-content-between align-items-center">
+            <a href="{% url 'validacao_normas' %}" class="btn btn-outline-secondary">
+                <i class="bi bi-arrow-left"></i> Voltar para Lista de Normas
+            </a>
+            <form method="post" action="{% url 'verificar_norma_ajax' tipo=norma.tipo numero=norma.numero %}" class="d-inline ms-2" id="formVerificarNorma">
+                {% csrf_token %}
+                <button type="button" class="btn btn-info" onclick="verificarNormaIndividual()">
+                    <i class="bi bi-search"></i> Verificar Vigência Agora
+                </button>
+            </form>
+        </div>
     </div>
 </div>
-
 <script>
 function verificarNormaIndividual() {
-    // Implementar a lógica AJAX similar à da lista de normas, 
-    // mas para uma norma específica, e atualizar a página ou partes dela.
-    // Exemplo simples:
     const form = document.getElementById('formVerificarNorma');
     const formData = new FormData(form);
-
-    // Adicionando X-Requested-With para que o Django saiba que é AJAX (se sua view verificar isso)
     fetch(form.action, {
         method: 'POST',
         body: formData,
         headers: {
-            'X-CSRFToken': formData.get('csrfmiddlewaretoken'), // CSRF token do formulário
+            'X-CSRFToken': formData.get('csrfmiddlewaretoken'),
             'X-Requested-With': 'XMLHttpRequest'
         }
     })
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            alert('Status da norma atualizado para: ' + data.status + '\\nData da verificação: ' + data.data_verificacao);
-            location.reload(); // Recarrega a página para ver as atualizações
+            alert('Status da norma atualizado para: ' + data.status + '\nData da verificação: ' + data.data_verificacao);
+            location.reload();
         } else {
             alert('Erro ao verificar norma: ' + (data.error || 'Erro desconhecido'));
         }
@@ -116,5 +114,4 @@ function verificarNormaIndividual() {
     });
 }
 </script>
-
 {% endblock %}

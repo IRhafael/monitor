@@ -1,76 +1,73 @@
-{% extends "base.html" %}
 
+{% extends "base.html" %}
 {% block page_title %}Controle do Celery{% endblock %}
 
 {% block content %}
-<div class="row">
-    <div class="col-md-12">
-        <div class="card mb-4">
-            <div class="card-header">
-                <h5>Status do Worker</h5>
+<div class="container mt-4">
+    <div class="card shadow-sm border-0 mb-4">
+        <div class="card-header bg-gradient bg-success text-white d-flex justify-content-between align-items-center">
+            <h4 class="mb-0"><i class="bi bi-gear-wide-connected me-2"></i>Status do Worker</h4>
+        </div>
+        <div class="card-body">
+            <div class="row mb-3">
+                <div class="col-md-4">
+                    <div class="card bg-light mb-3 border-0">
+                        <div class="card-body text-center">
+                            <h5><i class="bi bi-cpu me-1"></i>Worker Status</h5>
+                            <span id="worker-status" class="badge bg-secondary px-3 py-2">Verificando...</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card bg-light mb-3 border-0">
+                        <div class="card-body text-center">
+                            <h5><i class="bi bi-lightning-charge me-1"></i>Tarefas Ativas</h5>
+                            <span id="active-tasks" class="badge bg-info px-3 py-2">0</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card bg-light mb-3 border-0">
+                        <div class="card-body text-center">
+                            <h5><i class="bi bi-list-task me-1"></i>Tarefas na Fila</h5>
+                            <span id="queued-tasks" class="badge bg-warning text-dark px-3 py-2">0</span>
+                        </div>
+                    </div>
+                </div>
             </div>
-            <div class="card-body">
-                <div class="row">
-                    <div class="col-md-4">
-                        <div class="card bg-light mb-3">
-                            <div class="card-body text-center">
-                                <h5>Worker Status</h5>
-                                <span id="worker-status" class="badge bg-secondary">Verificando...</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-4">
-                        <div class="card bg-light mb-3">
-                            <div class="card-body text-center">
-                                <h5>Tarefas Ativas</h5>
-                                <span id="active-tasks" class="badge bg-info">0</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-4">
-                        <div class="card bg-light mb-3">
-                            <div class="card-body text-center">
-                                <h5>Tarefas na Fila</h5>
-                                <span id="queued-tasks" class="badge bg-warning text-dark">0</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="d-grid gap-2 d-md-flex justify-content-md-center mt-3">
-                    <button id="start-worker-btn" class="btn btn-success me-md-2">
-                        <i class="bi bi-play-circle"></i> Iniciar Worker
-                    </button>
-                    <button id="stop-worker-btn" class="btn btn-danger">
-                        <i class="bi bi-stop-circle"></i> Parar Worker
-                    </button>
-                </div>
+            <div class="d-grid gap-2 d-md-flex justify-content-md-center mt-3">
+                <button id="start-worker-btn" class="btn btn-success me-md-2">
+                    <i class="bi bi-play-circle"></i> Iniciar Worker
+                </button>
+                <button id="stop-worker-btn" class="btn btn-danger">
+                    <i class="bi bi-stop-circle"></i> Parar Worker
+                </button>
             </div>
         </div>
+    </div>
 
-        <div class="card">
-            <div class="card-header">
-                <h5>Histórico de Tarefas Recentes</h5>
-            </div>
-            <div class="card-body">
-                <div class="table-responsive">
-                    <table class="table table-hover" id="tasks-table">
-                        <thead>
-                            <tr>
-                                <th>ID</th>
-                                <th>Tipo</th>
-                                <th>Status</th>
-                                <th>Início</th>
-                                <th>Término</th>
-                                <th>Resultado</th>
-                                <th>Ações</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <!-- Será preenchido via AJAX -->
-                        </tbody>
-                    </table>
-                </div>
+    <div class="card shadow-sm border-0">
+        <div class="card-header bg-gradient bg-primary text-white d-flex justify-content-between align-items-center">
+            <h4 class="mb-0"><i class="bi bi-clock-history me-2"></i>Histórico de Tarefas Recentes</h4>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-hover align-middle table-bordered table-striped" id="tasks-table">
+                    <thead class="table-light">
+                        <tr>
+                            <th>ID</th>
+                            <th>Tipo</th>
+                            <th>Status</th>
+                            <th>Início</th>
+                            <th>Término</th>
+                            <th>Resultado</th>
+                            <th>Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <!-- Será preenchido via AJAX -->
+                    </tbody>
+                </table>
             </div>
         </div>
     </div>

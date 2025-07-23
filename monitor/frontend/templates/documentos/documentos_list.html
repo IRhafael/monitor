@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 
+{% extends "base.html" %}
 {% block page_title %}Documentos{% endblock %}
 
 {% block actions %}
@@ -16,65 +17,119 @@
 {% endblock %}
 
 {% block content %}
-<div class="card">
-    <div class="card-header d-flex justify-content-between align-items-center">
-        <h5>Lista de Documentos</h5>
-        <a href="#" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#uploadModal">
-            <i class="bi bi-plus"></i> Adicionar
-        </a>
+<div class="container mt-4">
+    <div class="card shadow-sm border-0">
+        <div class="card-header bg-gradient bg-primary text-white d-flex justify-content-between align-items-center">
+            <h4 class="mb-0"><i class="bi bi-journals me-2"></i>Lista de Documentos</h4>
+            <a href="#" class="btn btn-sm btn-success" data-bs-toggle="modal" data-bs-target="#uploadModal">
+                <i class="bi bi-plus"></i> Adicionar
+            </a>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-hover align-middle table-bordered table-striped">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Título</th>
+                            <th>Data</th>
+                            <th>Status</th>
+                            <th>Normas Relacionadas</th>
+                            <th>Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for doc in documentos %}
+                        <tr class="document-card">
+                            <td class="fw-bold">{{ doc.titulo }}</td>
+                            <td><span class="text-primary">{{ doc.data_publicacao|date:"d/m/Y" }}</span></td>
+                            <td>
+                                <span class="badge rounded-pill bg-{% if doc.processado %}success{% else %}warning text-dark{% endif %} px-3 py-2">
+                                    {% if doc.processado %}<i class="bi bi-check-circle me-1"></i>Processado{% else %}<i class="bi bi-hourglass-split me-1"></i>Pendente{% endif %}
+                                </span>
+                            </td>
+                            <td><span class="badge bg-info">{{ doc.normas_relacionadas.count }}</span></td>
+                            <td>
+                                <a href="{% url 'documento_detail' doc.id %}" class="btn btn-sm btn-outline-primary">
+                                    <i class="bi bi-eye"></i> Detalhes
+                                </a>
+                                {% if doc.arquivo_pdf %}
+                                <a href="{{ doc.arquivo_pdf.url }}" class="btn btn-sm btn-outline-secondary" target="_blank">
+                                    <i class="bi bi-file-earmark-pdf"></i> PDF
+                                </a>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="5" class="text-center text-muted">Nenhum documento encontrado.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <!-- Paginação -->
+            <nav aria-label="Page navigation">
+                <ul class="pagination justify-content-center">
+                    {% if page_obj.has_previous %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ page_obj.previous_page_number }}">Anterior</a>
+                    </li>
+                    {% else %}
+                    <li class="page-item disabled"><span class="page-link">Anterior</span></li>
+                    {% endif %}
+                    {% for num in page_obj.paginator.page_range %}
+                        {% if page_obj.number == num %}
+                        <li class="page-item active"><a class="page-link" href="#">{{ num }}</a></li>
+                        {% else %}
+                        <li class="page-item"><a class="page-link" href="?page={{ num }}">{{ num }}</a></li>
+                        {% endif %}
+                    {% endfor %}
+                    {% if page_obj.has_next %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ page_obj.next_page_number }}">Próxima</a>
+                    </li>
+                    {% else %}
+                    <li class="page-item disabled"><span class="page-link">Próxima</span></li>
+                    {% endif %}
+                </ul>
+            </nav>
+        </div>
     </div>
-    <div class="card-body">
-        <div class="table-responsive">
-            <table class="table table-hover">
-                <thead>
-                    <tr>
-                        <th>Título</th>
-                        <th>Data</th>
-                        <th>Status</th>
-                        <th>Normas</th>
-                        <th>Ações</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for doc in documentos %}
-                    <tr>
-                        <td>
-                            <a href="#" data-bs-toggle="modal" data-bs-target="#docModal{{ doc.id }}">
-                                {{ doc.titulo|truncatechars:40 }}
-                            </a>
-                        </td>
-                        <td>{{ doc.data_publicacao|date:"d/m/Y" }}</td>
-                        <td>
-                            {% if doc.processado %}
-                                <span class="badge bg-success">Processado</span>
-                            {% else %}
-                                <span class="badge bg-warning text-dark">Pendente</span>
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if doc.normas_relacionadas.count > 0 %}
-                                <span class="badge bg-info">{{ doc.normas_relacionadas.count }}</span>
-                            {% else %}
-                                <span class="badge bg-secondary">0</span>
-                            {% endif %}
-                        </td>
-                        <td>
-                            <div class="btn-group btn-group-sm" role="group">
-                                <a href="#" class="btn btn-outline-primary" title="Ver">
-                                    <i class="bi bi-eye"></i>
-                                </a>
-                                <a href="#" class="btn btn-outline-success" title="Processar">
-                                    <i class="bi bi-gear"></i>
-                                </a>
-                                <a href="#" class="btn btn-outline-danger" title="Excluir">
-                                    <i class="bi bi-trash"></i>
-                                </a>
-                            </div>
-                        </td>
-                    </tr>
-                    
-                    <!-- Modal para cada documento -->
-                    <div class="modal fade" id="docModal{{ doc.id }}" tabindex="-1" aria-hidden="true">
+</div>
+
+<!-- Modal de Upload -->
+<div class="modal fade" id="uploadModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-file-earmark-plus me-2"></i>Adicionar Documento Manualmente</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form method="post" enctype="multipart/form-data" action="{% url 'documento_upload' %}">
+                {% csrf_token %}
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="id_titulo" class="form-label">Título</label>
+                        <input type="text" name="titulo" id="id_titulo" class="form-control" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="id_arquivo_pdf" class="form-label">Arquivo PDF</label>
+                        <input type="file" name="arquivo_pdf" id="id_arquivo_pdf" class="form-control" accept="application/pdf" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="id_data_publicacao" class="form-label">Data de Publicação</label>
+                        <input type="date" name="data_publicacao" id="id_data_publicacao" class="form-control" required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-primary"><i class="bi bi-plus-circle"></i> Adicionar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
                         <div class="modal-dialog modal-lg">
                             <div class="modal-content">
                                 <div class="modal-header">
