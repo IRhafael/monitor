@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Dashboard de Vigência das Normas{% endblock %}
+{% block page_title %}Vigência das Normas{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <h2 class="mb-4">Resumo de Vigência</h2>
+    <div class="row mb-3">
+        <div class="col-md-6">
+            <div class="card border-success mb-3">
+                <div class="card-header bg-success text-white">Normas Vigentes</div>
+                <div class="card-body">
+                    <h5 class="card-title">{{ total_vigentes }} normas vigentes</h5>
+                    <ul class="list-group list-group-flush">
+                        {% for norma in normas_vigentes %}
+                        <li class="list-group-item">
+                            <strong>{{ norma.tipo }} {{ norma.numero }}</strong> - Verificada em {{ norma.data_verificacao|date:'d/m/Y' }}
+                        </li>
+                        {% empty %}
+                        <li class="list-group-item">Nenhuma norma vigente encontrada.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card border-danger mb-3">
+                <div class="card-header bg-danger text-white">Normas Revogadas</div>
+                <div class="card-body">
+                    <h5 class="card-title">{{ total_revogadas }} normas revogadas</h5>
+                    <ul class="list-group list-group-flush">
+                        {% for norma in normas_revogadas %}
+                        <li class="list-group-item">
+                            <strong>{{ norma.tipo }} {{ norma.numero }}</strong> - Revogada em {{ norma.data_verificacao|date:'d/m/Y' }}
+                        </li>
+                        {% empty %}
+                        <li class="list-group-item">Nenhuma norma revogada encontrada.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="mb-3">
+        <div class="alert alert-info">
+            Última execução de verificação SEFAZ: 
+            {% if ultima_execucao %}
+                {{ ultima_execucao.data_inicio|date:'d/m/Y H:i' }}
+            {% else %}
+                Nunca executada
+            {% endif %}
+        </div>
+    </div>
+    {% if messages %}
+    <div class="mb-3">
+        {% for message in messages %}
+            <div class="alert alert-{{ message.tags }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

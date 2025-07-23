@@ -21,18 +21,18 @@
                 <div class="col-md-3">
                     <label for="tipo" class="form-label">Tipo</label>
                     <select id="tipo" name="tipo" class="form-select">
-                        <option value="">Todos</option>
-                        <option value="CONTABIL">Contábil</option>
-                        <option value="MUDANCAS">Mudanças</option>
+                        <option value="" {% if not tipo %}selected{% endif %}>Todos</option>
+                        <option value="CONTABIL" {% if tipo == 'CONTABIL' %}selected{% endif %}>Contábil</option>
+                        <option value="MUDANCAS" {% if tipo == 'MUDANCAS' %}selected{% endif %}>Mudanças</option>
                     </select>
                 </div>
                 <div class="col-md-3">
                     <label for="data_inicio" class="form-label">Data Início</label>
-                    <input type="date" id="data_inicio" name="data_inicio" class="form-control">
+                    <input type="date" id="data_inicio" name="data_inicio" class="form-control" value="{{ data_inicio }}">
                 </div>
                 <div class="col-md-3">
                     <label for="data_fim" class="form-label">Data Fim</label>
-                    <input type="date" id="data_fim" name="data_fim" class="form-control">
+                    <input type="date" id="data_fim" name="data_fim" class="form-control" value="{{ data_fim }}">
                 </div>
                 <div class="col-md-3 d-flex align-items-end">
                     <button type="submit" class="btn btn-primary">

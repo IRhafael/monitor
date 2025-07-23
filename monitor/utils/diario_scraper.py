@@ -307,20 +307,33 @@ class DiarioOficialScraper:
         
         return "Geral"
 
-    def extrair_norma(self, texto: str) -> List[Tuple[str, str]]:
-        """Extrai normas (tipo e número) do texto de um documento."""
+    def extrair_norma(self, texto: str) -> List[Tuple[str, str, int]]:
+        """Extrai normas (tipo, número e ano) do texto de um documento."""
         normas = []
-        # Padrões para Lei, Decreto, Portaria, etc.
-        # Captura o tipo da norma e um ou mais grupos de números separados por ponto, barra ou hífen
-        padrao = r'(?i)(lei complementar|lc|lei|decreto[\- ]?lei|decreto|ato normativo|portaria|instrução normativa|in|emenda constitucional|ec)[\s:]*(n[º°o.]?\s*)?(\d+([\.\/\-]\d+)*)'
-        
-        matches = re.finditer(padrao, texto)
+        # Regex ajustado para capturar tipo, número e ano (2 ou 4 dígitos após barra)
+        padrao = re.compile(
+            r'(?i)(lei complementar|lc|lei|decreto[\- ]?lei|decreto|ato normativo|portaria|instrução normativa|in|emenda constitucional|ec)[\s:]*(n[º°o.]?\s*)?(\d+([\.\/\-]\d+)*)(?:/(\d{2,4}))?',
+            re.IGNORECASE
+        )
+
+        matches = padrao.finditer(texto)
         for match in matches:
             tipo = match.group(1).strip().upper()
             numero_raw = match.group(3).strip()
-            # Padroniza o número removendo zeros à esquerda se houver, e tratando separadores
             numero_padronizado = self._padronizar_numero(numero_raw)
-            normas.append((tipo, numero_padronizado))
+            ano_raw = match.group(5)
+            ano = None
+            if ano_raw:
+                try:
+                    ano_int = int(ano_raw)
+                    # Se ano for 2 dígitos, converte para 4 dígitos (assume 2000+ para <50, senão 1900+)
+                    if len(ano_raw) == 2:
+                        ano = 2000 + ano_int if ano_int < 50 else 1900 + ano_int
+                    else:
+                        ano = ano_int
+                except Exception:
+                    ano = None
+            normas.append((tipo, numero_padronizado, ano))
         return normas
 
     def _padronizar_numero(self, numero):
@@ -340,26 +353,28 @@ class DiarioOficialScraper:
 
 
     def _contem_termos_prioritarios(self, texto: str) -> bool:
-        """Verifica se o texto contém termos monitorados ativos"""
+        """Filtro restritivo: exige pelo menos 2 termos prioritários, sendo 1 obrigatoriamente fiscal/tributário"""
         from monitor.models import TermoMonitorado
-        
-        # Busca termos ativos ordenados por prioridade (maior primeiro)
+
         termos = TermoMonitorado.objects.filter(ativo=True).order_by('-prioridade')
-        
-        texto = texto.upper()
-        
+        texto_upper = texto.upper()
+        termos_encontrados = set()
+        termos_fiscais = {"ICMS", "TRIBUTÁRIO", "FISCAL", "SUBSTITUIÇÃO TRIBUTÁRIA", "ISS", "IPI", "PIS", "COFINS", "IRPJ", "CSLL", "SPED", "EFD", "DCTF", "SIMPLIFICADO", "SEFAZ"}
+
         for termo_obj in termos:
-            # Lista de termos para verificar incluindo o principal e variações
             termos_verificar = [termo_obj.termo]
             if termo_obj.variacoes:
                 termos_verificar.extend([v.strip() for v in termo_obj.variacoes.split(',')])
-            
-            # Verifica cada variação
             for termo in termos_verificar:
-                if termo.upper() in texto:
-                    logger.info(f"Documento contém termo prioritário: {termo_obj.termo}")
-                    return True
-                    
+                if termo.upper() in texto_upper:
+                    termos_encontrados.add(termo_obj.termo.upper())
+
+        # Exige pelo menos 2 termos encontrados e pelo menos 1 termo fiscal/tributário
+        if len(termos_encontrados) >= 2 and any(t in termos_fiscais for t in termos_encontrados):
+            logger.info(f"Documento contém termos fiscais/tributários suficientes: {', '.join(termos_encontrados)}")
+            return True
+
+        logger.info(f"Documento ignorado por não atender ao filtro restritivo. Termos encontrados: {', '.join(termos_encontrados)}")
         return False
 
 

@@ -9,24 +9,28 @@
             <h4 class="mb-0">Gerar Novo Relatório</h4>
         </div>
         <div class="card-body">
+            {% if messages %}
+                {% for message in messages %}
+                    <div class="alert alert-{{ message.tags }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
             <form method="post" id="reportForm">
                 {% csrf_token %}
-                
                 <div class="row mb-3">
                     <div class="col-md-6">
                         <label class="form-label">Tipo de Relatório</label>
                         <select name="tipo" class="form-select" required>
                             <option value="">Selecione...</option>
-                            <option value="CONTABIL">Contábil Completo</option>
-                            <option value="MUDANCAS">Mudanças nas Normas</option>
-                            <option value="CUSTOM">Personalizado</option>
+                            <option value="CONTABIL" {% if form_data.tipo == 'CONTABIL' %}selected{% endif %}>Contábil Completo</option>
+                            <option value="MUDANCAS" {% if form_data.tipo == 'MUDANCAS' %}selected{% endif %}>Mudanças nas Normas</option>
+                            <option value="CUSTOM" {% if form_data.tipo == 'CUSTOM' %}selected{% endif %}>Personalizado</option>
                         </select>
                     </div>
                     <div class="col-md-6">
                         <label class="form-label">Formato</label>
                         <select name="formato" class="form-select" required>
-                            <option value="XLSX">Excel (.xlsx)</option>
-                            <option value="PDF">PDF (.pdf)</option>
+                            <option value="XLSX" {% if form_data.formato == 'XLSX' %}selected{% endif %}>Excel (.xlsx)</option>
+                            <option value="PDF" {% if form_data.formato == 'PDF' %}selected{% endif %}>PDF (.pdf)</option>
                         </select>
                     </div>
                 </div>
@@ -34,33 +38,32 @@
                 <div class="row mb-3">
                     <div class="col-md-6">
                         <label class="form-label">Período - Data Inicial</label>
-                        <input type="date" name="data_inicio" class="form-control">
+                        <input type="date" name="data_inicio" class="form-control" value="{{ form_data.data_inicio }}">
                     </div>
                     <div class="col-md-6">
                         <label class="form-label">Período - Data Final</label>
-                        <input type="date" name="data_fim" class="form-control">
+                        <input type="date" name="data_fim" class="form-control" value="{{ form_data.data_fim }}">
                     </div>
                 </div>
 
                 <!-- Opções avançadas (aparecem apenas para relatório personalizado) -->
-                <div id="customOptions" style="display: none;">
+                <div id="customOptions" style="display: {% if form_data.tipo == 'CUSTOM' %}block{% else %}none{% endif %};">
                     <h5 class="mt-4 mb-3">Opções Avançadas</h5>
-                    
                     <div class="row mb-3">
                         <div class="col-md-6">
                             <label class="form-label">Tipo de Norma</label>
                             <select name="norma_tipo" class="form-select" multiple>
-                                <option value="LEI">Lei</option>
-                                <option value="DECRETO">Decreto</option>
-                                <option value="PORTARIA">Portaria</option>
+                                <option value="LEI" {% if form_data.norma_tipo and 'LEI' in form_data.norma_tipo %}selected{% endif %}>Lei</option>
+                                <option value="DECRETO" {% if form_data.norma_tipo and 'DECRETO' in form_data.norma_tipo %}selected{% endif %}>Decreto</option>
+                                <option value="PORTARIA" {% if form_data.norma_tipo and 'PORTARIA' in form_data.norma_tipo %}selected{% endif %}>Portaria</option>
                             </select>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">Status</label>
                             <select name="status" class="form-select">
-                                <option value="">Todos</option>
-                                <option value="VIGENTE">Vigente</option>
-                                <option value="REVOGADA">Revogada</option>
+                                <option value="" {% if not form_data.status %}selected{% endif %}>Todos</option>
+                                <option value="VIGENTE" {% if form_data.status == 'VIGENTE' %}selected{% endif %}>Vigente</option>
+                                <option value="REVOGADA" {% if form_data.status == 'REVOGADA' %}selected{% endif %}>Revogada</option>
                             </select>
                         </div>
                     </div>

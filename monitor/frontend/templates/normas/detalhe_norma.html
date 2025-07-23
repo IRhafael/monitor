@@ -62,11 +62,17 @@
 
 
         <h5 class="mt-4">Documentos Relacionados ({{ norma.documentos.count }})</h5>
-        {% if norma.documentos.all %}
+        {% if documentos_info %}
             <ul class="list-group">
-                {% for doc in norma.documentos.all %}
-                    <li class="list-group-item">
-                        <a href="{% url 'documento_detail' doc.pk %}">{{ doc.titulo }}</a> ({{ doc.data_publicacao|date:"d/m/Y" }})
+                {% for info in documentos_info %}
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        <div>
+                            <a href="{% url 'documento_detail' info.documento.pk %}">{{ info.documento.titulo }}</a>
+                            <span class="text-muted">({{ info.documento.data_publicacao|date:"d/m/Y" }})</span>
+                        </div>
+                        {% if info.paragrafo %}
+                            <span class="badge bg-info text-dark">Parágrafo: {{ info.paragrafo }}</span>
+                        {% endif %}
                     </li>
                 {% endfor %}
             </ul>
@@ -75,42 +81,51 @@
         {% endif %}
 
     </div>
-    <div class="card-footer">
-        <a href="{% url 'validacao_normas' %}" class="btn btn-secondary">Voltar para Lista de Normas</a>
+    <div class="card-footer d-flex justify-content-between align-items-center">
+        <div>
+            <a href="{% url 'validacao_normas' %}" class="btn btn-secondary"><i class="bi bi-arrow-left"></i> Voltar</a>
+            <a href="{% url 'norma_historico' norma.pk %}" class="btn btn-outline-dark ms-2"><i class="bi bi-clock-history"></i> Histórico</a>
+        </div>
         <form method="post" action="{% url 'verificar_norma_ajax' tipo=norma.tipo numero=norma.numero %}" class="d-inline ms-2" id="formVerificarNorma">
             {% csrf_token %}
-            <button type="button" class="btn btn-sm btn-info" onclick="verificarNormaIndividual()">Verificar Vigência Agora</button>
+            <button type="button" class="btn btn-sm btn-info" id="btnVerificarNorma" onclick="verificarNormaIndividual()">
+                <span id="spinnerNorma" class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+                <i class="bi bi-shield-check"></i> Verificar Vigência Agora
+            </button>
         </form>
     </div>
 </div>
 
 <script>
 function verificarNormaIndividual() {
-    // Implementar a lógica AJAX similar à da lista de normas, 
-    // mas para uma norma específica, e atualizar a página ou partes dela.
-    // Exemplo simples:
+    const btn = document.getElementById('btnVerificarNorma');
+    const spinner = document.getElementById('spinnerNorma');
+    btn.disabled = true;
+    spinner.classList.remove('d-none');
     const form = document.getElementById('formVerificarNorma');
     const formData = new FormData(form);
-
-    // Adicionando X-Requested-With para que o Django saiba que é AJAX (se sua view verificar isso)
     fetch(form.action, {
         method: 'POST',
         body: formData,
         headers: {
-            'X-CSRFToken': formData.get('csrfmiddlewaretoken'), // CSRF token do formulário
+            'X-CSRFToken': formData.get('csrfmiddlewaretoken'),
             'X-Requested-With': 'XMLHttpRequest'
         }
     })
     .then(response => response.json())
     .then(data => {
+        spinner.classList.add('d-none');
+        btn.disabled = false;
         if (data.success) {
-            alert('Status da norma atualizado para: ' + data.status + '\\nData da verificação: ' + data.data_verificacao);
-            location.reload(); // Recarrega a página para ver as atualizações
+            alert('Status da norma atualizado para: ' + data.status + '\nData da verificação: ' + data.data_verificacao);
+            location.reload();
         } else {
             alert('Erro ao verificar norma: ' + (data.error || 'Erro desconhecido'));
         }
     })
     .catch(error => {
+        spinner.classList.add('d-none');
+        btn.disabled = false;
         console.error('Erro na requisição AJAX:', error);
         alert('Erro de comunicação ao tentar verificar a norma.');
     });

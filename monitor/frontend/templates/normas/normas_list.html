@@ -28,6 +28,7 @@
 {% endblock %}
 
 {% block content %}
+<div id="toastContainer" class="position-fixed bottom-0 end-0 p-3" style="z-index: 9999;"></div>
 <div class="card">
     <div class="card-header d-flex justify-content-between align-items-center">
         <h5>Lista de Normas</h5>
@@ -147,7 +148,7 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body" id="historyModalBody">
-                <div class="text-center my-5">
+                <div class="text-center my-5" id="historySpinner">
                     <div class="spinner-border" role="status">
                         <span class="visually-hidden">Carregando...</span>
                     </div>
@@ -164,6 +165,23 @@
 
 {% block extra_js %}
 <script>
+function showToast(message, type = 'success') {
+    const toastId = 'toast-' + Date.now();
+    const toastHtml = `<div id="${toastId}" class="toast align-items-center text-bg-${type} border-0 mb-2" role="alert" aria-live="assertive" aria-atomic="true">
+        <div class="d-flex">
+            <div class="toast-body">${message}</div>
+            <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Fechar"></button>
+        </div>
+    </div>`;
+    $('#toastContainer').append(toastHtml);
+    const toastEl = document.getElementById(toastId);
+    const toast = new bootstrap.Toast(toastEl, { delay: 3500 });
+    toast.show();
+    toastEl.addEventListener('hidden.bs.toast', function() {
+        toastEl.remove();
+    });
+}
+
 $(document).ready(function() {
     // Seleção/deseleção de todas as normas
     $('#selectAll').change(function() {
@@ -174,24 +192,23 @@ $(document).ready(function() {
     $('.verify-btn').click(function() {
         const btn = $(this);
         const normId = btn.data('id');
-        
-        btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm"></span>');
-        
+        btn.prop('disabled', true).attr('aria-disabled', 'true').html('<span class="spinner-border spinner-border-sm"></span>');
         $.ajax({
             url: `/normas/${normId}/verify/`,
             method: 'POST',
             headers: {'X-CSRFToken': '{{ csrf_token }}'},
             success: function(data) {
                 if(data.success) {
-                    location.reload();
+                    showToast('Norma verificada com sucesso!', 'success');
+                    setTimeout(() => location.reload(), 1200);
                 } else {
-                    alert('Erro: ' + (data.error || 'Desconhecido'));
-                    btn.prop('disabled', false).html('<i class="bi bi-arrow-repeat"></i>');
+                    showToast('Erro: ' + (data.error || 'Desconhecido'), 'danger');
+                    btn.prop('disabled', false).attr('aria-disabled', 'false').html('<i class="bi bi-arrow-repeat"></i>');
                 }
             },
             error: function() {
-                alert('Erro na requisição');
-                btn.prop('disabled', false).html('<i class="bi bi-arrow-repeat"></i>');
+                showToast('Erro na requisição', 'danger');
+                btn.prop('disabled', false).attr('aria-disabled', 'false').html('<i class="bi bi-arrow-repeat"></i>');
             }
         });
     });
@@ -201,19 +218,15 @@ $(document).ready(function() {
         const selectedIds = $('.norm-checkbox:checked').map(function() {
             return $(this).data('id');
         }).get();
-        
         if(selectedIds.length === 0) {
-            alert('Selecione pelo menos uma norma para verificar');
+            showToast('Selecione pelo menos uma norma para verificar', 'warning');
             return;
         }
-        
         if(!confirm(`Deseja verificar ${selectedIds.length} norma(s) selecionada(s)?`)) {
             return;
         }
-        
         const btn = $(this);
-        btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm"></span> Verificando...');
-        
+        btn.prop('disabled', true).attr('aria-disabled', 'true').html('<span class="spinner-border spinner-border-sm"></span> Verificando...');
         $.ajax({
             url: '/normas/verify-batch/',
             method: 'POST',
@@ -222,15 +235,16 @@ $(document).ready(function() {
             traditional: true,
             success: function(data) {
                 if(data.success) {
-                    location.reload();
+                    showToast('Normas verificadas com sucesso!', 'success');
+                    setTimeout(() => location.reload(), 1200);
                 } else {
-                    alert('Erro: ' + (data.error || 'Desconhecido'));
-                    btn.prop('disabled', false).html('<i class="bi bi-check-circle"></i> Verificar Selecionadas');
+                    showToast('Erro: ' + (data.error || 'Desconhecido'), 'danger');
+                    btn.prop('disabled', false).attr('aria-disabled', 'false').html('<i class="bi bi-check-circle"></i> Verificar Selecionadas');
                 }
             },
             error: function() {
-                alert('Erro na requisição');
-                btn.prop('disabled', false).html('<i class="bi bi-check-circle"></i> Verificar Selecionadas');
+                showToast('Erro na requisição', 'danger');
+                btn.prop('disabled', false).attr('aria-disabled', 'false').html('<i class="bi bi-check-circle"></i> Verificar Selecionadas');
             }
         });
     });
@@ -239,7 +253,7 @@ $(document).ready(function() {
     $('.history-btn').click(function() {
         const normId = $(this).data('id');
         $('#historyModal').modal('show');
-        
+        $('#historyModalBody').html('<div class="text-center my-5"><div class="spinner-border" role="status"><span class="visually-hidden">Carregando...</span></div></div>');
         $.ajax({
             url: `/normas/${normId}/history/`,
             method: 'GET',
@@ -257,19 +271,15 @@ $(document).ready(function() {
         const selectedIds = $('.norm-checkbox:checked').map(function() {
             return $(this).data('id');
         }).get();
-        
         if(selectedIds.length === 0) {
-            alert('Selecione pelo menos uma norma para marcar como revogada');
+            showToast('Selecione pelo menos uma norma para marcar como revogada', 'warning');
             return;
         }
-        
         if(!confirm(`Deseja marcar ${selectedIds.length} norma(s) selecionada(s) como revogadas?`)) {
             return;
         }
-        
         const btn = $(this);
-        btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm"></span>');
-        
+        btn.prop('disabled', true).attr('aria-disabled', 'true').html('<span class="spinner-border spinner-border-sm"></span>');
         $.ajax({
             url: '/normas/revoke-batch/',
             method: 'POST',
@@ -278,15 +288,16 @@ $(document).ready(function() {
             traditional: true,
             success: function(data) {
                 if(data.success) {
-                    location.reload();
+                    showToast('Normas marcadas como revogadas!', 'success');
+                    setTimeout(() => location.reload(), 1200);
                 } else {
-                    alert('Erro: ' + (data.error || 'Desconhecido'));
-                    btn.prop('disabled', false).html('<i class="bi bi-x-circle"></i> Marcar como Revogadas');
+                    showToast('Erro: ' + (data.error || 'Desconhecido'), 'danger');
+                    btn.prop('disabled', false).attr('aria-disabled', 'false').html('<i class="bi bi-x-circle"></i> Marcar como Revogadas');
                 }
             },
             error: function() {
-                alert('Erro na requisição');
-                btn.prop('disabled', false).html('<i class="bi bi-x-circle"></i> Marcar como Revogadas');
+                showToast('Erro na requisição', 'danger');
+                btn.prop('disabled', false).attr('aria-disabled', 'false').html('<i class="bi bi-x-circle"></i> Marcar como Revogadas');
             }
         });
     });
