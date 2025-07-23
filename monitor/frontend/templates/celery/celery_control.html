@@ -5,48 +5,39 @@
 {% block content %}
 <div class="row">
     <div class="col-md-12">
-        <div class="card mb-4 shadow-sm">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0">Status do Celery</h5>
-                <span class="badge bg-primary">Atualizado em <span id="celery-update-time">--:--</span></span>
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5>Status do Worker</h5>
             </div>
             <div class="card-body">
-                <div class="row text-center">
-                    <div class="col-md-3 mb-2">
-                        <div class="card bg-light h-100">
-                            <div class="card-body">
-                                <h6 class="mb-2">Status Geral</h6>
+                <div class="row">
+                    <div class="col-md-4">
+                        <div class="card bg-light mb-3">
+                            <div class="card-body text-center">
+                                <h5>Worker Status</h5>
                                 <span id="worker-status" class="badge bg-secondary">Verificando...</span>
                             </div>
                         </div>
                     </div>
-                    <div class="col-md-3 mb-2">
-                        <div class="card bg-light h-100">
-                            <div class="card-body">
-                                <h6 class="mb-2">Workers Ativos</h6>
-                                <span id="celery-workers-count" class="badge bg-dark">-</span>
-                                <div id="celery-workers-list" class="mt-2 small text-muted"></div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-3 mb-2">
-                        <div class="card bg-light h-100">
-                            <div class="card-body">
-                                <h6 class="mb-2">Tarefas Ativas</h6>
+                    <div class="col-md-4">
+                        <div class="card bg-light mb-3">
+                            <div class="card-body text-center">
+                                <h5>Tarefas Ativas</h5>
                                 <span id="active-tasks" class="badge bg-info">0</span>
                             </div>
                         </div>
                     </div>
-                    <div class="col-md-3 mb-2">
-                        <div class="card bg-light h-100">
-                            <div class="card-body">
-                                <h6 class="mb-2">Tarefas na Fila</h6>
+                    <div class="col-md-4">
+                        <div class="card bg-light mb-3">
+                            <div class="card-body text-center">
+                                <h5>Tarefas na Fila</h5>
                                 <span id="queued-tasks" class="badge bg-warning text-dark">0</span>
                             </div>
                         </div>
                     </div>
                 </div>
-                <div class="d-grid gap-2 d-md-flex justify-content-md-center mt-4">
+                
+                <div class="d-grid gap-2 d-md-flex justify-content-md-center mt-3">
                     <button id="start-worker-btn" class="btn btn-success me-md-2">
                         <i class="bi bi-play-circle"></i> Iniciar Worker
                     </button>
@@ -57,29 +48,26 @@
             </div>
         </div>
 
-        <div class="card shadow-sm">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0">Tarefas Recentes</h5>
-                <span class="badge bg-secondary">Atualização automática</span>
+        <div class="card">
+            <div class="card-header">
+                <h5>Histórico de Tarefas Recentes</h5>
             </div>
             <div class="card-body">
                 <div class="table-responsive">
-                    <table class="table table-hover align-middle" id="tasks-table">
-                        <thead class="table-light">
+                    <table class="table table-hover" id="tasks-table">
+                        <thead>
                             <tr>
                                 <th>ID</th>
                                 <th>Tipo</th>
                                 <th>Status</th>
-                                <th>Worker</th>
                                 <th>Início</th>
-                                <th>ETA</th>
-                                <th>Args</th>
+                                <th>Término</th>
                                 <th>Resultado</th>
                                 <th>Ações</th>
                             </tr>
                         </thead>
                         <tbody>
-                            <!-- Preenchido via AJAX -->
+                            <!-- Será preenchido via AJAX -->
                         </tbody>
                     </table>
                 </div>
@@ -89,172 +77,159 @@
 </div>
 {% endblock %}
 
-
 {% block extra_js %}
 <script>
 $(document).ready(function() {
+    // Função para atualizar o status do worker
     function updateWorkerStatus() {
-        $.get("{% url 'celery_status' %}", function(data) {
-            $('#worker-status').removeClass('bg-secondary bg-success bg-danger text-dark')
-                .addClass(data.is_running ? 'bg-success' : 'bg-danger')
-                .text(data.is_running ? 'Ativo' : 'Inativo');
+        $.get("{% url 'celery_status' %}", function(data) { // Use a tag de URL Django
+            $('#worker-status').removeClass('bg-secondary bg-success bg-danger text-dark') // Adicionado text-dark para remover
+                              .addClass(data.is_running ? 'bg-success' : 'bg-danger')
+                              .text(data.is_running ? 'Ativo' : 'Inativo');
+            
             $('#active-tasks').text(data.active_tasks !== undefined ? data.active_tasks : '-');
             $('#queued-tasks').text(data.queued_tasks !== undefined ? data.queued_tasks : '-');
-            $('#celery-workers-count').text(data.workers !== undefined ? data.workers.length || data.workers : '-');
-            // Lista de workers
-            if (data.workers && Array.isArray(data.workers)) {
-                let html = '';
-                data.workers.forEach(w => {
-                    html += `<span class='badge bg-light text-dark me-1'>${w}</span>`;
-                });
-                $('#celery-workers-list').html(html);
-            } else {
-                $('#celery-workers-list').html('<span class="text-muted">Nenhum worker ativo</span>');
+            // Adicionar exibição de workers, se o backend enviar
+            if (data.workers !== undefined) {
+                $('#celery-workers-count').text(data.workers); // Supondo que você tenha um <span id="celery-workers-count">
             }
-            // Atualiza horário
-            let now = new Date();
-            $('#celery-update-time').text(now.toLocaleTimeString());
+
         }).fail(function() {
             $('#worker-status').removeClass('bg-success bg-danger').addClass('bg-secondary text-dark').text('Erro ao buscar');
             $('#active-tasks').text('-');
             $('#queued-tasks').text('-');
-            $('#celery-workers-count').text('-');
-            $('#celery-workers-list').html('<span class="text-danger">Erro ao buscar workers</span>');
-            $('#celery-update-time').text('--:--');
+            if ($('#celery-workers-count').length) {
+                 $('#celery-workers-count').text('-');
+            }
+            console.error("Erro ao buscar status do Celery via /celery/status/");
         });
     }
-
+    
+    // Função para carregar tarefas recentes
     function loadRecentTasks() {
-        $.get("{% url 'get_celery_tasks' %}", function(data) {
+        $.get("{% url 'get_celery_tasks' %}", function(data) { // Use a tag de URL Django
             let tbody = $('#tasks-table tbody');
-            tbody.empty();
+            tbody.empty(); // Limpa a tabela antes de adicionar novas linhas
+            
             if (data.tasks && data.tasks.length > 0) {
                 data.tasks.forEach(task => {
-                    let receivedDate = task.received ? formatDate(task.received) : '-';
-                    let etaDate = task.eta ? formatDate(task.eta) : '-';
+                    // Formata datas para melhor leitura, tratando valores nulos/undefined
+                    let receivedDate = task.received ? new Date(task.received * 1000).toLocaleString() : '-'; // Se 'received' for timestamp UNIX
+                    if (String(task.received).includes("T")) { // Se for string ISO
+                         receivedDate = task.received ? new Date(task.received).toLocaleString() : '-';
+                    }
+                    
+                    let succeededDate = task.succeeded ? new Date(task.succeeded * 1000).toLocaleString() : '-'; // Se 'succeeded' for timestamp UNIX
+                     if (String(task.succeeded).includes("T")) { // Se for string ISO
+                         succeededDate = task.succeeded ? new Date(task.succeeded).toLocaleString() : '-';
+                    }
+
+
+                    // Limita o tamanho do ID da tarefa e dos argumentos para exibição
                     let taskIdShort = task.id ? String(task.id).substring(0, 8) + '...' : '-';
                     let taskArgsShort = task.args ? String(task.args).substring(0, 30) + (String(task.args).length > 30 ? '...' : '') : '-';
                     let taskResultShort = task.result ? String(task.result).substring(0, 30) + (String(task.result).length > 30 ? '...' : '') : '-';
-                    let workerName = task.worker || '-';
+
+
                     let row = `<tr>
                         <td title="${task.id || ''}">${taskIdShort}</td>
                         <td>${task.name || '-'}</td>
                         <td><span class="badge ${getStatusBadgeClass(task.status)}">${task.status || 'DESCONHECIDO'}</span></td>
-                        <td>${workerName}</td>
                         <td title="${task.received || ''}">${receivedDate}</td>
-                        <td title="${task.eta || ''}">${etaDate}</td>
-                        <td title="${task.args || ''}">${taskArgsShort}</td>
+                        <td title="${task.succeeded || ''}">${succeededDate}</td>
                         <td title="${task.result || ''}">${taskResultShort}</td>
-<td>
-    <div class="btn-group" role="group">
-        <button class="btn btn-sm btn-outline-info view-task-btn" data-task-id="${task.id}" title="Ver detalhes da tarefa">
-            <i class="bi bi-eye"></i>
-        </button>
-        <button class="btn btn-sm btn-outline-danger cancel-task-btn" data-task-id="${task.id}" title="Cancelar tarefa">
-            <i class="bi bi-x-circle"></i>
-        </button>
-        <button class="btn btn-sm btn-outline-warning retry-task-btn" data-task-id="${task.id}" title="Reexecutar tarefa">
-            <i class="bi bi-arrow-repeat"></i>
-        </button>
-        <button class="btn btn-sm btn-outline-secondary copy-id-btn" data-task-id="${task.id}" title="Copiar ID da tarefa">
-            <i class="bi bi-clipboard"></i>
-        </button>
-    </div>
-</td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-info view-task-btn" data-task-id="${task.id}" title="Ver detalhes da tarefa (ainda não implementado)">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </td>
                     </tr>`;
                     tbody.append(row);
                 });
             } else {
-                tbody.append('<tr><td colspan="9" class="text-center">Nenhuma tarefa encontrada.</td></tr>');
+                tbody.append('<tr><td colspan="7" class="text-center">Nenhuma tarefa encontrada.</td></tr>');
             }
         }).fail(function() {
             let tbody = $('#tasks-table tbody');
-            tbody.empty().append('<tr><td colspan="9" class="text-center">Erro ao carregar tarefas.</td></tr>');
+            tbody.empty().append('<tr><td colspan="7" class="text-center">Erro ao carregar tarefas.</td></tr>');
+            console.error("Erro ao buscar lista de tarefas Celery via /celery/tasks/");
         });
     }
-
+    
     function getStatusBadgeClass(status) {
         const map = {
             'SUCCESS': 'bg-success',
             'FAILURE': 'bg-danger',
-            'PENDING': 'bg-secondary',
+            'PENDING': 'bg-secondary', // Celery usa PENDING para tarefas que ainda não começaram
             'STARTED': 'bg-info',
             'RETRY': 'bg-warning text-dark',
-            'RECEIVED': 'bg-light text-dark',
-            'SCHEDULED': 'bg-primary'
+            'RECEIVED': 'bg-light text-dark', // Estado quando a tarefa é conhecida pelo worker mas ainda não iniciou
+            'SCHEDULED': 'bg-primary' // Se você estiver listando tarefas do i.scheduled()
         };
         return map[status] || 'bg-secondary';
     }
-
-    function formatDate(val) {
-        // Aceita timestamp UNIX ou string ISO
-        if (!val) return '-';
-        if (typeof val === 'number') return new Date(val * 1000).toLocaleString();
-        if (typeof val === 'string' && val.includes('T')) return new Date(val).toLocaleString();
-        return val;
-    }
-
+    
+    // Controles do worker
     $('#start-worker-btn').click(function() {
-        if (!confirm("Isso tentará abrir um novo terminal para iniciar o worker Celery. Deseja continuar?")) return;
+        if (!confirm("Isso tentará abrir um novo terminal para iniciar o worker Celery. Deseja continuar?")) {
+            return;
+        }
         $.ajax({
             url: "{% url 'start_celery_worker' %}",
             method: 'POST',
             headers: {'X-CSRFToken': '{{ csrf_token }}'},
             success: function(response) {
-                showToast(response.message || 'Comando para iniciar worker enviado.', response.status === 'success' ? 'success' : 'danger');
-                setTimeout(updateWorkerStatus, 3000);
+                if (response.status === 'success') {
+                    showToast(response.message || 'Comando para iniciar worker enviado. Verifique o novo terminal.', 'success');
+                    setTimeout(updateWorkerStatus, 3000); // Dá um tempo para o worker iniciar antes de atualizar o status
+                } else {
+                    showToast(response.message || 'Falha ao tentar iniciar worker.', 'danger');
+                }
             },
             error: function(xhr) {
                 let errorMsg = 'Erro na requisição para iniciar worker.';
-                if (xhr.responseJSON && xhr.responseJSON.message) errorMsg = xhr.responseJSON.message;
+                if (xhr.responseJSON && xhr.responseJSON.message) {
+                    errorMsg = xhr.responseJSON.message;
+                } else if (xhr.status === 403) {
+                    errorMsg = 'Erro 403: Forbidden. Verifique o token CSRF ou permissões.';
+                }
                 showToast(errorMsg, 'danger');
             }
         });
-    });
+    }); // <--- CHAVE DE FECHAMENTO FALTANTE AQUI
 
-    $('#stop-worker-btn').click(function() {
-        if (!confirm("Tem certeza que deseja tentar parar os workers Celery?")) return;
+    $('#stop-worker-btn').click(function() { // Adicionado o handler para o botão de parar
+        if (!confirm("Tem certeza que deseja tentar parar os workers Celery?")) {
+            return;
+        }
         $.ajax({
             url: "{% url 'stop_celery_worker' %}",
             method: 'POST',
             headers: {'X-CSRFToken': '{{ csrf_token }}'},
             success: function(response) {
-                showToast(response.message || 'Comando para parar workers enviado.', response.status === 'success' ? 'success' : 'warning');
-                setTimeout(updateWorkerStatus, 1000);
+                 if (response.status === 'success') {
+                    showToast(response.message || 'Comando para parar workers enviado.', 'success');
+                } else {
+                    showToast(response.message || 'Falha ao tentar parar workers.', 'warning');
+                }
+                setTimeout(updateWorkerStatus, 1000); // Atualiza o status após a tentativa de parada
             },
             error: function(xhr) {
                 let errorMsg = 'Erro na requisição para parar workers.';
-                if (xhr.responseJSON && xhr.responseJSON.message) errorMsg = xhr.responseJSON.message;
+                if (xhr.responseJSON && xhr.responseJSON.message) {
+                    errorMsg = xhr.responseJSON.message;
+                }
                 showToast(errorMsg, 'danger');
             }
         });
     });
 
+    // Atualiza periodicamente
     updateWorkerStatus();
     loadRecentTasks();
-    setInterval(updateWorkerStatus, 7000);
-    setInterval(loadRecentTasks, 12000);
-
-    // Botões de ação por tarefa
-    $(document).on('click', '.cancel-task-btn', function() {
-        const taskId = $(this).data('task-id');
-        showToast('Função de cancelar tarefa ainda não implementada. ID: ' + taskId, 'warning');
-        // Aqui você pode conectar com endpoint AJAX para cancelar
-    });
-    $(document).on('click', '.retry-task-btn', function() {
-        const taskId = $(this).data('task-id');
-        showToast('Função de reexecutar tarefa ainda não implementada. ID: ' + taskId, 'info');
-        // Aqui você pode conectar com endpoint AJAX para reexecutar
-    });
-    $(document).on('click', '.copy-id-btn', function() {
-        const taskId = $(this).data('task-id');
-        navigator.clipboard.writeText(taskId).then(function() {
-            showToast('ID copiado para área de transferência!', 'success');
-        }, function() {
-            showToast('Falha ao copiar ID.', 'danger');
-        });
-    });
-    // ...existing code...
+    setInterval(updateWorkerStatus, 7000); // Aumentado intervalo para não sobrecarregar com 500
+    setInterval(loadRecentTasks, 12000); // Aumentado intervalo
+    
     function showToast(message, type) {
         const toastId = 'toast-' + new Date().getTime();
         let toastHtml = `
@@ -266,13 +241,16 @@ $(document).ready(function() {
                     <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
                 </div>
             </div>`;
+        
         $('body').append(toastHtml);
-        const toastElement = new bootstrap.Toast(document.getElementById(toastId));
+        const toastElement = new bootstrap.Toast(document.getElementById(toastId)); // Inicializa o toast do Bootstrap
         toastElement.show();
+        
+        // Remove o elemento do DOM após o toast desaparecer para evitar acúmulo
         document.getElementById(toastId).addEventListener('hidden.bs.toast', function () {
             this.remove();
         });
     }
-});
+}); 
 </script>
 {% endblock %}

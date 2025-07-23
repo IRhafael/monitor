@@ -9,34 +9,7 @@
 {% block content %}
 <div class="container-fluid">
     <h2 class="mb-4">Dashboard de Relatórios</h2>
-
-    <!-- Filtros -->
-    <form method="get" class="mb-3">
-        <div class="row g-2 align-items-end">
-            <div class="col-auto">
-                <label for="ano" class="form-label mb-0">Ano:</label>
-                <select name="ano" id="ano" class="form-select form-select-sm">
-                    <option value="">Todos</option>
-                    {% for a in anos_disponiveis %}
-                        <option value="{{ a }}" {% if ano == a|stringformat:'s' %}selected{% endif %}>{{ a }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="col-auto">
-                <label for="tipo" class="form-label mb-0">Tipo:</label>
-                <select name="tipo" id="tipo" class="form-select form-select-sm">
-                    <option value="">Todos</option>
-                    {% for t in tipos_disponiveis %}
-                        <option value="{{ t }}" {% if tipo_filtro == t %}selected{% endif %}>{{ t }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="col-auto">
-                <button type="submit" class="btn btn-sm btn-primary">Filtrar</button>
-            </div>
-        </div>
-    </form>
-
+    
     <!-- Cards Estatísticas -->
     <div class="row mb-4">
         <div class="col-md-3">

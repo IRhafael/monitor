@@ -16,23 +16,22 @@
 {% endblock %}
 
 {% block content %}
-<div class="card shadow-sm">
-    <div class="card-header d-flex justify-content-between align-items-center bg-primary text-white">
-        <h5 class="mb-0"><i class="bi bi-file-earmark-text me-2"></i>Documentos</h5>
-        <a href="#" class="btn btn-sm btn-light" data-bs-toggle="modal" data-bs-target="#uploadModal">
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5>Lista de Documentos</h5>
+        <a href="#" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#uploadModal">
             <i class="bi bi-plus"></i> Adicionar
         </a>
     </div>
     <div class="card-body">
         <div class="table-responsive">
-            <table class="table table-hover align-middle">
-                <thead class="table-light">
+            <table class="table table-hover">
+                <thead>
                     <tr>
                         <th>Título</th>
                         <th>Data</th>
                         <th>Status</th>
                         <th>Normas</th>
-                        <th>PDF</th>
                         <th>Ações</th>
                     </tr>
                 </thead>
@@ -40,60 +39,46 @@
                     {% for doc in documentos %}
                     <tr>
                         <td>
-                            <a href="#" data-bs-toggle="modal" data-bs-target="#docModal{{ doc.id }}" class="fw-bold text-primary">
+                            <a href="#" data-bs-toggle="modal" data-bs-target="#docModal{{ doc.id }}">
                                 {{ doc.titulo|truncatechars:40 }}
                             </a>
                         </td>
                         <td>{{ doc.data_publicacao|date:"d/m/Y" }}</td>
                         <td>
                             {% if doc.processado %}
-                                <span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Processado</span>
+                                <span class="badge bg-success">Processado</span>
                             {% else %}
-                                <span class="badge bg-warning text-dark"><i class="bi bi-hourglass-split me-1"></i>Pendente</span>
+                                <span class="badge bg-warning text-dark">Pendente</span>
                             {% endif %}
                         </td>
                         <td>
                             {% if doc.normas_relacionadas.count > 0 %}
-                                <span class="badge bg-info text-dark"><i class="bi bi-journal-text me-1"></i>{{ doc.normas_relacionadas.count }}</span>
+                                <span class="badge bg-info">{{ doc.normas_relacionadas.count }}</span>
                             {% else %}
                                 <span class="badge bg-secondary">0</span>
                             {% endif %}
                         </td>
                         <td>
-                            {% if doc.arquivo %}
-                                <a href="{{ doc.arquivo.url }}" target="_blank" class="btn btn-sm btn-outline-secondary" title="Ver PDF">
-                                    <i class="bi bi-file-earmark-pdf"></i>
-                                </a>
-                            {% else %}
-                                <span class="badge bg-light text-muted">N/A</span>
-                            {% endif %}
-                        </td>
-                        <td>
                             <div class="btn-group btn-group-sm" role="group">
-                                <a href="#" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#docModal{{ doc.id }}" title="Visualizar">
+                                <a href="#" class="btn btn-outline-primary" title="Ver">
                                     <i class="bi bi-eye"></i>
                                 </a>
-                                <a href="{% url 'detalhe_documento' doc.id %}" class="btn btn-outline-info" title="Detalhes">
-                                    <i class="bi bi-info-circle"></i>
+                                <a href="#" class="btn btn-outline-success" title="Processar">
+                                    <i class="bi bi-gear"></i>
                                 </a>
-                                <a href="{% url 'reprocessar_documento' doc.id %}" class="btn btn-outline-success" title="Reprocessar">
-                                    <i class="bi bi-arrow-repeat"></i>
-                                </a>
-                                <a href="{% url 'marcar_documento_irrelevante' doc.id %}" class="btn btn-outline-warning" title="Irrelevante">
-                                    <i class="bi bi-x-circle"></i>
-                                </a>
-                                <a href="{% url 'documento_excluir' doc.id %}" class="btn btn-outline-danger" title="Excluir" onclick="return confirm('Tem certeza que deseja excluir este documento?');">
+                                <a href="#" class="btn btn-outline-danger" title="Excluir">
                                     <i class="bi bi-trash"></i>
                                 </a>
                             </div>
                         </td>
                     </tr>
+                    
                     <!-- Modal para cada documento -->
                     <div class="modal fade" id="docModal{{ doc.id }}" tabindex="-1" aria-hidden="true">
                         <div class="modal-dialog modal-lg">
                             <div class="modal-content">
-                                <div class="modal-header bg-light">
-                                    <h5 class="modal-title"><i class="bi bi-file-earmark-text me-2"></i>{{ doc.titulo }}</h5>
+                                <div class="modal-header">
+                                    <h5 class="modal-title">{{ doc.titulo }}</h5>
                                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                                 </div>
                                 <div class="modal-body">
@@ -102,9 +87,9 @@
                                             <p><strong>Data de Publicação:</strong> {{ doc.data_publicacao|date:"d/m/Y" }}</p>
                                             <p><strong>Status:</strong> 
                                                 {% if doc.processado %}
-                                                    <span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Processado</span>
+                                                    <span class="badge bg-success">Processado</span>
                                                 {% else %}
-                                                    <span class="badge bg-warning text-dark"><i class="bi bi-hourglass-split me-1"></i>Pendente</span>
+                                                    <span class="badge bg-warning text-dark">Pendente</span>
                                                 {% endif %}
                                             </p>
                                         </div>
@@ -115,6 +100,7 @@
                                             <p><strong>Normas Relacionadas:</strong> {{ doc.normas_relacionadas.count }}</p>
                                         </div>
                                     </div>
+                                    
                                     <div class="mb-3">
                                         <h6>Resumo:</h6>
                                         <div class="card card-body bg-light">
@@ -125,6 +111,7 @@
                                             {% endif %}
                                         </div>
                                     </div>
+                                    
                                     <div class="mb-3">
                                         <h6>Normas Identificadas:</h6>
                                         <div class="d-flex flex-wrap gap-2">
@@ -135,32 +122,23 @@
                                             {% endfor %}
                                         </div>
                                     </div>
-                                    <div class="mb-3">
-                                        <h6>PDF do Documento:</h6>
-                                        {% if doc.arquivo %}
-                                            <a href="{{ doc.arquivo.url }}" target="_blank" class="btn btn-outline-secondary">
-                                                <i class="bi bi-file-earmark-pdf"></i> Visualizar PDF
-                                            </a>
-                                        {% else %}
-                                            <span class="badge bg-light text-muted">Nenhum PDF disponível</span>
-                                        {% endif %}
-                                    </div>
                                 </div>
                                 <div class="modal-footer">
                                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Fechar</button>
-                                    <a href="{% url 'detalhe_documento' doc.id %}" class="btn btn-primary">Ver Documento Completo</a>
+                                    <a href="#" class="btn btn-primary">Ver Documento Completo</a>
                                 </div>
                             </div>
                         </div>
                     </div>
                     {% empty %}
                     <tr>
-                        <td colspan="6" class="text-center">Nenhum documento encontrado</td>
+                        <td colspan="5" class="text-center">Nenhum documento encontrado</td>
                     </tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
+        
         <!-- Paginação -->
         <nav aria-label="Page navigation">
             <ul class="pagination justify-content-center">

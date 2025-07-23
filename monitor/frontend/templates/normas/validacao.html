@@ -3,7 +3,6 @@
 {% block page_title %}Gestão de Normas{% endblock %}
 
 {% block content %}
-<div id="toastContainer" class="position-fixed bottom-0 end-0 p-3" style="z-index: 9999;"></div>
 <div class="row">
     <div class="col-md-12">
         <div class="card mb-4">
@@ -142,83 +141,46 @@ $(document).ready(function() {
         $('.norm-checkbox').prop('checked', this.checked);
     });
     
-    // Toast feedback
-    function showToast(message, type = 'success') {
-        const toastId = 'toast-' + Date.now();
-        const toastHtml = `<div id="${toastId}" class="toast align-items-center text-bg-${type} border-0 mb-2" role="alert" aria-live="assertive" aria-atomic="true">
-            <div class="d-flex">
-                <div class="toast-body">${message}</div>
-                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Fechar"></button>
-            </div>
-        </div>`;
-        $('#toastContainer').append(toastHtml);
-        const toastEl = document.getElementById(toastId);
-        const toast = new bootstrap.Toast(toastEl, { delay: 3500 });
-        toast.show();
-        toastEl.addEventListener('hidden.bs.toast', function() {
-            toastEl.remove();
-        });
-    }
-
     // Verificação individual
     $('.verify-btn').click(function() {
-        const btn = $(this);
-        const normaId = btn.data('norma-id');
-        btn.prop('disabled', true).attr('aria-disabled', 'true').html('<span class="spinner-border spinner-border-sm"></span>');
-        $.ajax({
-            url: '/normas/verify-batch/',
-            method: 'POST',
-            data: {ids: [normaId]},
-            traditional: true,
-            success: function(response) {
-                if(response.success) {
-                    showToast('Norma verificada com sucesso!', 'success');
-                    setTimeout(() => location.reload(), 1200);
-                } else {
-                    showToast('Erro: ' + (response.error || 'Desconhecido'), 'danger');
-                    btn.prop('disabled', false).attr('aria-disabled', 'false').html('<i class="bi bi-check-circle"></i>');
-                }
-            },
-            error: function() {
-                showToast('Erro ao verificar norma', 'danger');
-                btn.prop('disabled', false).attr('aria-disabled', 'false').html('<i class="bi bi-check-circle"></i>');
-            }
-        });
+        const normaId = $(this).data('norma-id');
+        verifyNorm([normaId]);
     });
-
+    
     // Verificação em lote
     $('#verify-all-btn').click(function() {
         const selectedIds = $('.norm-checkbox:checked').map(function() {
             return $(this).data('norma-id');
         }).get();
+        
         if (selectedIds.length === 0) {
-            showToast('Selecione pelo menos uma norma para verificar', 'warning');
+            alert('Selecione pelo menos uma norma para verificar');
             return;
         }
+        
         if (confirm(`Deseja verificar ${selectedIds.length} norma(s) selecionada(s)?`)) {
-            const btn = $(this);
-            btn.prop('disabled', true).attr('aria-disabled', 'true').html('<span class="spinner-border spinner-border-sm"></span> Verificando...');
-            $.ajax({
-                url: '/normas/verify-batch/',
-                method: 'POST',
-                data: {ids: selectedIds},
-                traditional: true,
-                success: function(response) {
-                    if(response.success) {
-                        showToast('Normas verificadas com sucesso!', 'success');
-                        setTimeout(() => location.reload(), 1200);
-                    } else {
-                        showToast('Erro: ' + (response.error || 'Desconhecido'), 'danger');
-                        btn.prop('disabled', false).attr('aria-disabled', 'false').html('<i class="bi bi-check-all"></i> Verificar Todas');
-                    }
-                },
-                error: function() {
-                    showToast('Erro ao verificar normas', 'danger');
-                    btn.prop('disabled', false).attr('aria-disabled', 'false').html('<i class="bi bi-check-all"></i> Verificar Todas');
-                }
-            });
+            verifyNorm(selectedIds);
         }
     });
+    
+    function verifyNorm(ids) {
+        $.ajax({
+            url: '/normas/verify-batch/',
+            method: 'POST',
+            data: {ids: ids},
+            traditional: true,
+            beforeSend: function() {
+                // Mostrar loading
+            },
+            success: function(response) {
+                // Atualizar a tabela ou mostrar mensagem de sucesso
+                location.reload();
+            },
+            error: function() {
+                alert('Erro ao verificar normas');
+            }
+        });
+    }
     
     // Aplicar filtros
     $('#filter-form').submit(function(e) {
