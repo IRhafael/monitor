@@ -33,7 +33,7 @@
             <hr>
             <h6 class="mb-2">Resumo</h6>
             <div class="bg-light p-3 rounded border mb-3">
-                {{ documento.resumo|default:"(sem resumo disponível)" }}
+                {{ resumo|default:"(sem resumo disponível)"|linebreaksbr }}
             </div>
             {% if documento.arquivo %}
             <a href="{{ documento.arquivo.url }}" class="btn btn-primary" target="_blank">

@@ -236,7 +236,12 @@ def upload_documento(request):
 @login_required
 def detalhe_documento(request, pk):
     documento = get_object_or_404(Documento, pk=pk)
-    return render(request, 'documentos/detalhe.html', {'documento': documento})
+    # Garante que o campo 'resumo' passado para o template seja o resumo gerado pela IA
+    resumo = getattr(documento, 'resumo_ia', None)
+    return render(request, 'documentos/detalhe.html', {
+        'documento': documento,
+        'resumo': resumo
+    })
 
 @login_required
 def editar_documento(request, pk):
@@ -816,7 +821,7 @@ def verificar_normas_view(request): # Renomeada de verificar_todas_normas_sefaz_
         except Exception as e:
             logger.error(f"Erro ao disparar tarefa de verificação SEFAZ: {e}", exc_info=True)
             messages.error(request, f"Erro ao iniciar tarefa de verificação SEFAZ: {str(e)}")
-        return redirect('dashboard_vigencia') 
+        return redirect('dashboard') 
     
     # A lógica GET original para mostrar informações sobre a última execução pode ser mantida
     ultima_execucao = LogExecucao.objects.filter(tipo_execucao='VERIFICACAO_SEFAZ').order_by('-data_inicio').first()

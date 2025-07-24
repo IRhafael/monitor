@@ -234,8 +234,8 @@ class Documento(models.Model):
         related_name='documentos',
         verbose_name="Normas Relacionadas"
     )
-    assunto = models.CharField(max_length=255, blank=True, null=True)
-    impacto_fiscal = models.CharField(max_length=255, blank=True, null=True, verbose_name="Impacto Fiscal")
+    assunto = models.CharField(max_length=500, blank=True, null=True)
+    impacto_fiscal = models.CharField(max_length=500, blank=True, null=True, verbose_name="Impacto Fiscal")
 
     # --- NOVOS CAMPOS ADICIONADOS AO DOCUMENTO ---
     TIPO_DOC_CHOICES = [
