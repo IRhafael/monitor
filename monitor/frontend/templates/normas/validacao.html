@@ -7,6 +7,7 @@
     <div class="card shadow-sm border-0 mb-4">
         <div class="card-header bg-gradient bg-info text-white d-flex justify-content-between align-items-center">
             <h4 class="mb-0"><i class="bi bi-shield-check me-2"></i>Normas para Validação</h4>
+            <span class="badge bg-primary fs-6">Total: {{ normas.count }}</span>
             <div>
                 <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#filterModal">
                     <i class="bi bi-funnel"></i> Filtrar
@@ -22,6 +23,12 @@
                 </form>
             </div>
         </div>
+        {% if status %}
+        <div class="alert alert-info d-flex align-items-center" role="alert">
+            <i class="bi bi-info-circle me-2"></i>
+            <span>{{ status }}</span>
+        </div>
+        {% endif %}
         <div class="card-body">
             <div class="table-responsive">
                 <table class="table table-hover align-middle table-bordered table-striped" id="norms-table">

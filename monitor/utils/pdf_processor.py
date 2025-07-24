@@ -393,8 +393,16 @@ class PDFProcessor:
             if tipo_normalizado not in valid_tipos:
                 logger.warning(f"Tipo de norma '{tipo_bruto}' normalizado para '{tipo_normalizado}' não é um TIPO_CHOICES válido. Marcando como OUTROS ou ignorando. Número: {numero_padronizado}")
             if numero_padronizado:
+                # Remove ano duplicado do número se já estiver presente
+                # Corrige duplicidade de ano: só adiciona o ano se não estiver presente no final
                 if ano_norma:
-                    normas_encontradas_set.add((tipo_normalizado, f"{numero_padronizado}/{ano_norma}"))
+                    # Se o número já termina com /ano, não adiciona novamente
+                    if re.search(rf'/({ano_norma})$', numero_padronizado):
+                        normas_encontradas_set.add((tipo_normalizado, numero_padronizado))
+                    else:
+                        # Remove qualquer ano no final antes de adicionar
+                        numero_sem_ano = re.sub(r'/\d{4}$', '', numero_padronizado)
+                        normas_encontradas_set.add((tipo_normalizado, f"{numero_sem_ano}/{ano_norma}"))
                 else:
                     normas_encontradas_set.add((tipo_normalizado, numero_padronizado))
             else:
@@ -416,12 +424,6 @@ class PDFProcessor:
         logger.info(f"Extração por regex encontrou {len(normas_encontradas_set)} normas únicas.") #
         return list(normas_encontradas_set) #
 
-    def _identificar_relevancia_geral(self, texto: str) -> int: # Não usado ativamente
-        if self.nlp is None or self.matcher is None: #
-            logger.error("NLP model or Matcher not initialized in _identificar_relevancia_geral.") #
-            return 0 #
-        return 0 #
-
 
 
     def is_relevante_contabil(self, texto: str, termos_monitorados: Optional[List[str]] = None) -> bool:
@@ -439,12 +441,13 @@ class PDFProcessor:
                     variacoes.extend([v.strip() for v in termo.variacoes.split(",") if v.strip()])
             termos_monitorados.extend(variacoes)
 
+        # Busca direta por termos monitorados e variações
         for termo in termos_monitorados:
             if termo.lower() in texto_lower:
                 logger.debug(f"Documento relevante encontrado pelo termo monitorado: {termo}")
                 return True
 
-        # Se não encontrou por termo, pode usar IA como fallback
+        # Fallback IA
         if self.claude_processor and self.claude_processor.client:
             logger.debug("Nenhum termo monitorado encontrado. Consultando IA (Claude)...")
             system_prompt_relevancia = "Você é um classificador especialista em identificar a relevância de documentos para as áreas contábil e fiscal."
@@ -565,35 +568,30 @@ class PDFProcessor:
                     continue #
 
 
-            relevante_contabil = self.is_relevante_contabil(texto) #
-            documento.relevante_contabil = relevante_contabil #
-            documento.assunto = "Contábil/Fiscal" if relevante_contabil else "Geral" #
-            
-            termos_monitorados_ativos = list(TermoMonitorado.objects.filter(ativo=True, tipo='TEXTO').values_list('termo', flat=True)) #
 
+            termos_monitorados_ativos = list(TermoMonitorado.objects.filter(ativo=True, tipo='TEXTO').values_list('termo', flat=True))
+            relevante_contabil = self.is_relevante_contabil(texto, termos_monitorados_ativos)
+            documento.relevante_contabil = relevante_contabil
+            documento.assunto = "Contábil/Fiscal" if relevante_contabil else "Geral"
 
-            if relevante_contabil: #
-                logger.info(f"Documento ID {documento.id} é relevante. Prosseguindo com análise IA detalhada.") #
-                # Agora as chamadas usam os parágrafos relevantes primeiramente
-                paragrafos_relevantes = self.claude_processor._extrair_paragrafos_relevantes(texto) #
-
-                documento.resumo_ia = self.claude_processor.gerar_resumo_contabil(paragrafos_relevantes, termos_monitorados_ativos) #
-                documento.sentimento_ia = self.claude_processor.analisar_sentimento_contabil(paragrafos_relevantes) #
-                # O campo no modelo é impacto_fiscal
-                impacto_fiscal_texto = self.claude_processor.identificar_impacto_fiscal(paragrafos_relevantes, termos_monitorados_ativos) #
-                documento.impacto_fiscal = impacto_fiscal_texto[:9999] if impacto_fiscal_texto else None  # Ajustado para o campo impacto_fiscal e limite
-                
-                documento.metadata = { #
-                    'ia_modelo_usado': self.claude_processor.default_model, #
-                    'ia_relevancia_justificativa': "Analisado como relevante pela IA e/ou termos monitorados." if relevante_contabil else "Não relevante.", #
-                    'ia_pontos_criticos': ["Verificar detalhes no resumo e impacto fiscal gerados pela IA."] if relevante_contabil else [] #
-                } #
-            else: #
-                logger.info(f"Documento ID {documento.id} NÃO é relevante. Análise IA detalhada pulada.") #
-                documento.resumo_ia = "Documento não classificado como relevante para análise contábil/fiscal detalhada." #
-                documento.sentimento_ia = "NEUTRO" #
-                documento.impacto_fiscal = "Não aplicável." #
-                documento.metadata = {'ia_relevancia_justificativa': "Analisado como não relevante após verificação inicial e/ou IA."} #
+            if relevante_contabil:
+                logger.info(f"Documento ID {documento.id} é relevante. Prosseguindo com análise IA detalhada.")
+                paragrafos_relevantes = self._extrair_paragrafos_relevantes(texto)
+                documento.resumo_ia = self.claude_processor.gerar_resumo_contabil(paragrafos_relevantes, termos_monitorados_ativos)
+                documento.sentimento_ia = self.claude_processor.analisar_sentimento_contabil(paragrafos_relevantes)
+                impacto_fiscal_texto = self.claude_processor.identificar_impacto_fiscal(paragrafos_relevantes, termos_monitorados_ativos)
+                documento.impacto_fiscal = impacto_fiscal_texto[:9999] if impacto_fiscal_texto else None
+                documento.metadata = {
+                    'ia_modelo_usado': self.claude_processor.default_model,
+                    'ia_relevancia_justificativa': "Analisado como relevante pela IA e/ou termos monitorados.",
+                    'ia_pontos_criticos': ["Verificar detalhes no resumo e impacto fiscal gerados pela IA."]
+                }
+            else:
+                logger.info(f"Documento ID {documento.id} NÃO é relevante. Análise IA detalhada pulada.")
+                documento.resumo_ia = "Documento não classificado como relevante para análise contábil/fiscal detalhada."
+                documento.sentimento_ia = "NEUTRO"
+                documento.impacto_fiscal = "Não aplicável."
+                documento.metadata = {'ia_relevancia_justificativa': "Analisado como não relevante após verificação inicial e/ou IA."}
 
             documento.processado = True #
             documento.data_processamento = timezone.now() #

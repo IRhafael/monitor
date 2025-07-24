@@ -55,69 +55,76 @@ inspector = app.control.inspect()
 
 logger = logging.getLogger(__name__)
 
-@login_required
-def dashboard(request):
-    # Estatísticas para o dashboard
+
+# Helpers para agregação de dados do dashboard
+def get_dashboard_data():
     total_documentos = Documento.objects.count()
-    documentos_recentes = Documento.objects.order_by('-data_publicacao')[:5]
+    documentos_recentes = Documento.objects.only('id', 'titulo', 'data_publicacao').order_by('-data_publicacao')[:5]
     total_normas = NormaVigente.objects.count()
-    
-    # Normas que precisam de verificação (ex: não verificadas ou verificadas há mais de 30 dias)
     normas_para_verificar = NormaVigente.objects.filter(
         Q(data_verificacao__isnull=True) | Q(data_verificacao__lt=timezone.now() - timedelta(days=30))
-    ).order_by('-data_cadastro')[:5]
-
-    context = {
+    ).only('id', 'tipo', 'numero', 'data_cadastro').order_by('-data_cadastro')[:5]
+    return {
         'total_documentos': total_documentos,
         'documentos_recentes': documentos_recentes,
         'total_normas': total_normas,
         'normas_para_verificar': normas_para_verificar,
     }
-    return render(request, 'dashboard.html', context)
 
-
-@login_required
-def dashboard_vigencia(request):
-    # Calcula a data de 7 dias atrás e 30 dias atrás e 90 dias atrás
+def get_normas_vigencia_data():
     sete_dias_atras = timezone.now() - timedelta(days=7)
     trinta_dias_atras = timezone.now() - timedelta(days=30)
     noventa_dias_atras = timezone.now() - timedelta(days=90)
-    normas = NormaVigente.objects.annotate(
-        dias_desde_verificacao=ExpressionWrapper(
-            timezone.now() - F('data_verificacao'),
-            output_field=DurationField()
-        )
-    ).order_by('situacao', 'dias_desde_verificacao') # Mantém a ordenação se desejar
-
-    context = {
+    normas = NormaVigente.objects.all()
+    return {
         'normas': normas,
-        # Filtra normas verificadas nos últimos 7 dias (excluindo nulas)
-        'recentemente_verificadas': normas.filter(
-            data_verificacao__gte=sete_dias_atras
-        ),
-        'para_verificar': normas.filter(
-            Q(data_verificacao__isnull=True) | Q(data_verificacao__lte=trinta_dias_atras)
-        ),
-        'alertas': normas.filter(
-            Q(data_verificacao__isnull=True) | Q(data_verificacao__lte=noventa_dias_atras)
-        ),
+        'recentemente_verificadas': normas.filter(data_verificacao__gte=sete_dias_atras),
+        'para_verificar': normas.filter(Q(data_verificacao__isnull=True) | Q(data_verificacao__lte=trinta_dias_atras)),
+        'alertas': normas.filter(Q(data_verificacao__isnull=True) | Q(data_verificacao__lte=noventa_dias_atras)),
     }
+
+@login_required
+def dashboard(request):
+    # Junta dados de documentos e normas em um único contexto
+    dashboard_data = get_dashboard_data()
+    normas_vigencia_data = get_normas_vigencia_data()
+    context = {**dashboard_data, **normas_vigencia_data}
     return render(request, 'dashboard.html', context)
 
 
 @login_required
 def analise_documentos(request):
-    documentos = Documento.objects.filter(processado=False).order_by('-data_publicacao')
+    # Queryset otimizado: busca apenas campos essenciais
+    documentos = Documento.objects.filter(processado=False).only('id', 'titulo', 'data_publicacao', 'relevante_contabil').order_by('-data_publicacao')
+
+    # Preparar contexto para expansão futura
+    total_pendentes = documentos.count()
+    # Exemplo: status para exibir alertas ou mensagens no template
+    status = None
+    if total_pendentes == 0:
+        status = 'Nenhum documento pendente para análise.'
+
     context = {
-        'documentos': documentos
+        'documentos': documentos,
+        'total_pendentes': total_pendentes,
+        'status': status,
     }
     return render(request, 'processamento/analise.html', context)
 
 @login_required
 def resultados_analise(request):
-    documentos = Documento.objects.filter(processado=True).order_by('-data_publicacao')
+    # Queryset otimizado: busca apenas campos essenciais
+    documentos = Documento.objects.filter(processado=True).only('id', 'titulo', 'data_publicacao', 'relevante_contabil').order_by('-data_publicacao')
+
+    total_resultados = documentos.count()
+    status = None
+    if total_resultados == 0:
+        status = 'Nenhum documento processado encontrado.'
+
     context = {
-        'documentos': documentos
+        'documentos': documentos,
+        'total_resultados': total_resultados,
+        'status': status,
     }
     return render(request, 'processamento/resultados.html', context)
 
@@ -308,65 +315,107 @@ def normas_revogadas(request):
     }
     return render(request, 'normas/normas_revogadas.html', context)
 
+
+@login_required
 def norma_historico(request, pk):
-    norma = get_object_or_404(NormaVigente, pk=pk)
-    return render(request, 'normas/historico.html', {'norma': norma})
+    try:
+        norma = get_object_or_404(NormaVigente, pk=pk)
+        # Buscar logs de execução relacionados à verificação desta norma
+        logs_verificacao = LogExecucao.objects.filter(
+            tipo_execucao='VERIFICACAO_SEFAZ',
+            detalhes__contains={'norma_id': norma.id}
+        ).order_by('-data_inicio')
+        context = {
+            'norma': norma,
+            'logs_verificacao': logs_verificacao,
+        }
+        return render(request, 'normas/historico.html', context)
+    except Exception as e:
+        logger.error(f"Erro ao buscar histórico da norma {pk}: {e}", exc_info=True)
+        messages.error(request, f"Erro ao buscar histórico da norma: {str(e)}")
+        return redirect('validacao_normas')
 
 @login_required
 def adicionar_norma(request):
-
+    # from .forms import NormaVigenteForm # Descomente e crie este formulário para uso futuro
+    form = None
+    sucesso = False
+    erro = None
     if request.method == 'POST':
-
+        # Se o formulário existir, processe aqui
+        # form = NormaVigenteForm(request.POST)
+        # if form.is_valid():
+        #     form.save()
+        #     messages.success(request, "Norma adicionada com sucesso!")
+        #     sucesso = True
+        # else:
+        #     erro = "Erro ao adicionar norma. Verifique os dados informados."
         messages.error(request, "Funcionalidade de adicionar norma manual não implementada.")
+        erro = "Funcionalidade de adicionar norma manual não implementada."
         return redirect('validacao_normas')
-    return render(request, 'normas/adicionar_norma.html', {}) # Criar template
+    context = {
+        'form': form,
+        'sucesso': sucesso,
+        'erro': erro,
+    }
+    return render(request, 'normas/adicionar_norma.html', context)
 
 # Uma view para detalhe de uma norma específica
 @login_required
 def detalhe_norma(request, pk):
-    norma = get_object_or_404(NormaVigente, pk=pk)
-    context = {
-        'norma': norma
-    }
-    return render(request, 'normas/detalhe_norma.html', context)
+    try:
+        norma = get_object_or_404(NormaVigente, pk=pk)
+        # Preparar contexto para expansão futura (mensagens, logs, etc)
+        contexto = {
+            'norma': norma,
+            'mensagem': None,
+        }
+        return render(request, 'normas/detalhe_norma.html', contexto)
+    except Exception as e:
+        logger.error(f"Erro ao buscar detalhe da norma {pk}: {e}", exc_info=True)
+        messages.error(request, f"Erro ao buscar detalhe da norma: {str(e)}")
+        return redirect('validacao_normas')
 
 # Exemplo de view para marcar um documento como irrelevante (se for uma ação manual)
 @login_required
 def marcar_documento_irrelevante(request, pk):
-    if request.method == 'POST':
-        documento = get_object_or_404(Documento, pk=pk)
-        documento.relevante_contabil = False
-        documento.processado = True # Marcar como processado para não ser reprocessado
-        documento.save()
-        messages.info(request, f"Documento '{documento.titulo}' marcado como irrelevante.")
-        return redirect('analise_documentos') # Ou para onde for mais adequado
-    return Http404("Método não permitido.")
+    try:
+        if request.method == 'POST':
+            documento = get_object_or_404(Documento, pk=pk)
+            documento.relevante_contabil = False
+            documento.processado = True # Marcar como processado para não ser reprocessado
+            documento.save()
+            messages.info(request, f"Documento '{documento.titulo}' marcado como irrelevante.")
+            return redirect('analise_documentos') # Ou para onde for mais adequado
+        else:
+            messages.error(request, "Método não permitido. Esta ação requer um POST.")
+            return redirect('analise_documentos')
+    except Exception as e:
+        logger.error(f"Erro ao marcar documento {pk} como irrelevante: {e}", exc_info=True)
+        messages.error(request, f"Erro ao marcar documento como irrelevante: {str(e)}")
+        return redirect('analise_documentos')
 
 
 @login_required
 def reprocessar_documento(request, pk):
-    documento = get_object_or_404(Documento, pk=pk)
-    if request.method == 'POST':
-        try:
-
+    try:
+        documento = get_object_or_404(Documento, pk=pk)
+        if request.method == 'POST':
             documento.processado = False
             documento.save()
-            
             processamento_task_info = processar_documentos_pendentes_task.delay()
-            
             messages.success(request, 
                 f"Documento '{documento.titulo}' (ID: {pk}) agendado para reprocessamento. "
                 f"ID da tarefa: {processamento_task_info.id}"
             )
-        except Exception as e:
-            logger.error(f"Erro ao agendar reprocessamento do documento {documento.pk}: {e}", exc_info=True)
-            messages.error(request, f"Erro ao agendar reprocessamento: {str(e)}")
-        
-        return redirect('detalhe_documento', pk=pk) # Redireciona de volta para a página de detalhes do documento
-    
-    # Se a requisição não for POST, redireciona ou mostra uma mensagem de erro
-    messages.error(request, "Método não permitido para reprocessamento direto.")
-    return redirect('detalhe_documento', pk=pk)
+            return redirect('detalhe_documento', pk=pk)
+        else:
+            messages.error(request, "Método não permitido para reprocessamento direto.")
+            return redirect('detalhe_documento', pk=pk)
+    except Exception as e:
+        logger.error(f"Erro ao reprocessar documento {pk}: {e}", exc_info=True)
+        messages.error(request, f"Erro ao reprocessar documento: {str(e)}")
+        return redirect('detalhe_documento', pk=pk)
 
 
 # Exemplo de uma view para exibir logs de execução

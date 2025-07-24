@@ -1,0 +1,36 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2>Editar Documento</h2>
+    {% if messages %}
+        <div class="mt-3">
+            {% for message in messages %}
+                <div class="alert alert-{{ message.tags }}" role="alert">
+                    {{ message }}
+                </div>
+            {% endfor %}
+        </div>
+    {% endif %}
+    <form method="post">
+        {% csrf_token %}
+        <div class="mb-3">
+            <label for="titulo" class="form-label">Título</label>
+            <input type="text" class="form-control" id="titulo" name="titulo" value="{{ documento.titulo }}" readonly>
+        </div>
+        <div class="mb-3">
+            <label for="data_publicacao" class="form-label">Data de Publicação</label>
+            <input type="text" class="form-control" id="data_publicacao" name="data_publicacao" value="{{ documento.data_publicacao|date:'d/m/Y' }}" readonly>
+        </div>
+        <div class="form-check mb-3">
+            <input class="form-check-input" type="checkbox" id="relevante_contabil" name="relevante_contabil" {% if documento.relevante_contabil %}checked{% endif %}>
+            <label class="form-check-label" for="relevante_contabil">
+                Relevante para Contabilidade
+            </label>
+        </div>
+        <button type="submit" class="btn btn-primary">Salvar Alterações</button>
+        <a href="{% url 'detalhe_documento' documento.pk %}" class="btn btn-secondary ms-2">Cancelar</a>
+    </form>
+</div>
+{% endblock %}

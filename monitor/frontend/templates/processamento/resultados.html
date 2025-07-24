@@ -4,7 +4,14 @@
 <div class="container mt-4">
     <div class="d-flex justify-content-between align-items-center mb-4">
         <h2><i class="bi bi-bar-chart-steps me-2"></i>Resultados da Análise</h2>
+        <span class="badge bg-primary fs-6">Total: {{ total_resultados }}</span>
     </div>
+    {% if status %}
+    <div class="alert alert-info d-flex align-items-center" role="alert">
+        <i class="bi bi-info-circle me-2"></i>
+        <span>{{ status }}</span>
+    </div>
+    {% endif %}
     <div class="card shadow-sm border-0">
         <div class="card-header bg-gradient bg-success text-white">
             <h5 class="mb-0"><i class="bi bi-file-earmark-check me-2"></i>Documentos Processados</h5>

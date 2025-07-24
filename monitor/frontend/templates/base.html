@@ -96,11 +96,6 @@
                             </a>
                         </li>
                         <li class="nav-item">
-                            <a class="nav-link {% if request.resolver_match.url_name == 'dashboard_vigencia' %}active{% endif %}" href="{% url 'dashboard_vigencia' %}">
-                                <i class="bi bi-hourglass-split"></i> Vigência
-                            </a>
-                        </li>
-                        <li class="nav-item">
                             <a class="nav-link {% if request.resolver_match.url_name == 'logs_execucao' %}active{% endif %}" href="{% url 'logs_execucao' %}">
                                 <i class="bi bi-list-columns-reverse"></i> Logs
                             </a>

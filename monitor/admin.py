@@ -105,7 +105,7 @@ class DocumentoAdmin(admin.ModelAdmin):
             return '-'
         color = 'green' if obj.relevante_contabil else 'red'
         text = 'Sim' if obj.relevante_contabil else 'Não'
-        return format_html('<span style="color: {};">{}</span>', color, text)
+        return format_html('<span style="color: {}; font-weight: bold;">{}</span>', color, text)
     relevante_status.short_description = 'Relevante'
     relevante_status.admin_order_field = 'relevante_contabil'
 

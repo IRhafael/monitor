@@ -4,6 +4,13 @@
 {% block page_title %}Detalhes do Documento{% endblock %}
 
 {% block content %}
+    {% if messages %}
+        {% for message in messages %}
+            <div class="alert alert-{{ message.tags }} mt-3 mb-0 text-center">
+                <i class="bi bi-info-circle me-2"></i>{{ message }}
+            </div>
+        {% endfor %}
+    {% endif %}
 <div class="container mt-4">
     <div class="card shadow-sm border-0">
         <div class="card-header bg-gradient bg-primary text-white d-flex justify-content-between align-items-center">

@@ -4,7 +4,6 @@ from . import views
 urlpatterns = [
     # Dashboard e páginas principais
     path('', views.dashboard, name='dashboard'),
-    path('vigencia/', views.dashboard_vigencia, name='dashboard_vigencia'), # Movi para cá para agrupamento
 
     # Documentos
     # Adaptei 'documentos_list' para 'analise_documentos' que lista os não processados

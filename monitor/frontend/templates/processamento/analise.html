@@ -25,12 +25,24 @@
 {% endblock %}
 
 {% block content %}
+    {% if messages %}
+        {% for message in messages %}
+            <div class="alert alert-{{ message.tags }} mt-3 mb-0 text-center">
+                <i class="bi bi-info-circle me-2"></i>{{ message }}
+            </div>
+        {% endfor %}
+    {% endif %}
 <div class="container mt-4">
     <div class="card shadow-sm border-0">
         <div class="card-header bg-gradient bg-primary text-white d-flex justify-content-between align-items-center">
             <h4 class="mb-0"><i class="bi bi-search me-2"></i>Documentos para Análise</h4>
-            <span class="badge bg-info px-3 py-2">{{ documentos.count }} documentos</span>
+            <span class="badge bg-info px-3 py-2">{{ total_pendentes }} pendentes</span>
         </div>
+        {% if status %}
+        <div class="alert alert-warning mt-3 mb-0 text-center">
+            <i class="bi bi-info-circle me-2"></i>{{ status }}
+        </div>
+        {% endif %}
         <div class="card-body">
             <div class="table-responsive">
                 <table class="table table-hover align-middle table-bordered table-striped" id="documentsTable">
@@ -86,7 +98,7 @@
                         </tr>
                         {% empty %}
                         <tr>
-                            <td colspan="6" class="text-center text-muted">Nenhum documento encontrado</td>
+                            <td colspan="6" class="text-center text-muted">Nenhum documento pendente para análise</td>
                         </tr>
                         {% endfor %}
                     </tbody>
