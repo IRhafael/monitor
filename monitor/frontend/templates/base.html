@@ -71,42 +71,21 @@
                 <div class="position-sticky pt-3">
                     <ul class="nav flex-column">
                         <li class="nav-item">
-                            <a class="nav-link {% if request.resolver_match.url_name == 'dashboard' %}active{% endif %}" href="{% url 'dashboard' %}">
-                                <i class="bi bi-speedometer2"></i> Dashboard
+                            <a class="nav-link {% if request.resolver_match.url_name == 'home' %}active{% endif %}" href="{% url 'home' %}">
+                                <i class="bi bi-house"></i> Home
                             </a>
                         </li>
                         <li class="nav-item">
-                            <a class="nav-link {% if request.resolver_match.url_name == 'analise_documentos' %}active{% endif %}" href="{% url 'analise_documentos' %}">
-                                <i class="bi bi-file-earmark-pdf"></i> Documentos
+                            <a class="nav-link {% if request.resolver_match.url_name == 'upload_documento' %}active{% endif %}" href="{% url 'upload_documento' %}">
+                                <i class="bi bi-upload"></i> Upload Documento
                             </a>
                         </li>
                         <li class="nav-item">
-                            <a class="nav-link {% if request.resolver_match.url_name == 'validacao_normas' %}active{% endif %}" href="{% url 'validacao_normas' %}">
-                                <i class="bi bi-journal-text"></i> Normas
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link {% if request.resolver_match.url_name == 'dashboard_relatorios' %}active{% endif %}" href="{% url 'dashboard_relatorios' %}">
-                                <i class="bi bi-bar-chart"></i> Relatórios
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link {% if request.resolver_match.url_name == 'executar_coleta' %}active{% endif %}" href="{% url 'executar_coleta' %}">
-                                <i class="bi bi-cloud-arrow-down"></i> Coleta
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link {% if request.resolver_match.url_name == 'logs_execucao' %}active{% endif %}" href="{% url 'logs_execucao' %}">
-                                <i class="bi bi-list-columns-reverse"></i> Logs
+                            <a class="nav-link {% if request.resolver_match.url_name == 'coletar_dados_receita' %}active{% endif %}" href="{% url 'coletar_dados_receita' %}">
+                                <i class="bi bi-cloud-arrow-down"></i> Coletar Dados Receita
                             </a>
                         </li>
                     </ul>
-                    <hr>
-                    <div class="px-3">
-                        <a href="{% url 'executar_coleta' %}" class="btn btn-primary w-100 mb-2">
-                            <i class="bi bi-cloud-download"></i> Executar Coleta
-                        </a>
-                    </div>
                 </div>
             </div>
 
