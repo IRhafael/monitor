@@ -1,0 +1,86 @@
+
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Documentos Coletados</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background: #f7f7f7;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 800px;
+            margin: 40px auto;
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            padding: 32px 24px;
+        }
+        h2 {
+            color: #2c3e50;
+            margin-bottom: 18px;
+        }
+        .menu {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 24px;
+        }
+        .menu a {
+            background: #3498db;
+            color: #fff;
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+        .menu a:hover {
+            background: #217dbb;
+        }
+        ul {
+            list-style: none;
+            padding: 0;
+        }
+        li {
+            background: #f1f1f1;
+            margin-bottom: 8px;
+            padding: 10px 14px;
+            border-radius: 4px;
+            font-size: 1.05em;
+        }
+        .empty {
+            color: #888;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Documentos Coletados</h2>
+        <nav class="menu">
+            <a href="{% url 'upload_documento' %}">Upload de Documento</a>
+            <a href="{% url 'coletar_dados_receita_view' %}">Coletar Dados Receita</a>
+            <a href="{% url 'coletar_diario_oficial_view' %}">Coletar Diário Oficial</a>
+            <a href="{% url 'processar_documentos_view' %}">Processar Documentos</a>
+            <a href="{% url 'verificar_normas_sefaz_view' %}">Verificar Normas SEFAZ</a>
+            <a href="{% url 'gerar_relatorio_view' %}">Gerar Relatório</a>
+            <a href="{% url 'pipeline_manual_view' %}">Pipeline Manual</a>
+            <a href="{% url 'monitoramento_tasks' %}" style="background:#222;">Monitorar Tasks Celery</a>
+        </nav>
+        <hr>
+        {% if documentos %}
+            <ul>
+            {% for doc in documentos %}
+                <li>ID: {{ doc.id }} | Nome: {{ doc.nome }} | Data: {{ doc.data_upload }} </li>
+            {% endfor %}
+            </ul>
+        {% else %}
+            <p class="empty">Nenhum documento encontrado.</p>
+        {% endif %}
+    </div>
+</body>
+</html>

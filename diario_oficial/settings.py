@@ -48,7 +48,7 @@ ROOT_URLCONF = 'diario_oficial.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [BASE_DIR / 'monitor' / 'frontend' / 'templates'],  # Aqui, adiciona o caminho absoluto para a pasta de templates
+        'DIRS': [os.path.join(BASE_DIR, 'monitor', 'templates')],  # Compatível com Windows/Linux
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [

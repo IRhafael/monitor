@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitoramento de Tasks Celery</title>
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: #f7f7f7; margin: 0; padding: 0; }
+        .container { max-width: 900px; margin: 40px auto; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); padding: 32px 24px; }
+        h2 { color: #2c3e50; margin-bottom: 18px; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 18px; }
+        th, td { padding: 8px 10px; border-bottom: 1px solid #eee; text-align: left; }
+        th { background: #3498db; color: #fff; }
+        tr:nth-child(even) { background: #f9f9f9; }
+        .status-SUCCESS { color: #27ae60; font-weight: bold; }
+        .status-FAILURE, .status-REVOKED { color: #c0392b; font-weight: bold; }
+        .status-PENDING { color: #f39c12; font-weight: bold; }
+        .cmd-box { background: #f1f1f1; border-radius: 4px; padding: 10px; margin-bottom: 18px; font-size: 1em; }
+        .copy-btn { background: #3498db; color: #fff; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; margin-left: 8px; }
+        .copy-btn:hover { background: #217dbb; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Monitoramento de Tasks Celery</h2>
+        <div class="cmd-box">
+            <span>Comando para monitorar tasks no terminal:</span>
+            <code id="celery-cmd">celery -A diario_oficial worker -l info</code>
+            <button class="copy-btn" onclick="copyCmd()">Copiar comando</button>
+        </div>
+        <table>
+            <tr>
+                <th>ID</th>
+                <th>Nome</th>
+                <th>Status</th>
+                <th>Data</th>
+                <th>Resultado</th>
+            </tr>
+            {% for task in tasks %}
+            <tr>
+                <td>{{ task.task_id }}</td>
+                <td>{{ task.task_name }}</td>
+                <td class="status-{{ task.status }}">{{ task.status }}</td>
+                <td>{{ task.date_done|date:'d/m/Y H:i' }}</td>
+                <td><pre>{{ task.result|truncatechars:120 }}</pre></td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5">Nenhuma task encontrada.</td></tr>
+            {% endfor %}
+        </table>
+        <a href="{% url 'home' %}" style="color:#3498db;">&larr; Voltar</a>
+    </div>
+    <script>
+        function copyCmd() {
+            var cmd = document.getElementById('celery-cmd').innerText;
+            navigator.clipboard.writeText(cmd);
+        }
+    </script>
+</body>
+</html>

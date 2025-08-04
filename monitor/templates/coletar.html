@@ -1,0 +1,49 @@
+
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Coletar Dados Receita</title>
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: #f7f7f7; margin: 0; padding: 0; }
+        .container { max-width: 500px; margin: 40px auto; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); padding: 32px 24px; }
+        h2 { color: #2c3e50; margin-bottom: 18px; }
+        form { display: flex; flex-direction: column; gap: 12px; margin-bottom: 18px; }
+        label { font-weight: 500; color: #34495e; }
+        input[type="date"] { padding: 7px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 1em; }
+        button, a.btn-secondary { background: #3498db; color: #fff; border: none; padding: 10px 0; border-radius: 4px; font-size: 1.1em; cursor: pointer; text-align: center; text-decoration: none; transition: background 0.2s; margin-top: 8px; }
+        button:hover, a.btn-secondary:hover { background: #217dbb; }
+        a.btn-secondary { background: #7f8c8d; margin-left: 0; }
+        a.btn-secondary:hover { background: #56616a; }
+        .resultado { margin-top: 10px; }
+        .alert-success { background: #d4edda; color: #155724; border-radius: 4px; padding: 10px; }
+        .alert-danger { background: #f8d7da; color: #721c24; border-radius: 4px; padding: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Coletar Dados Receita</h2>
+        <form method="post">
+            {% csrf_token %}
+            <label for="data_receita">Data (opcional):</label>
+            <input type="date" name="data_receita" id="data_receita">
+            <button type="submit">Coletar</button>
+            <a href="{% url 'home' %}" class="btn-secondary">Voltar</a>
+        </form>
+        <div id="resultado" class="resultado"></div>
+    </div>
+    <script>
+        document.querySelector('form').onsubmit = function(e) {
+            e.preventDefault();
+            fetch('', {
+                method: 'POST',
+                body: new FormData(this),
+                headers: {'X-Requested-With': 'XMLHttpRequest'}
+            }).then(r => r.json()).then(data => {
+                document.getElementById('resultado').innerHTML = data.sucesso ? '<div class="alert-success">Coleta realizada com sucesso!</div>' : '<div class="alert-danger">Falha na coleta.</div>';
+            });
+        };
+    </script>
+</body>
+</html>

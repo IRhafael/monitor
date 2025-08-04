@@ -9,10 +9,10 @@ from django.db import transaction
 import traceback
 from django.db.models import Q, F # F não está sendo usado, pode remover
 from django.db.models.functions import Length
-from .diario_scraper import DiarioOficialScraper
-from .pdf_processor import PDFProcessor
+from .utils.diario_scraper import DiarioOficialScraper
+from .utils.pdf_processor import PDFProcessor
 from monitor.models import Documento, LogExecucao, NormaVigente
-from .sefaz_integracao import IntegradorSEFAZ
+from .utils.sefaz_integracao import IntegradorSEFAZ
 from celery.schedules import crontab
 from diario_oficial.celery import app
 from typing import List, Optional, Dict, Any # Any não está sendo usado, pode remover se não planeja
@@ -361,3 +361,4 @@ def verificar_normas_especificas_sefaz_task(self, norma_ids: List[int]): #
     logger.info(f"[{self.request.id}] Disparando verificação SEFAZ para IDs de norma específicos: {norma_ids}") #
     async_res = verificar_normas_sefaz_task.s(norma_ids=norma_ids).apply_async() #
     return {'status': 'DISPARADA', 'task_id': async_res.id} #
+
