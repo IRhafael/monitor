@@ -24,7 +24,6 @@ from selenium.webdriver.chrome.service import Service # Para inicializar o Chrom
 
 from bs4 import BeautifulSoup
 
-from monitor.models import Documento # Certifique-se que Documento está importado
 import traceback
 
 
@@ -364,7 +363,8 @@ class DiarioOficialScraper:
 
 
     # --- MÉTODO QUE ESTAVA FALTANDO E PRECISA SER ADICIONADO/CORRIGIDO ---
-    def coletar_e_salvar_documentos(self, data_inicio: date, data_fim: date) -> List[Documento]:
+    def coletar_e_salvar_documentos(self, data_inicio: date, data_fim: date):
+        from monitor.models import Documento
         """Versão modificada para filtrar por termos prioritários"""
         documentos_salvos = []
         current_date = data_inicio

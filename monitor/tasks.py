@@ -11,7 +11,7 @@ from django.db.models import Q, F # F não está sendo usado, pode remover
 from django.db.models.functions import Length
 from .utils.diario_scraper import DiarioOficialScraper
 from .utils.pdf_processor import PDFProcessor
-from monitor.models import Documento, LogExecucao, NormaVigente
+## ATENÇÃO: Importações de modelos Django devem ser feitas dentro das funções das tasks para evitar AppRegistryNotReady
 from .utils.sefaz_integracao import IntegradorSEFAZ
 from celery.schedules import crontab
 from diario_oficial.celery import app
@@ -39,9 +39,9 @@ app.conf.beat_schedule = { #
 
 
 # --- Tarefa de Coleta do Diário Oficial ---
-# ... (coletar_diario_oficial_task como na sua última versão ou na minha sugestão anterior)
 @shared_task(bind=True, max_retries=3, default_retry_delay=5 * 60) # Retry a cada 5 min #
 def coletar_diario_oficial_task(self, data_inicio_str: Optional[str] = None, data_fim_str: Optional[str] = None, dias_retroativos: Optional[int] = None): #
+    from monitor.models import LogExecucao
     task_id = self.request.id #
     log_entry = LogExecucao.objects.create(tipo_execucao='COLETA', status='INICIADA', detalhes={'task_id': task_id}) #
     logger.info(f"Tarefa Celery 'coletar_diario_oficial_task' [{task_id}] iniciada.") #
@@ -91,6 +91,7 @@ def coletar_diario_oficial_task(self, data_inicio_str: Optional[str] = None, dat
 # --- Tarefa de Processamento de Documentos Pendentes ---
 @shared_task(bind=True, max_retries=2, default_retry_delay=10*60)
 def processar_documentos_pendentes_task(self, previous_task_result: Optional[Dict] = None, document_ids: Optional[List[int]] = None): #
+    from monitor.models import LogExecucao, Documento
     task_id = self.request.id #
     log_entry = LogExecucao.objects.create(tipo_execucao='PROCESSAMENTO_PDF', status='INICIADA', detalhes={'task_id': task_id}) #
     logger.info(f"[{task_id}] Tarefa Celery 'processar_documentos_pendentes_task' iniciada.") #
@@ -183,9 +184,9 @@ def processar_documentos_pendentes_task(self, previous_task_result: Optional[Dic
 
 
 # --- Tarefa de Verificação de Normas na SEFAZ ---
-# ... (verificar_normas_sefaz_task como na sua última versão ou na minha sugestão anterior)
 @shared_task(bind=True, max_retries=2, default_retry_delay=15*60) #
 def verificar_normas_sefaz_task(self, norma_ids: Optional[List[int]] = None): #
+    from monitor.models import LogExecucao, NormaVigente
     task_id = self.request.id #
     log_entry = LogExecucao.objects.create(tipo_execucao='VERIFICACAO_SEFAZ', status='INICIADA', detalhes={'task_id': task_id}) #
     logger.info(f"[{task_id}] Tarefa Celery 'verificar_normas_sefaz_task' iniciada.") #
@@ -267,6 +268,7 @@ def verificar_normas_sefaz_task(self, norma_ids: Optional[List[int]] = None): #
 # --- Pipeline Completo de Coleta e Processamento ---
 @shared_task(bind=True, name="monitor.utils.tasks.pipeline_coleta_e_processamento_automatica") #
 def pipeline_coleta_e_processamento_automatica(self, dias_retroativos_coleta: int = 3): #
+    from monitor.models import LogExecucao
     pipeline_task_id = self.request.id #
     logger.info(f"[{pipeline_task_id}] Iniciando PIPELINE AUTOMÁTICO de coleta ({dias_retroativos_coleta} dias), processamento e verificação SEFAZ.") #
     
@@ -304,6 +306,7 @@ def pipeline_coleta_e_processamento_automatica(self, dias_retroativos_coleta: in
 
 @shared_task(bind=True, name="monitor.utils.tasks.pipeline_manual_completo") #
 def pipeline_manual_completo(self, data_inicio_str: str, data_fim_str: str): #
+    from monitor.models import LogExecucao
     pipeline_task_id = self.request.id #
     logger.info(f"[{pipeline_task_id}] Iniciando PIPELINE MANUAL de coleta (de {data_inicio_str} a {data_fim_str}), processamento e verificação SEFAZ.") #
     
@@ -361,4 +364,32 @@ def verificar_normas_especificas_sefaz_task(self, norma_ids: List[int]): #
     logger.info(f"[{self.request.id}] Disparando verificação SEFAZ para IDs de norma específicos: {norma_ids}") #
     async_res = verificar_normas_sefaz_task.s(norma_ids=norma_ids).apply_async() #
     return {'status': 'DISPARADA', 'task_id': async_res.id} #
+
+@shared_task(bind=True, max_retries=1, default_retry_delay=5*60)
+def gerar_relatorio_task(self, parametros: Optional[dict] = None):
+    from monitor.models import LogExecucao
+    from .utils.relatorio import gerar_relatorio_contabil_avancado
+    task_id = self.request.id
+    log_entry = LogExecucao.objects.create(tipo_execucao='RELATORIO', status='INICIADA', detalhes={'task_id': task_id})
+    logger.info(f"Tarefa Celery 'gerar_relatorio_task' [{task_id}] iniciada.")
+    try:
+        caminho_arquivo = gerar_relatorio_contabil_avancado()
+        if caminho_arquivo:
+            log_entry.status = 'SUCESSO'
+            log_entry.detalhes['caminho_arquivo'] = caminho_arquivo
+            log_entry.detalhes['message'] = 'Relatório gerado com sucesso.'
+        else:
+            log_entry.status = 'ERRO'
+            log_entry.detalhes['message'] = 'Falha ao gerar o relatório.'
+    except Exception as e:
+        logger.error(f"Erro ao gerar relatório: {e}", exc_info=True)
+        log_entry.status = 'ERRO'
+        log_entry.detalhes['erro_principal'] = str(e)
+        log_entry.detalhes['traceback'] = traceback.format_exc()
+    finally:
+        log_entry.data_fim = timezone.now()
+        log_entry.duracao = log_entry.data_fim - log_entry.data_inicio
+        log_entry.save()
+        logger.info(f"Tarefa Celery 'gerar_relatorio_task' [{task_id}] concluída. Status: {log_entry.status}. Detalhes: {log_entry.detalhes}")
+    return {'status': log_entry.status, 'detalhes': log_entry.detalhes}
 

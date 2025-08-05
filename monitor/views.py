@@ -126,8 +126,9 @@ def painel_tasks(request):
             res = verificar_normas_sefaz_task.delay()
             return JsonResponse({'status': 'Task disparada', 'result': f'Task ID: {res.id}'})
         elif tipo == 'gerar_relatorio':
-            # Aqui pode disparar uma task de relatório se existir
-            return JsonResponse({'status': 'Task não implementada', 'result': ''})
+            from monitor.tasks import gerar_relatorio_task
+            res = gerar_relatorio_task.delay()
+            return JsonResponse({'status': 'Task disparada', 'result': f'Task ID: {res.id}'})
         elif tipo == 'pipeline_manual':
             res = pipeline_manual_view.delay()
             return JsonResponse({'status': 'Task disparada', 'result': f'Task ID: {res.id}'})
