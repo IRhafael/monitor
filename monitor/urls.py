@@ -11,4 +11,5 @@ urlpatterns = [
     path('gerar-relatorio/', views.gerar_relatorio_view, name='gerar_relatorio_view'),
     path('pipeline-manual/', views.pipeline_manual_view, name='pipeline_manual_view'),
     path('monitoramento/', views.monitoramento_tasks, name='monitoramento_tasks'),
+    path('painel-tasks/', views.painel_tasks, name='painel_tasks'),
 ]

@@ -9,6 +9,14 @@ from monitor.utils.api import coletar_dados_receita
 from django.utils import timezone
 from datetime import timedelta
 
+from django_celery_results.models import TaskResult
+
+from django.views.decorators.csrf import csrf_exempt
+from django.http import JsonResponse
+import json
+from monitor.tasks import coletar_diario_oficial_task, processar_documentos_pendentes_task, verificar_normas_sefaz_task
+
+
 
 
 logger = logging.getLogger(__name__)
@@ -90,10 +98,39 @@ def pipeline_manual_view(request):
     return render(request, 'pipeline_manual.html', {'resultado': resultado})
 
 
-# --- MONITORAMENTO DE TASKS CELERY ---
-from django_celery_results.models import TaskResult
+from django.views.decorators.csrf import csrf_exempt
+from django.http import JsonResponse
+import json
+from monitor.tasks import coletar_diario_oficial_task, processar_documentos_pendentes_task, verificar_normas_sefaz_task
 
+# --- MONITORAMENTO DE TASKS CELERY ---
 @login_required
 def monitoramento_tasks(request):
     tasks = TaskResult.objects.order_by('-date_done')[:20]
     return render(request, 'monitoramento_tasks.html', {'tasks': tasks})
+
+
+@csrf_exempt
+@login_required
+def painel_tasks(request):
+    if request.method == 'POST':
+        data = json.loads(request.body.decode('utf-8'))
+        tipo = data.get('tipo')
+        if tipo == 'coletar_diario':
+            res = coletar_diario_oficial_task.delay()
+            return JsonResponse({'status': 'Task disparada', 'result': f'Task ID: {res.id}'})
+        elif tipo == 'processar_documentos':
+            res = processar_documentos_pendentes_task.delay()
+            return JsonResponse({'status': 'Task disparada', 'result': f'Task ID: {res.id}'})
+        elif tipo == 'verificar_normas':
+            res = verificar_normas_sefaz_task.delay()
+            return JsonResponse({'status': 'Task disparada', 'result': f'Task ID: {res.id}'})
+        elif tipo == 'gerar_relatorio':
+            # Aqui pode disparar uma task de relatório se existir
+            return JsonResponse({'status': 'Task não implementada', 'result': ''})
+        elif tipo == 'pipeline_manual':
+            res = pipeline_manual_view.delay()
+            return JsonResponse({'status': 'Task disparada', 'result': f'Task ID: {res.id}'})
+        else:
+            return JsonResponse({'status': 'Tipo inválido', 'result': ''})
+    return render(request, 'painel_tasks.html')
