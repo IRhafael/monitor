@@ -5,8 +5,63 @@ from django.db.models import Count
 from django.utils import timezone
 from .models import (
     TermoMonitorado, NormaVigente, Documento,
-    RelatorioGerado, ConfiguracaoColeta, LogExecucao
+    RelatorioGerado, LogExecucao
 )
+# Adiciona imports para os modelos dos endpoints
+from django.db import models
+import json
+
+# Modelos dinâmicos para dados dos endpoints
+class AliquotaUniao(models.Model):
+    data = models.DateField()
+    dados = models.JSONField()
+    class Meta:
+        managed = False
+        db_table = 'aliquota_uniao'
+
+class AliquotaUf(models.Model):
+    uf = models.CharField(max_length=2)
+    data = models.DateField()
+    dados = models.JSONField()
+    class Meta:
+        managed = False
+        db_table = 'aliquota_uf'
+
+class SituacoesTributariasImpostoSeletivo(models.Model):
+    data = models.DateField()
+    dados = models.JSONField()
+    class Meta:
+        managed = False
+        db_table = 'situacoes_tributarias_imposto_seletivo'
+
+class SituacoesTributariasCbsIbs(models.Model):
+    data = models.DateField()
+    dados = models.JSONField()
+    class Meta:
+        managed = False
+        db_table = 'situacoes_tributarias_cbs_ibs'
+
+class FundamentacoesLegais(models.Model):
+    data = models.DateField()
+    dados = models.JSONField()
+    class Meta:
+        managed = False
+        db_table = 'fundamentacoes_legais'
+
+class ClassificacoesTributariasImpostoSeletivo(models.Model):
+    data = models.DateField()
+    dados = models.JSONField()
+    class Meta:
+        managed = False
+        db_table = 'classificacoes_tributarias_imposto_seletivo'
+
+class ClassificacoesTributariasCbsIbs(models.Model):
+    data = models.DateField()
+    dados = models.JSONField()
+    class Meta:
+        managed = False
+        db_table = 'classificacoes_tributarias_cbs_ibs'
+
 import json
 
 
@@ -198,49 +253,42 @@ class RelatorioGeradoAdmin(admin.ModelAdmin):
 
 admin.site.register(RelatorioGerado, RelatorioGeradoAdmin)
 
-class ConfiguracaoColetaAdmin(admin.ModelAdmin):
-    list_display = [
-        'ativa_status', 'intervalo_horas', 'max_documentos',
-        'verificar_vigencias', 'dias_retroativos'
-    ]
-    list_editable = ['intervalo_horas', 'max_documentos', 'dias_retroativos']
-    actions = ['ativar_coleta', 'desativar_coleta']
-
-    def ativa_status(self, obj):
-        color = 'green' if obj.ativa else 'red'
-        text = 'Ativa' if obj.ativa else 'Inativa'
-        return format_html('<span style="color: {};">{}</span>', color, text)
-    ativa_status.short_description = 'Status'
-    ativa_status.admin_order_field = 'ativa'
-
-    def ativar_coleta(self, request, queryset):
-        updated = queryset.update(ativa=True)
-        self.message_user(request, f"{updated} configurações ativadas.")
-    ativar_coleta.short_description = "Ativar coleta automática"
-
-    def desativar_coleta(self, request, queryset):
-        updated = queryset.update(ativa=False)
-        self.message_user(request, f"{updated} configurações desativadas.")
-    desativar_coleta.short_description = "Desativar coleta automática"
-
-    def has_add_permission(self, request):
-        return not ConfiguracaoColeta.objects.exists()
-
-    def has_delete_permission(self, request, obj=None):
-        return False
-
-admin.site.register(ConfiguracaoColeta, ConfiguracaoColetaAdmin)
-
 class LogExecucaoAdmin(admin.ModelAdmin):
     list_display = [
         'tipo_execucao_formatado', 'status_formatado',
-        'data_inicio', 'duracao_formatada', 'usuario'
+        'data_inicio', 'duracao_formatada', 'usuario',
+        'api_endpoints_status_list'
     ]
+    def api_endpoints_status_list(self, obj):
+        if obj.tipo_execucao == 'COLETA_API_RECEITA' and obj.detalhes:
+            endpoints = obj.detalhes.get('endpoints_status', {})
+            if endpoints:
+                html = ''
+                for nome, status in endpoints.items():
+                    color = 'green' if status == 'OK' else 'red' if status == 'Nenhum dado' else 'orange'
+                    html += f'<span style="color:{color};font-weight:bold">{nome}: {status}</span><br>'
+                return format_html(html)
+            return '-'
+        return '-'
+    api_endpoints_status_list.short_description = 'Status Endpoints Receita'
     list_filter = ['tipo_execucao', 'status']
     search_fields = ['mensagem', 'erro']
     date_hierarchy = 'data_inicio'
     ordering = ['-data_inicio']
-    readonly_fields = ['data_inicio', 'data_fim', 'duracao', 'traceback_preview']
+    readonly_fields = ['data_inicio', 'data_fim', 'duracao', 'traceback_preview', 'api_endpoints_status_preview']
+    def api_endpoints_status_preview(self, obj):
+        if obj.tipo_execucao == 'COLETA_API_RECEITA' and obj.detalhes:
+            endpoints = obj.detalhes.get('endpoints_status', {})
+            if endpoints:
+                html = '<ul>'
+                for nome, status in endpoints.items():
+                    color = 'green' if status == 'OK' else 'red' if status == 'Nenhum dado' else 'orange'
+                    html += f'<li><strong>{nome}</strong>: <span style="color:{color}">{status}</span></li>'
+                html += '</ul>'
+                return format_html(html)
+            return '-'
+        return '-'
+    api_endpoints_status_preview.short_description = 'Status dos Endpoints da Receita Federal'
 
     def tipo_execucao_formatado(self, obj):
         return obj.get_tipo_execucao_display()
@@ -278,3 +326,33 @@ class LogExecucaoAdmin(admin.ModelAdmin):
     traceback_preview.short_description = 'Detalhes do Erro'
 
 admin.site.register(LogExecucao, LogExecucaoAdmin)
+
+# Admins para dados dos endpoints
+def json_preview(obj):
+    if obj.dados:
+        return format_html('<pre style="max-width:600px;white-space:pre-wrap;">{}</pre>', json.dumps(obj.dados, indent=2, ensure_ascii=False))
+    return '-'
+
+class DadosEndpointAdmin(admin.ModelAdmin):
+    list_display = ['data', 'json_preview']
+    search_fields = ['data']
+    readonly_fields = ['data', 'dados', 'json_preview']
+    def json_preview(self, obj):
+        return json_preview(obj)
+    json_preview.short_description = 'Dados (JSON)'
+
+class DadosEndpointUfAdmin(admin.ModelAdmin):
+    list_display = ['uf', 'data', 'json_preview']
+    search_fields = ['uf', 'data']
+    readonly_fields = ['uf', 'data', 'dados', 'json_preview']
+    def json_preview(self, obj):
+        return json_preview(obj)
+    json_preview.short_description = 'Dados (JSON)'
+
+admin.site.register(AliquotaUniao, DadosEndpointAdmin)
+admin.site.register(SituacoesTributariasImpostoSeletivo, DadosEndpointAdmin)
+admin.site.register(SituacoesTributariasCbsIbs, DadosEndpointAdmin)
+admin.site.register(FundamentacoesLegais, DadosEndpointAdmin)
+admin.site.register(ClassificacoesTributariasImpostoSeletivo, DadosEndpointAdmin)
+admin.site.register(ClassificacoesTributariasCbsIbs, DadosEndpointAdmin)
+admin.site.register(AliquotaUf, DadosEndpointUfAdmin)

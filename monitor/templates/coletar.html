@@ -7,43 +7,155 @@
     <title>Coletar Dados Receita</title>
     <style>
         body { font-family: 'Segoe UI', Arial, sans-serif; background: #f7f7f7; margin: 0; padding: 0; }
-        .container { max-width: 500px; margin: 40px auto; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); padding: 32px 24px; }
-        h2 { color: #2c3e50; margin-bottom: 18px; }
-        form { display: flex; flex-direction: column; gap: 12px; margin-bottom: 18px; }
-        label { font-weight: 500; color: #34495e; }
-        input[type="date"] { padding: 7px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 1em; }
-        button, a.btn-secondary { background: #3498db; color: #fff; border: none; padding: 10px 0; border-radius: 4px; font-size: 1.1em; cursor: pointer; text-align: center; text-decoration: none; transition: background 0.2s; margin-top: 8px; }
-        button:hover, a.btn-secondary:hover { background: #217dbb; }
-        a.btn-secondary { background: #7f8c8d; margin-left: 0; }
+        .container { max-width: 900px; margin: 40px auto; background: #fff; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.10); padding: 40px 32px; }
+        h2 { color: #2c3e50; margin-bottom: 18px; font-size:2em; }
+        form { display: flex; flex-direction: row; gap: 12px; margin-bottom: 18px; align-items: center; }
+        button { background: #e1e1e1; color: #222; border:1px solid #ccc; font-size:1em; padding: 8px 18px; border-radius: 6px; transition: background 0.2s; position: relative; }
+        button:disabled { background: #ccc; color: #888; cursor: not-allowed; }
+        .spinner {
+            display: inline-block;
+            width: 22px;
+            height: 22px;
+            border: 3px solid #3498db;
+            border-top: 3px solid #e1e1e1;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            vertical-align: middle;
+            margin-left: 8px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        a.btn-secondary { background: #7f8c8d; color: #fff; border-radius: 6px; padding: 8px 18px; text-decoration: none; transition: background 0.2s; }
         a.btn-secondary:hover { background: #56616a; }
         .resultado { margin-top: 10px; }
-        .alert-success { background: #d4edda; color: #155724; border-radius: 4px; padding: 10px; }
-        .alert-danger { background: #f8d7da; color: #721c24; border-radius: 4px; padding: 10px; }
+        .alert-success { background: #d4edda; color: #155724; border-radius: 6px; padding: 12px; font-weight:500; margin-bottom:8px; }
+        .alert-danger { background: #f8d7da; color: #721c24; border-radius: 6px; padding: 12px; font-weight:500; margin-bottom:8px; }
+        .endpoint-section { margin-bottom: 32px; }
+        .endpoint-title { font-size: 1.3em; color: #2980b9; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+        .endpoint-title i { font-size: 1.2em; color: #16a085; }
+        .endpoint-title .toggle-icon { font-size: 1.1em; color: #888; margin-right: 4px; transition: transform 0.2s; }
+        .endpoint-content { transition: max-height 0.3s, opacity 0.3s; overflow: hidden; }
+        .endpoint-content.minimized { max-height: 0; opacity: 0; padding: 0; margin: 0; }
+        .endpoint-content.expanded { max-height: 2000px; opacity: 1; }
+        .data-card { background: #f4f8fb; border-radius: 8px; box-shadow: 0 1px 4px rgba(44,62,80,0.07); padding: 18px 16px; margin-bottom: 14px; border-left: 5px solid #3498db; }
+        .data-header { font-size: 1.05em; color: #34495e; margin-bottom: 8px; font-weight: 500; }
+        .data-content { font-size: 1em; color: #222; }
+        .no-data { color: #c0392b; font-style: italic; }
+        @media (max-width: 600px) {
+            .container { padding: 12px 4px; }
+            .endpoint-title { font-size: 1em; }
+            .data-card { padding: 10px 6px; }
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h2>Coletar Dados Receita</h2>
-        <form method="post">
+        <form method="post" style="margin-bottom: 0;" id="atualizar-form">
             {% csrf_token %}
-            <label for="data_receita">Data (opcional):</label>
-            <input type="date" name="data_receita" id="data_receita">
-            <button type="submit">Coletar</button>
+            <button type="submit" id="atualizar-btn">Atualizar Base de Dados</button>
+            <span id="spinner" style="display:none;"></span>
             <a href="{% url 'home' %}" class="btn-secondary">Voltar</a>
         </form>
-        <div id="resultado" class="resultado"></div>
+        {% if sucesso is not None %}
+            <div class="resultado" id="resultado">
+                {% if sucesso %}
+                    <div class="alert-success">Base de dados atualizada com sucesso!</div>
+                {% else %}
+                    <div class="alert-danger">Falha ao atualizar base de dados.</div>
+                {% endif %}
+                {% if erros_coleta %}
+                    <div class="alert-danger" style="margin-top:10px;">
+                        <strong>Erros:</strong><br>
+                        <ul>
+                        {% for erro in erros_coleta %}
+                            <li>{{ erro }}</li>
+                        {% endfor %}
+                        </ul>
+                    </div>
+                {% endif %}
+            </div>
+        {% endif %}
+        <hr>
+        <h3 style="font-size:1.25em;color:#222;margin-bottom:18px;">Dados Extraídos dos Endpoints</h3>
+        {% if dados_extraidos %}
+            {% for nome, dados_por_data in dados_extraidos.items %}
+                <div class="endpoint-section">
+                    <div class="endpoint-title" onclick="toggleEndpoint('{{ nome|escapejs }}')">
+                        <span class="toggle-icon" id="toggle-icon-{{ nome|escapejs }}">▼</span>
+                        <i>📦</i> {{ nome|title }}
+                    </div>
+                    <div class="endpoint-content expanded" id="endpoint-content-{{ nome|escapejs }}">
+                        {% if dados_por_data %}
+                            {% for data, dados_html in dados_por_data.items %}
+                                <div class="data-card">
+                                    <div class="data-header"><i>📅</i> Data: <span>{{ data }}</span></div>
+                                    <div class="data-content">
+                                        {% if dados_html %}
+                                            {{ dados_html|safe }}
+                                        {% else %}
+                                            <span class="no-data">Nenhum dado encontrado.</span>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            {% endfor %}
+                        {% else %}
+                            <div class="alert-danger">Nenhum dado encontrado.</div>
+                        {% endif %}
+                    </div>
+                </div>
+            {% endfor %}
+        {% else %}
+            <div class="alert-danger">Nenhum dado extraído da base.</div>
+        {% endif %}
     </div>
     <script>
-        document.querySelector('form').onsubmit = function(e) {
+        document.getElementById('atualizar-form').onsubmit = function(e) {
             e.preventDefault();
+            var btn = document.getElementById('atualizar-btn');
+            var spinner = document.getElementById('spinner');
+            btn.disabled = true;
+            spinner.innerHTML = '<span class="spinner"></span> Atualizando...';
+            spinner.style.display = 'inline-block';
             fetch('', {
                 method: 'POST',
                 body: new FormData(this),
                 headers: {'X-Requested-With': 'XMLHttpRequest'}
-            }).then(r => r.json()).then(data => {
-                document.getElementById('resultado').innerHTML = data.sucesso ? '<div class="alert-success">Coleta realizada com sucesso!</div>' : '<div class="alert-danger">Falha na coleta.</div>';
+            }).then(r => r.text()).then(html => {
+                var parser = new DOMParser();
+                var doc = parser.parseFromString(html, 'text/html');
+                var resultado = doc.getElementById('resultado');
+                if (resultado) {
+                    document.getElementById('resultado').innerHTML = resultado.innerHTML;
+                }
+                btn.disabled = false;
+                spinner.style.display = 'none';
+                // Opcional: atualizar dados extraídos sem reload
+                var newContainer = doc.querySelector('.container');
+                if (newContainer) {
+                    document.querySelector('.container').innerHTML = newContainer.innerHTML;
+                }
+            }).catch(() => {
+                btn.disabled = false;
+                spinner.style.display = 'none';
             });
         };
+
+        function toggleEndpoint(nome) {
+            var content = document.getElementById('endpoint-content-' + nome);
+            var icon = document.getElementById('toggle-icon-' + nome);
+            if (content.classList.contains('expanded')) {
+                content.classList.remove('expanded');
+                content.classList.add('minimized');
+                icon.textContent = '►';
+            } else {
+                content.classList.remove('minimized');
+                content.classList.add('expanded');
+                icon.textContent = '▼';
+            }
+        }
     </script>
 </body>
 </html>

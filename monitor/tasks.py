@@ -265,81 +265,118 @@ def verificar_normas_sefaz_task(self, norma_ids: Optional[List[int]] = None): #
     return {'status': log_entry.status, 'results': log_entry.detalhes} #
 
 
+# --- Tarefa de Coleta de Dados da Receita Federal ---
+@shared_task(bind=True, max_retries=2, default_retry_delay=10*60)
+def coletar_dados_receita_task(self, data: Optional[str] = None):
+    from .utils.api import coletar_dados_receita, ENDPOINTS
+    from monitor.models import LogExecucao
+    import json
+    task_id = self.request.id
+    log_entry = LogExecucao.objects.create(tipo_execucao='COLETA_API_RECEITA', status='INICIADA', detalhes={'task_id': task_id, 'data': data})
+    endpoints_status = {}
+    try:
+        if not data:
+            from datetime import datetime
+            data = datetime.today().strftime("%Y-%m-%d")
+        # Executa coleta e monitora cada endpoint
+        from .utils.api import consumir_endpoint
+        for nome, endpoint in ENDPOINTS.items():
+            if nome == "aliquota_uf":
+                continue
+            params = {"data": data}
+            dados = consumir_endpoint(endpoint, params)
+            if dados:
+                endpoints_status[nome] = "OK"
+            else:
+                endpoints_status[nome] = "Nenhum dado"
+        log_entry.detalhes['endpoints_status'] = endpoints_status
+        resultado = coletar_dados_receita(data)
+        if resultado:
+            log_entry.status = 'SUCESSO'
+            log_entry.detalhes['message'] = 'Coleta da API Receita Federal realizada com sucesso.'
+        else:
+            log_entry.status = 'ERRO'
+            log_entry.detalhes['message'] = 'Falha na coleta da API Receita Federal.'
+    except Exception as e:
+        logger.error(f"Erro na coleta da API Receita Federal: {e}", exc_info=True)
+        log_entry.status = 'ERRO'
+        log_entry.detalhes['erro_principal'] = str(e)
+        log_entry.detalhes['traceback'] = traceback.format_exc()
+    finally:
+        log_entry.data_fim = timezone.now()
+        log_entry.duracao = log_entry.data_fim - log_entry.data_inicio
+        log_entry.save()
+        logger.info(f"Tarefa Celery 'coletar_dados_receita_task' [{task_id}] concluída. Status: {log_entry.status}. Detalhes: {json.dumps(log_entry.detalhes, ensure_ascii=False)}")
+    return {'status': log_entry.status, 'detalhes': log_entry.detalhes}
+
 # --- Pipeline Completo de Coleta e Processamento ---
-@shared_task(bind=True, name="monitor.utils.tasks.pipeline_coleta_e_processamento_automatica") #
-def pipeline_coleta_e_processamento_automatica(self, dias_retroativos_coleta: int = 3): #
+@shared_task(bind=True, name="monitor.utils.tasks.pipeline_coleta_e_processamento_automatica")
+def pipeline_coleta_e_processamento_automatica(self, dias_retroativos_coleta: int = 3):
     from monitor.models import LogExecucao
-    pipeline_task_id = self.request.id #
-    logger.info(f"[{pipeline_task_id}] Iniciando PIPELINE AUTOMÁTICO de coleta ({dias_retroativos_coleta} dias), processamento e verificação SEFAZ.") #
-    
-    log_pipeline = LogExecucao.objects.create( #
-        tipo_execucao='PIPELINE_AUTOMATICO', #
-        status='INICIADA', #
-        detalhes={'pipeline_task_id': pipeline_task_id, 'dias_coleta': dias_retroativos_coleta} #
-    ) #
+    pipeline_task_id = self.request.id
+    logger.info(f"[{pipeline_task_id}] Iniciando PIPELINE AUTOMÁTICO de coleta ({dias_retroativos_coleta} dias), processamento, monitoria API Receita e verificação SEFAZ.")
+    log_pipeline = LogExecucao.objects.create(
+        tipo_execucao='PIPELINE_AUTOMATICO',
+        status='INICIADA',
+        detalhes={'pipeline_task_id': pipeline_task_id, 'dias_coleta': dias_retroativos_coleta}
+    )
+    try:
+        workflow = chain(
+            coletar_diario_oficial_task.s(dias_retroativos=dias_retroativos_coleta),
+            processar_documentos_pendentes_task.s(),
+            coletar_dados_receita_task.s(),
+            verificar_normas_sefaz_task.s()
+        )
+        async_result = workflow.apply_async()
+        log_pipeline.detalhes['celery_group_id'] = async_result.id
+        log_pipeline.status = 'EM_PROGRESSO'
+        logger.info(f"[{pipeline_task_id}] Pipeline disparado com ID de grupo Celery: {async_result.id}")
+    except Exception as e:
+        logger.error(f"[{pipeline_task_id}] Erro ao disparar o pipeline: {e}", exc_info=True)
+        log_pipeline.status = 'ERRO_DISPARO'
+        log_pipeline.detalhes.update({'erro_disparo': str(e), 'traceback_disparo': traceback.format_exc()})
+    finally:
+        if log_pipeline.status != 'EM_PROGRESSO':
+            log_pipeline.data_fim = timezone.now()
+            log_pipeline.duracao = log_pipeline.data_fim - log_pipeline.data_inicio
+        log_pipeline.save()
+    return {'status': log_pipeline.status, 'pipeline_task_id': pipeline_task_id, 'celery_group_id': log_pipeline.detalhes.get('celery_group_id')}
 
-    try: #
-        workflow = chain( #
-            coletar_diario_oficial_task.s(dias_retroativos=dias_retroativos_coleta), #
-            processar_documentos_pendentes_task.s(), #
-            verificar_normas_sefaz_task.s() #
-        ) #
-        
-        async_result = workflow.apply_async() #
-        
-        log_pipeline.detalhes['celery_group_id'] = async_result.id #
-        log_pipeline.status = 'EM_PROGRESSO' #
-        logger.info(f"[{pipeline_task_id}] Pipeline disparado com ID de grupo Celery: {async_result.id}") #
-
-    except Exception as e: #
-        logger.error(f"[{pipeline_task_id}] Erro ao disparar o pipeline: {e}", exc_info=True) #
-        log_pipeline.status = 'ERRO_DISPARO' #
-        log_pipeline.detalhes.update({'erro_disparo': str(e), 'traceback_disparo': traceback.format_exc()}) #
-    
-    finally: #
-        if log_pipeline.status != 'EM_PROGRESSO': #
-            log_pipeline.data_fim = timezone.now() #
-            log_pipeline.duracao = log_pipeline.data_fim - log_pipeline.data_inicio #
-        log_pipeline.save() #
-
-    return {'status': log_pipeline.status, 'pipeline_task_id': pipeline_task_id, 'celery_group_id': log_pipeline.detalhes.get('celery_group_id')} #
-
-@shared_task(bind=True, name="monitor.utils.tasks.pipeline_manual_completo") #
-def pipeline_manual_completo(self, data_inicio_str: str, data_fim_str: str): #
+@shared_task(bind=True, name="monitor.utils.tasks.pipeline_manual_completo")
+def pipeline_manual_completo(self, data_inicio_str: str, data_fim_str: str):
     from monitor.models import LogExecucao
-    pipeline_task_id = self.request.id #
-    logger.info(f"[{pipeline_task_id}] Iniciando PIPELINE MANUAL de coleta (de {data_inicio_str} a {data_fim_str}), processamento e verificação SEFAZ.") #
-    
-    log_pipeline = LogExecucao.objects.create( #
-        tipo_execucao='PIPELINE_MANUAL', #
-        status='INICIADA', #
-        detalhes={ #
-            'pipeline_task_id': pipeline_task_id, #
-            'data_inicio_coleta': data_inicio_str, #
-            'data_fim_coleta': data_fim_str #
-        } #
-    ) #
-    try: #
-        workflow = chain( #
-            coletar_diario_oficial_task.s(data_inicio_str=data_inicio_str, data_fim_str=data_fim_str), #
-            processar_documentos_pendentes_task.s(), #
-            verificar_normas_sefaz_task.s() #
-        ) #
-        async_result = workflow.apply_async() #
-        log_pipeline.detalhes['celery_group_id'] = async_result.id #
-        log_pipeline.status = 'EM_PROGRESSO' #
-        logger.info(f"[{pipeline_task_id}] Pipeline manual disparado com ID de grupo Celery: {async_result.id}") #
-    except Exception as e: #
-        logger.error(f"[{pipeline_task_id}] Erro ao disparar o pipeline manual: {e}", exc_info=True) #
-        log_pipeline.status = 'ERRO_DISPARO' #
-        log_pipeline.detalhes.update({'erro_disparo': str(e), 'traceback_disparo': traceback.format_exc()}) #
-    finally: #
-        if log_pipeline.status != 'EM_PROGRESSO': #
-            log_pipeline.data_fim = timezone.now() #
-            log_pipeline.duracao = log_pipeline.data_fim - log_pipeline.data_inicio #
-        log_pipeline.save() #
-
-    return {'status': log_pipeline.status, 'pipeline_task_id': pipeline_task_id, 'celery_group_id': log_pipeline.detalhes.get('celery_group_id')} #
+    pipeline_task_id = self.request.id
+    logger.info(f"[{pipeline_task_id}] Iniciando PIPELINE MANUAL de coleta (de {data_inicio_str} a {data_fim_str}), processamento, monitoria API Receita e verificação SEFAZ.")
+    log_pipeline = LogExecucao.objects.create(
+        tipo_execucao='PIPELINE_MANUAL',
+        status='INICIADA',
+        detalhes={
+            'pipeline_task_id': pipeline_task_id,
+            'data_inicio_coleta': data_inicio_str,
+            'data_fim_coleta': data_fim_str
+        }
+    )
+    try:
+        workflow = chain(
+            coletar_diario_oficial_task.s(data_inicio_str=data_inicio_str, data_fim_str=data_fim_str),
+            processar_documentos_pendentes_task.s(),
+            coletar_dados_receita_task.s(),
+            verificar_normas_sefaz_task.s()
+        )
+        async_result = workflow.apply_async()
+        log_pipeline.detalhes['celery_group_id'] = async_result.id
+        log_pipeline.status = 'EM_PROGRESSO'
+        logger.info(f"[{pipeline_task_id}] Pipeline manual disparado com ID de grupo Celery: {async_result.id}")
+    except Exception as e:
+        logger.error(f"[{pipeline_task_id}] Erro ao disparar o pipeline manual: {e}", exc_info=True)
+        log_pipeline.status = 'ERRO_DISPARO'
+        log_pipeline.detalhes.update({'erro_disparo': str(e), 'traceback_disparo': traceback.format_exc()})
+    finally:
+        if log_pipeline.status != 'EM_PROGRESSO':
+            log_pipeline.data_fim = timezone.now()
+            log_pipeline.duracao = log_pipeline.data_fim - log_pipeline.data_inicio
+        log_pipeline.save()
+    return {'status': log_pipeline.status, 'pipeline_task_id': pipeline_task_id, 'celery_group_id': log_pipeline.detalhes.get('celery_group_id')}
 
 
 # --- Tarefas Individuais para Controle Mais Fino (se necessário pela UI) ---

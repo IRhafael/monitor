@@ -1,3 +1,6 @@
+# PARA RODAR A API LOCALMENTE wsl -d calculadora --cd /calculadora --exec bash start.sh
+
+
 import requests
 import json
 from datetime import datetime
@@ -160,46 +163,51 @@ def coletar_dados_receita(data=None):
     Coleta dados dos endpoints da Receita Federal, salva no banco e retorna status.
     Pode ser chamada por views, comandos ou tasks.
     """
-    if not data:
-        data = datetime.today().strftime("%Y-%m-%d")
     criar_tabelas()
     ufs = consumir_endpoint("/calculadora/dados-abertos/ufs")
     if not ufs:
         print("Não foi possível obter a lista de UFs.")
         return False
-    print(f"\n--- Coletando dados para {data} ---")
-    endpoints_params = {
-        "situacoes_tributarias_imposto_seletivo": {"data": data},
-        "situacoes_tributarias_cbs_ibs": {"data": data},
-        "fundamentacoes_legais": {"data": data},
-        "classificacoes_tributarias_imposto_seletivo": {"data": data},
-        "classificacoes_tributarias_cbs_ibs": {"data": data},
-        "aliquota_uniao": {"data": data}
-    }
-    # Consumir e salvar dados dos endpoints normais
+    print(f"\n--- Coletando todos os dados disponíveis ---")
+    # Tenta buscar datas por endpoint alternativo ou gera datas recentes
+    datas_disponiveis = []
+    # Tenta endpoint alternativo de datas, mas já com parâmetro 'data' para evitar erro 400
+    from datetime import date, timedelta
+    hoje = date.today()
+    datas_api = consumir_endpoint("/calculadora/dados-abertos/aliquota-uniao", {"data": hoje.strftime('%Y-%m-%d')})
+    if datas_api and isinstance(datas_api, list):
+        for item in datas_api:
+            data_val = item.get('data') or item.get('dataReferencia') or item.get('data_ref')
+            if data_val:
+                datas_disponiveis.append(data_val)
+    if not datas_disponiveis:
+        # Gera datas dos últimos 30 dias
+        for i in range(30):
+            datas_disponiveis.append((hoje - timedelta(days=i)).strftime('%Y-%m-%d'))
+    # Consumir e salvar dados dos endpoints normais para cada data
     for nome, endpoint in ENDPOINTS.items():
         if nome == "aliquota_uf":
             continue
-        params = endpoints_params.get(nome, {})
-        dados = consumir_endpoint(endpoint, params)
-        if dados:
-            inserir_dados(nome, data, dados)
-            print(f"Dados de {nome} inseridos no banco!")
-        else:
-            print(f"Nenhum dado recebido de {nome}.")
-    # Consumir e salvar dados de aliquota_uf para cada UF
+        for data in datas_disponiveis:
+            dados = consumir_endpoint(endpoint, {"data": data})
+            if dados:
+                inserir_dados(nome, data, dados)
+                print(f"Dados de {nome} inseridos no banco para data {data}!")
+            else:
+                print(f"Nenhum dado recebido de {nome} para data {data}.")
+    # Consumir e salvar dados de aliquota_uf para cada UF e cada data
     for uf in ufs:
         codigo_uf = uf.get("codigoUf")
         sigla_uf = uf.get("sigla")
         if not codigo_uf:
             continue
-        params = {"codigoUf": codigo_uf, "data": data}
-        dados = consumir_endpoint(ENDPOINTS["aliquota_uf"], params)
-        if dados:
-            inserir_dados("aliquota_uf", data, dados, sigla_uf)
-            print(f"Dados de aliquota_uf para {sigla_uf} ({codigo_uf}) inseridos no banco!")
-        else:
-            print(f"Nenhum dado recebido de aliquota_uf para {sigla_uf} ({codigo_uf}).")
+        for data in datas_disponiveis:
+            dados = consumir_endpoint(ENDPOINTS["aliquota_uf"], {"codigoUf": codigo_uf, "data": data})
+            if dados:
+                inserir_dados("aliquota_uf", data, dados, sigla_uf)
+                print(f"Dados de aliquota_uf para {sigla_uf} ({codigo_uf}) inseridos no banco para data {data}!")
+            else:
+                print(f"Nenhum dado recebido de aliquota_uf para {sigla_uf} ({codigo_uf}) na data {data}.")
     return True
 
 # Exemplo de chamada para integração (pode ser usado em views, comandos, tasks)

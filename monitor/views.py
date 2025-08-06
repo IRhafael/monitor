@@ -28,9 +28,39 @@ logger = logging.getLogger(__name__)
 
 @login_required
 def home(request):
-    """Página inicial simples, mostra os documentos coletados."""
+    """Página inicial simples, mostra os documentos coletados e do Diário Oficial."""
     documentos = Documento.objects.all().order_by('-id')
-    return render(request, 'home.html', {'documentos': documentos})
+    # Busca documentos do Diário Oficial (se houver modelo específico)
+    try:
+        from .models import DocumentoDiarioOficial
+        docs_diario = DocumentoDiarioOficial.objects.all().order_by('-id')
+    except ImportError:
+        docs_diario = []
+    except Exception:
+        docs_diario = []
+    # Busca o último log da coleta da Receita Federal
+    from monitor.models import LogExecucao
+    log_api_receita = LogExecucao.objects.filter(tipo_execucao='COLETA_API_RECEITA').order_by('-data_fim').first()
+    endpoints_status = {}
+    try:
+        from monitor.utils.api import ENDPOINTS
+        todos_endpoints = list(ENDPOINTS.keys())
+    except Exception:
+        todos_endpoints = []
+    log_status = {}
+    if log_api_receita and log_api_receita.detalhes:
+        log_status = log_api_receita.detalhes.get('endpoints_status', {})
+    for ep in todos_endpoints:
+        if ep in log_status:
+            endpoints_status[ep] = log_status[ep]
+        else:
+            endpoints_status[ep] = 'Nenhum dado'
+    return render(request, 'home.html', {
+        'documentos': documentos,
+        'docs_diario': docs_diario,
+        'endpoints_status': endpoints_status,
+        'log_api_receita': log_api_receita
+    })
 
 @login_required
 def upload_documento(request):
@@ -46,12 +76,55 @@ def upload_documento(request):
 
 @login_required
 def coletar_dados_receita_view(request):
-    """Dispara o scrapper e retorna resultado simples."""
+    """Painel de consulta e atualização dos dados dos endpoints da Receita Federal."""
+    dados_extraidos = {}
+    erros_coleta = []
+    sucesso = None
+    # Sempre busca os dados da base para exibir
+    from monitor.utils.api import ENDPOINTS, conectar_mysql, json_para_texto
+    conn = conectar_mysql()
+    cursor = conn.cursor()
+    for nome in ENDPOINTS.keys():
+        cursor.execute(f"SELECT data, dados FROM {nome} ORDER BY data DESC LIMIT 50")
+        rows = cursor.fetchall()
+        dados_extraidos[nome] = {}
+        for row in rows:
+            data, dados_json = row
+            try:
+                dados_dict = json.loads(dados_json)
+                dados_extraidos[nome][str(data)] = json_para_texto(nome, dados_dict)
+            except Exception as err:
+                erros_coleta.append(f"Erro ao carregar dados de {nome} para data {data}: {err}")
+    cursor.close()
+    conn.close()
+    # Se for POST, atualiza a base
     if request.method == 'POST':
-        data = request.POST.get('data_receita')
-        sucesso = coletar_dados_receita(data)
-        return JsonResponse({'sucesso': bool(sucesso)})
-    return render(request, 'coletar.html')
+        try:
+            sucesso = coletar_dados_receita()
+        except Exception as e:
+            sucesso = False
+            erros_coleta.append(str(e))
+        # Após atualizar, recarrega os dados da base
+        conn = conectar_mysql()
+        cursor = conn.cursor()
+        for nome in ENDPOINTS.keys():
+            cursor.execute(f"SELECT data, dados FROM {nome} ORDER BY data DESC LIMIT 50")
+            rows = cursor.fetchall()
+            dados_extraidos[nome] = {}
+            for row in rows:
+                data, dados_json = row
+                try:
+                    dados_dict = json.loads(dados_json)
+                    dados_extraidos[nome][str(data)] = json_para_texto(nome, dados_dict)
+                except Exception as err:
+                    erros_coleta.append(f"Erro ao carregar dados de {nome} para data {data}: {err}")
+        cursor.close()
+        conn.close()
+    return render(request, 'coletar.html', {
+        'sucesso': sucesso,
+        'dados_extraidos': dados_extraidos,
+        'erros_coleta': erros_coleta
+    })
 
 
 # --- VIEWS UTILITÁRIAS ---

@@ -62,13 +62,7 @@
     <div class="container">
         <h2>Documentos Coletados</h2>
         <nav class="menu">
-            <a href="{% url 'upload_documento' %}">Upload de Documento</a>
             <a href="{% url 'coletar_dados_receita_view' %}">Coletar Dados Receita</a>
-            <a href="{% url 'coletar_diario_oficial_view' %}">Coletar Diário Oficial</a>
-            <a href="{% url 'processar_documentos_view' %}">Processar Documentos</a>
-            <a href="{% url 'verificar_normas_sefaz_view' %}">Verificar Normas SEFAZ</a>
-            <a href="{% url 'gerar_relatorio_view' %}">Gerar Relatório</a>
-            <a href="{% url 'pipeline_manual_view' %}">Pipeline Manual</a>
             <a href="{% url 'monitoramento_tasks' %}" style="background:#222;">Monitorar Tasks Celery</a>
             <a href="{% url 'painel_tasks' %}" style="background:#16a085;">Painel de Controle Celery</a>
         </nav>
@@ -81,6 +75,18 @@
             </ul>
         {% else %}
             <p class="empty">Nenhum documento encontrado.</p>
+        {% endif %}
+
+        {% if docs_diario %}
+            <hr>
+            <h2>Documentos do Diário Oficial</h2>
+            <ul>
+            {% for doc in docs_diario %}
+                <li>ID: {{ doc.id }} | Nome: {{ doc.nome }} | Data: {{ doc.data_upload }} </li>
+            {% endfor %}
+            </ul>
+        {% else %}
+            <p class="empty">Nenhum documento do Diário Oficial encontrado.</p>
         {% endif %}
     </div>
 </body>
