@@ -129,7 +129,7 @@ MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
 CELERY_BROKER_URL = 'redis://localhost:6379/0'  # Altere para a URL do seu broker (Redis)
-CELERY_RESULT_BACKEND = 'redis://localhost:6379/0' # Onde os resultados das tarefas são armazenados
+CELERY_RESULT_BACKEND = 'django-db' # Resultados das tarefas Celery salvos no banco Django
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
