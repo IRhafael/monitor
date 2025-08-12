@@ -39,6 +39,19 @@ class IntegradorSEFAZ:
             cached_result = cache.get(cache_key)
             if cached_result:
                 return cached_result
+            # Primeiro tenta o método rápido (requests+BeautifulSoup)
+            vigente_rapido = self.scraper.verificar_vigencia_rapida(tipo, numero)
+            if vigente_rapido is not None:
+                resultado = {
+                    'tipo': tipo,
+                    'numero': numero,
+                    'vigente': bool(vigente_rapido),
+                    'data_consulta': timezone.now(),
+                    'detalhes': {'metodo': 'rapido', 'vigente': bool(vigente_rapido)}
+                }
+                cache.set(cache_key, resultado, 86400)
+                return resultado
+            # Se não conseguir, cai no Selenium
             vigente_info = self.scraper.check_norm_status(tipo, numero)
             resultado = {
                 'tipo': tipo,

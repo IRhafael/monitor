@@ -387,9 +387,10 @@ class PDFProcessor:
             texto_final = texto_final.rstrip() + '...'
         return texto_final.strip()
 
-    def process_document(self, documento: Documento) -> Dict[str, any]:
+    def process_document(self, documento: Documento, limite_paginas: int = 3, limite_texto: int = 20000) -> Dict[str, any]:
         """
         Processa um documento PDF, extraindo normas, analisando relevância, IA e enriquecendo os dados.
+        Agora processa apenas as primeiras páginas e limita o tamanho do texto para aliviar o processamento.
         """
         logger.info(f"Processando documento ID: {getattr(documento, 'id', 'N/A')}, Título: {getattr(documento, 'titulo', '')[:50]}...")
         if not getattr(documento, 'texto_completo', None):
@@ -403,7 +404,12 @@ class PDFProcessor:
             return {'status': 'FALHA', 'message': 'Texto completo ausente.'}
         try:
             texto = documento.texto_completo
-            normas_extraidas_tuplas = self.extrair_normas(texto)
+            # Limita o texto às primeiras N páginas se houver separador de página
+            paginas = re.split(r'\f|\n{3,}', texto)
+            texto_limitado = '\n'.join(paginas[:limite_paginas]) if len(paginas) > 1 else texto
+            # Limita o texto ao máximo de caracteres
+            texto_limitado = texto_limitado[:limite_texto]
+            normas_extraidas_tuplas = self.extrair_normas(texto_limitado)
             normas_objs_para_relacionar = []
             normas_strings_para_resumo = []
             for tipo_norma_ext, numero_norma_processado in normas_extraidas_tuplas:
@@ -447,12 +453,12 @@ class PDFProcessor:
                     logger.error(f"Erro GENÉRICO ao criar/obter NormaVigente para tipo={tipo_final}, numero={numero_norma_processado}, ano={ano_norma}: {e_norma}", exc_info=True)
                     continue
             termos_monitorados_ativos = list(TermoMonitorado.objects.filter(ativo=True, tipo='TEXTO').values_list('termo', flat=True))
-            relevante_contabil = self.is_relevante_contabil(texto, termos_monitorados_ativos)
+            relevante_contabil = self.is_relevante_contabil(texto_limitado, termos_monitorados_ativos)
             documento.relevante_contabil = relevante_contabil
             documento.assunto = "Contábil/Fiscal" if relevante_contabil else "Geral"
             if relevante_contabil:
                 logger.info(f"Documento ID {getattr(documento, 'id', 'N/A')} é relevante. Prosseguindo com análise IA detalhada.")
-                paragrafos_relevantes = self._extrair_paragrafos_relevantes(texto)
+                paragrafos_relevantes = self._extrair_paragrafos_relevantes(texto_limitado)
                 documento.resumo_ia = self.claude_processor.gerar_resumo_contabil(paragrafos_relevantes, termos_monitorados_ativos)
                 documento.sentimento_ia = self.claude_processor.analisar_sentimento_contabil(paragrafos_relevantes)
                 impacto_fiscal_texto = self.claude_processor.identificar_impacto_fiscal(paragrafos_relevantes, termos_monitorados_ativos)

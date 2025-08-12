@@ -71,43 +71,25 @@ class DiarioOficialScraper:
             logger.info("WebDriver fechado.")
 
     def _extrair_links_pdf(self, url: str) -> List[str]:
-        """Extrai URLs de PDF de uma página web usando Selenium."""
-        driver = self._get_webdriver()
+        """Extrai URLs de PDF de uma página web usando apenas requests+BeautifulSoup (mais leve)."""
         try:
-            logger.info(f"Acessando URL: {url}")
-            driver.get(url)
-
-            # Espera até que pelo menos um link .pdf esteja presente na página
-            WebDriverWait(driver, 30).until(
-                EC.presence_of_element_located((By.XPATH, "//a[contains(@href, '.pdf')]"))
-            )
-
-            logger.info("Página carregada, iniciando extração dos links PDF")
-            soup = BeautifulSoup(driver.page_source, 'html.parser')
-            
-            links_pdf = set()  # usar set direto evita duplicados
-
+            logger.info(f"Acessando URL (requests): {url}")
+            resp = self.session.get(url, timeout=20)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            links_pdf = set()
             for a in soup.find_all('a', href=True):
                 href = a['href'].strip()
                 if href.lower().endswith('.pdf'):
-                    # Normaliza a URL absoluta se for relativa
                     full_url = urljoin(self.BASE_URL, href)
                     links_pdf.add(full_url)
-
             links_pdf = list(links_pdf)
             logger.info(f"{len(links_pdf)} links PDF encontrados em {url}")
             logger.debug(f"Links encontrados: {links_pdf}")
             return links_pdf
-
-        except TimeoutException:
-            logger.error(f"Timeout ao carregar a página ou encontrar elementos em {url}")
-            return []
         except Exception as e:
-            logger.error(f"Erro ao extrair links PDF de {url}: {str(e)}", exc_info=True)
+            logger.error(f"Erro ao extrair links PDF de {url} (requests): {str(e)}", exc_info=True)
             return []
-        finally:
-            # Não feche o driver aqui se for usar na mesma sessão
-            pass
 
 
     def _extrair_texto_de_pdf(self, pdf_content: bytes) -> Optional[str]:

@@ -24,6 +24,63 @@ from selenium.webdriver.support import expected_conditions as EC
 logger = logging.getLogger(__name__)
 
 class SEFAZScraper:
+
+    def verificar_vigencia_rapida(self, norm_type, norm_number):
+        """
+        Tenta verificar a vigência da norma acessando diretamente o iframe de busca (vivisimo) do portal SEFAZ.
+        Retorna True se vigente, False se não vigente, None se não encontrou.
+        Agora também analisa o bloco .field-snippet .value para maior robustez.
+        Regex mais flexível e logs para debug.
+        """
+        try:
+            termo_busca = f"{norm_type} {norm_number}".replace("/", " ")
+            iframe_url = f"{self.base_url}/vivisimo/cgi-bin/query-meta?v%3Aproject=Legislacao&query={termo_busca.replace(' ', '+')}*"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
+            resp = requests.get(iframe_url, headers=headers, timeout=15)
+            if resp.status_code != 200:
+                self.logger.warning(f"Busca rápida (iframe) falhou: status {resp.status_code}")
+                return None
+            soup = BeautifulSoup(resp.text, "html.parser")
+            blocos = soup.select('.values .value')
+            blocos += soup.select('a.title')
+            snippet_bloco = soup.select_one('.field-snippet .value')
+            if snippet_bloco:
+                blocos.append(snippet_bloco)
+            # Regex ainda mais tolerante para número e tipo
+            numero_flex = re.sub(r'[^\d]', '', norm_number)
+            # Aceita "nº", "n.", "n°", "n ", etc, com ou sem espaço, e o número puro
+            padrao_numero = rf"(n[º°\.]?\s*)?{numero_flex}"
+            padrao_tipo = re.escape(norm_type.lower())
+            # Permite qualquer coisa (inclusive acentos, vírgulas, etc) entre tipo e número, e vice-versa
+            padrao_geral = rf"{padrao_tipo}.{{0,40}}?{padrao_numero}|{padrao_numero}.{{0,40}}?{padrao_tipo}"
+            for bloco in blocos:
+                texto_bloco = bloco.get_text(" ", strip=True).lower()
+                # Normaliza espaços e quebras de linha
+                texto_bloco_norm = re.sub(r"\s+", " ", texto_bloco)
+                self.logger.info(f"[DEBUG] Analisando bloco: {texto_bloco_norm}")
+                if re.search(padrao_geral, texto_bloco_norm, re.DOTALL):
+                    self.logger.info(f"[DEBUG] Match tipo/numero: {texto_bloco_norm}")
+                    # Busca "vigente" ou "revogado" no texto do bloco
+                    if "vigente" in texto_bloco_norm and not any(t in texto_bloco_norm for t in ["revogado", "cancelado", "extinto"]):
+                        self.logger.info(f"[DEBUG] Encontrado vigente: {texto_bloco_norm}")
+                        return True
+                    if any(t in texto_bloco_norm for t in ["revogado", "cancelado", "extinto"]):
+                        self.logger.info(f"[DEBUG] Encontrado revogado/cancelado/extinto: {texto_bloco_norm}")
+                        return False
+                    # Se não há menção explícita, mas há menção a alterações recentes, considerar vigente
+                    if any(x in texto_bloco_norm for x in ["alterado pelo", "alterada pelo", "alterados pelos", "alterada pelos"]):
+                        if not any(t in texto_bloco_norm for t in ["revogado", "cancelado", "extinto"]):
+                            self.logger.info(f"[DEBUG] Considerado vigente por alterações: {texto_bloco_norm}")
+                            return True
+                else:
+                    self.logger.info(f"[DEBUG] Não bateu tipo/numero: {texto_bloco_norm}")
+            self.logger.info("[DEBUG] Nenhum bloco correspondeu ao tipo/número informado.")
+            return None
+        except Exception as e:
+            self.logger.warning(f"verificar_vigencia_rapida falhou: {e}")
+            return None
     def __init__(self):
         self.base_url = "https://portaldalegislacao.sefaz.pi.gov.br"
         self.timeout = 30
