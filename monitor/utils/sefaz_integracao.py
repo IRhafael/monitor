@@ -5,6 +5,7 @@ from django.utils import timezone
 from django.db.models import Q
 from monitor.models import Documento, NormaVigente
 from .sefaz_scraper import SEFAZScraper
+from .enriquecedor import enriquecer_documento_dict
 from django.core.cache import cache
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
@@ -65,11 +66,26 @@ class IntegradorSEFAZ:
                 resultado = self.buscar_norma_especifica(norma.tipo, norma.numero)
                 norma.situacao = "VIGENTE" if resultado['vigente'] else "REVOGADA"
                 norma.data_verificacao = timezone.now()
+                # Atualiza metadados se disponíveis
+                if 'detalhes' in resultado and resultado['detalhes']:
+                    if hasattr(norma, 'metadados') and isinstance(norma.metadados, dict):
+                        norma.metadados.update(resultado['detalhes'])
+                    else:
+                        norma.metadados = resultado['detalhes']
                 norma.save()
                 normas_verificadas.append(norma)
             except Exception as e:
                 logger.error(f"Erro ao verificar norma {norma}: {str(e)}")
                 continue
+        # Enriquecimento do documento após atualização das normas
+        doc_dict = documento.to_dict() if hasattr(documento, 'to_dict') else documento.__dict__
+        doc_dict = enriquecer_documento_dict(doc_dict)
+        for k, v in doc_dict.items():
+            if hasattr(documento, k):
+                setattr(documento, k, v)
+        documento.verificado_sefaz = True
+        documento.data_verificacao = timezone.now()
+        documento.save()
         return normas_verificadas
 
     def verificar_documentos_nao_verificados(self):
@@ -79,6 +95,15 @@ class IntegradorSEFAZ:
         for doc in documentos:
             try:
                 normas = self.verificar_vigencia_normas(doc.id)
+                # Enriquecimento e atualização do documento
+                doc_dict = doc.to_dict() if hasattr(doc, 'to_dict') else doc.__dict__
+                doc_dict = enriquecer_documento_dict(doc_dict)
+                for k, v in doc_dict.items():
+                    if hasattr(doc, k):
+                        setattr(doc, k, v)
+                doc.verificado_sefaz = True
+                doc.data_verificacao = timezone.now()
+                doc.save()
                 resultados.append({
                     'documento': doc,
                     'normas_encontradas': len(normas),
@@ -113,6 +138,15 @@ class IntegradorSEFAZ:
                 except Exception as e:
                     logger.error(f"Erro na norma {norma}: {str(e)}")
                     continue
+            # Enriquecimento do documento após atualização das normas prioritárias
+            doc_dict = documento.to_dict() if hasattr(documento, 'to_dict') else documento.__dict__
+            doc_dict = enriquecer_documento_dict(doc_dict)
+            for k, v in doc_dict.items():
+                if hasattr(documento, k):
+                    setattr(documento, k, v)
+            documento.verificado_sefaz = True
+            documento.data_verificacao = timezone.now()
+            documento.save()
             return normas_verificadas
         except Exception as e:
             logger.error(f"Erro em verificar_vigencia_automatica: {str(e)}")

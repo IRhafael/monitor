@@ -67,24 +67,93 @@
             <a href="{% url 'painel_tasks' %}" style="background:#16a085;">Painel de Controle Celery</a>
         </nav>
         <hr>
+        {% load model_extras %}
         {% if documentos %}
-            <ul>
+            <div style="display: flex; flex-wrap: wrap; gap: 18px;">
             {% for doc in documentos %}
-                <li>ID: {{ doc.id }} | Nome: {{ doc.nome }} | Data: {{ doc.data_upload }} </li>
+                <div style="background: #f9fafc; border: 1px solid #e1e4e8; border-radius: 10px; box-shadow: 0 2px 8px rgba(44,62,80,0.07); padding: 20px 22px; min-width: 320px; flex: 1 1 340px; max-width: 420px; position: relative;">
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                        <span style="font-size: 1.3em; color: #2980b9;">📄</span>
+                        <span style="font-weight: 600; font-size: 1.1em; color: #2c3e50;">{{ doc.titulo|default:'(sem título)' }}</span>
+                    </div>
+                    <div style="color: #555; font-size: 0.98em; margin-bottom: 6px;">{{ doc.data_publicacao|date:'d/m/Y'|default:'(sem data)' }} | <span style="color:#888;">{{ doc.get_tipo_documento_display|default:'(sem tipo)' }}</span></div>
+                    <div style="margin-bottom: 6px;"><strong>Fonte:</strong> {{ doc.fonte_documento|default:'(sem fonte)' }}</div>
+                    <div style="margin-bottom: 6px;"><strong>URL:</strong> {% if doc.url_original %}<a href="{{ doc.url_original }}" target="_blank" style="color:#3498db;">Abrir</a>{% else %}(sem url){% endif %}</div>
+                    <div style="margin-bottom: 6px;"><strong>Processado:</strong> <span style="color: {% if doc.processado %}#27ae60{% else %}#c0392b{% endif %}; font-weight:600;">{{ doc.processado|yesno:'Sim,Não' }}</span></div>
+                    <div style="margin-bottom: 6px;"><strong>Relevante Contábil:</strong> <span style="color: {% if doc.relevante_contabil %}#27ae60{% else %}#c0392b{% endif %}; font-weight:600;">{{ doc.relevante_contabil|yesno:'Sim,Não' }}</span></div>
+                    <div style="margin-bottom: 6px;"><strong>Resumo IA:</strong> {% if doc.resumo_ia %}<span title="{{ doc.resumo_ia }}">{{ doc.resumo_ia|truncatechars:120 }}</span>{% else %}(sem resumo IA){% endif %}</div>
+                    <div style="margin-bottom: 6px;"><strong>Assunto:</strong> {{ doc.assunto|default:'(sem assunto)' }}</div>
+                    <div style="margin-bottom: 6px;"><strong>Impacto Fiscal:</strong> {{ doc.impacto_fiscal|default:'(sem impacto fiscal)' }}</div>
+                    <div style="margin-bottom: 6px;"><strong>Normas Relacionadas:</strong>
+                        {% with normas=doc.normas_relacionadas.all|slice:':10' %}
+                        {% if normas %}
+                            <ul style="margin: 4px 0 0 12px; padding: 0;">
+                            {% for norma in normas %}
+                                <li style="background: none; padding: 0; margin: 0 0 2px 0; font-size:0.97em;">🔗 {{ norma }}</li>
+                            {% empty %}
+                                <li style="background: none; padding: 0; margin: 0; font-size:0.97em;">(nenhuma)</li>
+                            {% endfor %}
+                            </ul>
+                            {% if doc.normas_relacionadas.count > 10 %}
+                                <span style="color:#888; font-size:0.95em;">...e mais {{ doc.normas_relacionadas.count|add:'-10' }} normas</span>
+                            {% endif %}
+                        {% else %}(nenhuma){% endif %}
+                        {% endwith %}
+                    </div>
+                </div>
             {% endfor %}
-            </ul>
+            </div>
         {% else %}
             <p class="empty">Nenhum documento encontrado.</p>
         {% endif %}
 
-        {% if docs_diario %}
+        {% if resumo_docs_diario.total > 0 %}
             <hr>
             <h2>Documentos do Diário Oficial</h2>
-            <ul>
+            <div style="background:#fef9e7;padding:10px 16px;border-radius:6px;margin-bottom:18px;">
+                <strong>Resumo:</strong>
+                <ul style="margin:0 0 0 18px;padding:0;list-style:disc;">
+                    <li>Total: {{ resumo_docs_diario.total }}</li>
+                    {% for campo, valor in resumo_docs_diario.exemplos.items %}
+                        {% if campo != 'texto_completo' and valor|stringformat:'s'|length < 200 %}
+                            <li>{{ campo|capfirst }}: {{ valor }}</li>
+                        {% elif campo == 'texto_completo' %}
+                            <li>{{ campo|capfirst }}: [texto oculto]</li>
+                        {% elif valor|stringformat:'s'|length >= 200 %}
+                            <li>{{ campo|capfirst }}: [valor muito longo oculto]</li>
+                        {% endif %}
+                    {% endfor %}
+                </ul>
+            </div>
+            <div style="display: flex; flex-wrap: wrap; gap: 18px;">
             {% for doc in docs_diario %}
-                <li>ID: {{ doc.id }} | Nome: {{ doc.nome }} | Data: {{ doc.data_upload }} </li>
+                <div style="background: #f9fafc; border: 1px solid #e1e4e8; border-radius: 10px; box-shadow: 0 2px 8px rgba(44,62,80,0.07); padding: 20px 22px; min-width: 320px; flex: 1 1 340px; max-width: 420px; position: relative;">
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                        <span style="font-size: 1.3em; color: #2980b9;">📄</span>
+                        <span style="font-weight: 600; font-size: 1.1em; color: #2c3e50;">{{ doc.titulo|default:'(sem título)' }}</span>
+                    </div>
+                    <div style="color: #555; font-size: 0.98em; margin-bottom: 6px;">{{ doc.data_publicacao|date:'d/m/Y'|default:'(sem data)' }} | <span style="color:#888;">{{ doc.get_tipo_documento_display|default:'(sem tipo)' }}</span></div>
+                    <div style="margin-bottom: 6px;"><strong>Fonte:</strong> {{ doc.fonte_documento|default:'(sem fonte)' }}</div>
+                    <div style="margin-bottom: 6px;"><strong>URL:</strong> {% if doc.url_original %}<a href="{{ doc.url_original }}" target="_blank" style="color:#3498db;">Abrir</a>{% else %}(sem url){% endif %}</div>
+                    <div style="margin-bottom: 6px;"><strong>Processado:</strong> <span style="color: {% if doc.processado %}#27ae60{% else %}#c0392b{% endif %}; font-weight:600;">{{ doc.processado|yesno:'Sim,Não' }}</span></div>
+                    <div style="margin-bottom: 6px;"><strong>Relevante Contábil:</strong> <span style="color: {% if doc.relevante_contabil %}#27ae60{% else %}#c0392b{% endif %}; font-weight:600;">{{ doc.relevante_contabil|yesno:'Sim,Não' }}</span></div>
+                    <div style="margin-bottom: 6px;"><strong>Resumo IA:</strong> {% if doc.resumo_ia %}<span title="{{ doc.resumo_ia }}">{{ doc.resumo_ia|truncatechars:120 }}</span>{% else %}(sem resumo IA){% endif %}</div>
+                    <div style="margin-bottom: 6px;"><strong>Assunto:</strong> {{ doc.assunto|default:'(sem assunto)' }}</div>
+                    <div style="margin-bottom: 6px;"><strong>Impacto Fiscal:</strong> {{ doc.impacto_fiscal|default:'(sem impacto fiscal)' }}</div>
+                    <div style="margin-bottom: 6px;"><strong>Normas Relacionadas:</strong>
+                        {% if doc.normas_relacionadas.all %}
+                            <ul style="margin: 4px 0 0 12px; padding: 0;">
+                            {% for norma in doc.normas_relacionadas.all %}
+                                <li style="background: none; padding: 0; margin: 0 0 2px 0; font-size:0.97em;">🔗 {{ norma }}</li>
+                            {% empty %}
+                                <li style="background: none; padding: 0; margin: 0; font-size:0.97em;">(nenhuma)</li>
+                            {% endfor %}
+                            </ul>
+                        {% else %}(nenhuma){% endif %}
+                    </div>
+                </div>
             {% endfor %}
-            </ul>
+            </div>
         {% else %}
             <p class="empty">Nenhum documento do Diário Oficial encontrado.</p>
         {% endif %}

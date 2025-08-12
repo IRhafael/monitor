@@ -17,7 +17,9 @@ from openpyxl.utils import get_column_letter
 from openpyxl.chart import BarChart, PieChart, LineChart, Reference
 from openpyxl.drawing.image import Image
 
+
 from monitor.models import Documento, NormaVigente, TermoMonitorado, RelatorioGerado
+from .enriquecedor import enriquecer_documento_dict
 
 # Importe a biblioteca da Anthropic
 import anthropic # Importe a biblioteca da Anthropic
@@ -28,6 +30,9 @@ logger = logging.getLogger(__name__)
 # Remova referências a MISTRAL_API_KEY_RELATORIO e MISTRAL_API_URL_RELATORIO
 
 class ClaudeRelatorioAdapter:
+    """
+    Adapter para integração com a API Claude (Anthropic) para geração de análises e insights.
+    """
     def __init__(self):
         try:
             api_key = getattr(settings, 'ANTHROPIC_API_KEY', os.environ.get("ANTHROPIC_API_KEY"))
@@ -148,93 +153,97 @@ INSTRUÇÕES ADICIONAIS:
         return self._call_claude(system_prompt, user_prompt, max_tokens=3000, temperature=0.3) or "Não foi possível gerar o insight consolidado detalhado com Claude."
 
 
-class AnaliseIA: # Mantém o nome, mas adapta o cliente interno
+class AnaliseIA:
     def __init__(self, claude_client_instance: Optional[ClaudeRelatorioAdapter] = None): # Alterado
         # Alterado para usar ClaudeRelatorioAdapter
         self.claude_adapter = claude_client_instance if claude_client_instance else ClaudeRelatorioAdapter()
 
     # ... (métodos _identificar_fontes_principais e _contar_tipos_normas permanecem os mesmos)
-    @staticmethod #relatorio.py
-    def _identificar_fontes_principais(documentos: List[Documento]) -> Dict[str, int]: #relatorio.py
-        logger.debug(f"Iniciando _identificar_fontes_principais para {len(documentos)} documentos.") #relatorio.py
-        fontes = defaultdict(int) #relatorio.py
-        try: #relatorio.py
-            for doc in documentos: #relatorio.py
-                fonte_val = None #relatorio.py
-                if hasattr(doc, 'fonte_documento') and doc.fonte_documento: #relatorio.py
-                    fonte_val = doc.fonte_documento.strip() #relatorio.py
-                elif doc.url_original: #relatorio.py
-                    try: #relatorio.py
-                        parsed_url = urlparse(doc.url_original) #relatorio.py
-                        fonte_val = parsed_url.netloc if parsed_url.netloc else doc.url_original #relatorio.py
-                    except: fonte_val = doc.url_original[:70] # Fallback #relatorio.py
-                
-                if fonte_val: #relatorio.py
-                    fontes[fonte_val] += 1 #relatorio.py
-                else: #relatorio.py
-                    fontes["Fonte Não Especificada"] += 1 #relatorio.py
-            return dict(sorted(fontes.items(), key=lambda item: item[1], reverse=True)[:5]) #relatorio.py
-        except Exception as e: #relatorio.py
-            logger.error(f"Erro em _identificar_fontes_principais: {e}", exc_info=True) #relatorio.py
-            return {"Erro na análise de fontes": 1} #relatorio.py
+    @staticmethod
+    def _identificar_fontes_principais(documentos: List[Documento]) -> Dict[str, int]:
+        """Identifica as principais fontes dos documentos."""
+        logger.debug(f"Iniciando _identificar_fontes_principais para {len(documentos)} documentos.")
+        fontes = defaultdict(int)
+        try:
+            for doc in documentos:
+                fonte_val = None
+                if hasattr(doc, 'fonte_documento') and doc.fonte_documento:
+                    fonte_val = doc.fonte_documento.strip()
+                elif getattr(doc, 'url_original', None):
+                    try:
+                        parsed_url = urlparse(doc.url_original)
+                        fonte_val = parsed_url.netloc if parsed_url.netloc else doc.url_original
+                    except Exception:
+                        fonte_val = str(doc.url_original)[:70]
+                if fonte_val:
+                    fontes[fonte_val] += 1
+                else:
+                    fontes["Fonte Não Especificada"] += 1
+            return dict(sorted(fontes.items(), key=lambda item: item[1], reverse=True)[:5])
+        except Exception as e:
+            logger.error(f"Erro em _identificar_fontes_principais: {e}", exc_info=True)
+            return {"Erro na análise de fontes": 1}
 
-    @staticmethod #relatorio.py
-    def _contar_tipos_normas(normas: List[NormaVigente]) -> Dict[str, int]: #relatorio.py
-        tipos = defaultdict(int) #relatorio.py
-        for norma in normas: #relatorio.py
-            tipos[norma.get_tipo_display()] += 1 #relatorio.py
-        return dict(sorted(tipos.items(), key=lambda item: item[1], reverse=True)) #relatorio.py
+    @staticmethod
+    def _contar_tipos_normas(normas: List[NormaVigente]) -> Dict[str, int]:
+        """Conta os tipos de normas presentes na lista."""
+        tipos = defaultdict(int)
+        for norma in normas:
+            try:
+                tipos[norma.get_tipo_display()] += 1
+            except Exception:
+                tipos[str(getattr(norma, 'tipo', 'Desconhecido'))] += 1
+        return dict(sorted(tipos.items(), key=lambda item: item[1], reverse=True))
 
 
     def _gerar_insights_automaticos(self, documentos: List[Documento], normas: List[NormaVigente]) -> List[Dict[str, str]]:
-        insights = [] #relatorio.py
-        try: #relatorio.py
-            # Seus insights baseados em contagem (mantidos) #relatorio.py
-            if len(documentos) > 50: # Limite de exemplo #relatorio.py
-                insights.append({ #relatorio.py
-                    'titulo': 'Alto Volume de Documentos', #relatorio.py
-                    'descricao': f'Sistema analisou {len(documentos)} documentos no período, indicando atividade regulatória significativa.', #relatorio.py
-                    'relevancia': 'alta' #relatorio.py
-                }) #relatorio.py
-            
-            normas_vigentes_count = len([n for n in normas if n.situacao == 'VIGENTE']) #relatorio.py
-            if normas and len(normas) > 0 and normas_vigentes_count / len(normas) > 0.8: # Adicionado len(normas) > 0 #relatorio.py
-                insights.append({ #relatorio.py
-                    'titulo': 'Boa Taxa de Conformidade de Normas', #relatorio.py
-                    'descricao': f'{(normas_vigentes_count/len(normas)*100):.1f}% das normas identificadas estão atualmente vigentes.', #relatorio.py
-                    'relevancia': 'média' #relatorio.py
-                }) #relatorio.py
-            
-            # Insight Consolidado da Claude
-            docs_para_insight_ia = [] #relatorio.py
-            for doc in documentos: #relatorio.py
-                if doc.relevante_contabil and (hasattr(doc, 'resumo_ia') and doc.resumo_ia): #relatorio.py
-                    docs_para_insight_ia.append({ #relatorio.py
-                        "titulo": doc.titulo, #relatorio.py
-                        "data_publicacao": doc.data_publicacao.strftime("%d/%m/%Y") if doc.data_publicacao else "N/D", #relatorio.py
-                        "resumo_ia": doc.resumo_ia[:300] + "..." if doc.resumo_ia and len(doc.resumo_ia) > 300 else doc.resumo_ia, # Envia resumos curtos #relatorio.py
-                        "pontos_criticos_ia": doc.metadata.get('ia_pontos_criticos', []) if hasattr(doc, 'metadata') and doc.metadata else [] #relatorio.py
-                    }) #relatorio.py
-            
-            if docs_para_insight_ia: # Se houver documentos relevantes com resumos IA #relatorio.py
-                # Alterado para usar self.claude_adapter
-                insight_consolidado_ia = self.claude_adapter.gerar_insight_conjunto_documentos(docs_para_insight_ia[:10]) # Limita a 10 docs para o prompt de exemplo
-                if insight_consolidado_ia and "Erro API Claude" not in insight_consolidado_ia and "Erro: Cliente Anthropic Claude" not in insight_consolidado_ia: #relatorio.py
-                    insights.append({ #relatorio.py
-                        'titulo': 'Análise Consolidada por IA (Claude)', # Alterado
-                        'descricao': insight_consolidado_ia, #relatorio.py
-                        'relevancia': 'alta' #relatorio.py
-                    }) #relatorio.py
-                elif insight_consolidado_ia: # Captura e mostra o erro da API, se houver
+        """Gera insights automáticos a partir dos documentos e normas."""
+        insights = []
+        try:
+            if len(documentos) > 50:
+                insights.append({
+                    'titulo': 'Alto Volume de Documentos',
+                    'descricao': f'Sistema analisou {len(documentos)} documentos no período, indicando atividade regulatória significativa.',
+                    'relevancia': 'alta'
+                })
+            normas_vigentes_count = len([n for n in normas if getattr(n, 'situacao', None) == 'VIGENTE'])
+            if normas and len(normas) > 0 and normas_vigentes_count / len(normas) > 0.8:
+                insights.append({
+                    'titulo': 'Boa Taxa de Conformidade de Normas',
+                    'descricao': f'{(normas_vigentes_count/len(normas)*100):.1f}% das normas identificadas estão atualmente vigentes.',
+                    'relevancia': 'média'
+                })
+            docs_para_insight_ia = []
+            for doc in documentos:
+                if getattr(doc, 'relevante_contabil', False) and getattr(doc, 'resumo_ia', None):
+                    pontos_criticos = []
+                    metadata = getattr(doc, 'metadata', {})
+                    if isinstance(metadata, dict):
+                        pontos_criticos = metadata.get('ia_pontos_criticos', [])
+                    docs_para_insight_ia.append({
+                        "titulo": getattr(doc, 'titulo', 'N/A'),
+                        "data_publicacao": doc.data_publicacao.strftime("%d/%m/%Y") if getattr(doc, 'data_publicacao', None) else "N/D",
+                        "resumo_ia": doc.resumo_ia[:300] + "..." if doc.resumo_ia and len(doc.resumo_ia) > 300 else doc.resumo_ia,
+                        "pontos_criticos_ia": pontos_criticos
+                    })
+            if docs_para_insight_ia:
+                insight_consolidado_ia = self.claude_adapter.gerar_insight_conjunto_documentos(docs_para_insight_ia[:10])
+                if insight_consolidado_ia and "Erro API Claude" not in insight_consolidado_ia and "Erro: Cliente Anthropic Claude" not in insight_consolidado_ia:
+                    insights.append({
+                        'titulo': 'Análise Consolidada por IA (Claude)',
+                        'descricao': insight_consolidado_ia,
+                        'relevancia': 'alta'
+                    })
+                elif insight_consolidado_ia:
                     insights.append({
                         'titulo': 'Falha na Análise Consolidada por IA (Claude)',
                         'descricao': f"Não foi possível gerar a análise. Detalhe do erro: {insight_consolidado_ia}",
                         'relevancia': 'crítica'
                     })
-            return insights #relatorio.py
-        except Exception as e: #relatorio.py
-            logger.error(f"Erro ao gerar insights automáticos: {e}", exc_info=True) #relatorio.py
-            return [{'titulo': 'Erro nos Insights', 'descricao': str(e), 'relevancia': 'crítica'}] #relatorio.py
+            return insights
+        except Exception as e:
+            logger.error(f"Erro ao gerar insights automáticos: {e}", exc_info=True)
+            return [{'titulo': 'Erro nos Insights', 'descricao': str(e), 'relevancia': 'crítica'}]
 
 
 class RelatorioAvancado:
@@ -325,6 +334,7 @@ class RelatorioAvancado:
             celula.fill = self.estilos[f'fill_{estilo_fill_cor_nome}'] # <--- CORREÇÃO AQUI
 
 
+
     def _criar_planilha_documentos_avancada(self, documentos: List[Documento]):
         """Cria a aba de Documentos com informações detalhadas e análises da IA."""
         ws = self.wb.create_sheet(title="📄 Documentos Detalhados")
@@ -339,35 +349,42 @@ class RelatorioAvancado:
 
         for col, cabecalho_texto in enumerate(cabecalhos, 1):
             cell = ws.cell(row=1, column=col, value=cabecalho_texto)
-            # Supondo que self._aplicar_estilo_celula e self.estilos estão definidos corretamente
             self._aplicar_estilo_celula(cell, 'cabecalho_tabela')
 
         row_num = 2
         for doc in documentos:
-            # Dados da IA (já devem estar no objeto Documento, preenchidos pelo PDFProcessor)
-            justificativa_ia = doc.metadata.get('ia_relevancia_justificativa', "N/A") if hasattr(doc, 'metadata') and doc.metadata else "N/A"
-            pontos_criticos_ia_lista = doc.metadata.get('ia_pontos_criticos', []) if hasattr(doc, 'metadata') and doc.metadata else []
+            # Enriquecimento prévio do documento para garantir campos completos
+            doc_dict = doc.to_dict() if hasattr(doc, 'to_dict') else doc.__dict__
+            doc_dict = enriquecer_documento_dict(doc_dict)
+            # Dados da IA e campos opcionais
+            metadata = getattr(doc, 'metadata', {})
+            if not isinstance(metadata, dict):
+                metadata = {}
+            justificativa_ia = metadata.get('ia_relevancia_justificativa', "N/A")
+            pontos_criticos_ia_lista = metadata.get('ia_pontos_criticos', [])
             pontos_criticos_ia_str = "\n".join([f"- {p}" for p in pontos_criticos_ia_lista]) if pontos_criticos_ia_lista else "N/A"
-            
-            resumo_ia_val = getattr(doc, 'resumo_ia', doc.resumo or "N/A") # Usa resumo_ia se existir, senão resumo principal
+            resumo_ia_val = getattr(doc, 'resumo_ia', getattr(doc, 'resumo', "N/A"))
             sentimento_ia_val = getattr(doc, 'sentimento_ia', "N/A")
-            # Supondo que impacto_fiscal é um campo TextField ou CharField no modelo Documento
-            # Se for um JSONField ou algo mais complexo, ajuste a forma de obter o valor.
             impacto_fiscal_ia_val = getattr(doc, 'impacto_fiscal_ia', getattr(doc, 'impacto_fiscal', "N/A"))
-
-
-            normas_extraidas_obj = doc.normas_relacionadas.all()
-            normas_extraidas_str = "\n".join([f"- {n.get_tipo_display()} {n.numero}/{n.ano if n.ano else ''}" for n in normas_extraidas_obj]) if normas_extraidas_obj.exists() else "Nenhuma"
-            qtd_normas = normas_extraidas_obj.count()
-
+            normas_extraidas_obj = getattr(doc, 'normas_relacionadas', None)
+            normas_extraidas_str = "Nenhuma"
+            qtd_normas = 0
+            if normas_extraidas_obj and hasattr(normas_extraidas_obj, 'all'):
+                normas_qs = normas_extraidas_obj.all()
+                if hasattr(normas_qs, 'exists') and normas_qs.exists():
+                    normas_extraidas_str = "\n".join([
+                        f"- {getattr(n, 'get_tipo_display', lambda: getattr(n, 'tipo', 'N/A'))()} {getattr(n, 'numero', '')}{'/' + str(n.ano) if getattr(n, 'ano', None) else ''}"
+                        for n in normas_qs
+                    ])
+                    qtd_normas = normas_qs.count()
             dados_linha = [
-                doc.id,
-                doc.data_publicacao, # Será formatado pelo estilo 'dados_data'
-                doc.titulo,
-                doc.get_tipo_documento_display() if hasattr(doc, 'tipo_documento') and doc.tipo_documento else "N/A",
-                doc.fonte_documento if hasattr(doc, 'fonte_documento') and doc.fonte_documento else "N/A",
-                doc.url_original,
-                "SIM" if doc.relevante_contabil else "NÃO",
+                getattr(doc, 'id', None),
+                getattr(doc, 'data_publicacao', None),
+                getattr(doc, 'titulo', "N/A"),
+                doc.get_tipo_documento_display() if hasattr(doc, 'get_tipo_documento_display') and getattr(doc, 'tipo_documento', None) else "N/A",
+                getattr(doc, 'fonte_documento', "N/A"),
+                getattr(doc, 'url_original', "N/A"),
+                "SIM" if getattr(doc, 'relevante_contabil', False) else "NÃO",
                 justificativa_ia,
                 pontos_criticos_ia_str,
                 resumo_ia_val,
@@ -375,38 +392,28 @@ class RelatorioAvancado:
                 impacto_fiscal_ia_val,
                 normas_extraidas_str,
                 qtd_normas,
-                "SIM" if doc.processado else "NÃO",
-                getattr(doc, 'data_processamento', None), # Será formatado se for data
-                doc.data_coleta # Será formatado se for data
+                "SIM" if getattr(doc, 'processado', False) else "NÃO",
+                getattr(doc, 'data_processamento', None),
+                getattr(doc, 'data_coleta', None)
             ]
-
             estilo_fill_linha = 'fill_zebra' if row_num % 2 == 0 else None
-
             for col_idx, cell_value in enumerate(dados_linha, 1):
                 cell = ws.cell(row=row_num, column=col_idx, value=cell_value)
-                # Aplica estilo base e de preenchimento
-                # CORREÇÃO AQUI:
-                if isinstance(cell_value, (datetime, date)): # Verifica se é datetime.datetime ou datetime.date
+                if isinstance(cell_value, (datetime, date)):
                     self._aplicar_estilo_celula(cell, 'dados_data', estilo_fill_linha)
-                elif isinstance(cell_value, (int, float)) and col_idx == cabecalhos.index("Qtd Normas") + 1 : # Exemplo para Qtd Normas
+                elif isinstance(cell_value, (int, float)) and col_idx == cabecalhos.index("Qtd Normas") + 1:
                     self._aplicar_estilo_celula(cell, 'dados_numero', estilo_fill_linha)
-                else: # Texto
+                else:
                     self._aplicar_estilo_celula(cell, 'dados_texto', estilo_fill_linha)
-                
-                # Formatação condicional para relevância
                 if cabecalhos[col_idx-1] == "Relevante (IA)":
-                    if doc.relevante_contabil:
-                        # Supondo que self.estilos['fill_sucesso'] é um PatternFill
-                        cell.fill = self.estilos['fill_sucesso'] 
+                    if getattr(doc, 'relevante_contabil', False):
+                        cell.fill = self.estilos['fill_sucesso']
                     else:
-                        cell.fill = self.estilos['fill_aviso'] 
-
+                        cell.fill = self.estilos['fill_aviso']
             row_num += 1
-
-        # Ajusta larguras
         larguras = [6, 12, 45, 18, 25, 35, 12, 40, 40, 50, 15, 40, 30, 10, 10, 18, 18]
         for i, largura_val in enumerate(larguras):
-            if i < len(cabecalhos): # Garante que não exceda o número de colunas
+            if i < len(cabecalhos):
                 ws.column_dimensions[get_column_letter(i + 1)].width = largura_val
 
 
@@ -544,54 +551,44 @@ class RelatorioAvancado:
 
     def gerar_relatorio_completo(self) -> Optional[str]:
         """
-        Ponto de entrada principal para gerar todas as abas do relatório.
-        Recupera dados do banco e chama os métodos de criação de planilhas.
+        Gera todas as abas do relatório, enriquecendo previamente os documentos para garantir dados completos.
         """
         logger.info("Iniciando geração do relatório avançado de compliance...")
         try:
-            # Coleta os dados (exemplo: últimos 30 dias, ou todos os relevantes não reportados)
-            # Você pode adicionar filtros aqui conforme a necessidade
             trinta_dias_atras = timezone.now() - timedelta(days=30)
             documentos = Documento.objects.filter(data_coleta__gte=trinta_dias_atras).prefetch_related('normas_relacionadas').order_by('-data_publicacao')
+            # Enriquecimento prévio de todos os documentos
+            documentos_enriquecidos = []
+            for doc in documentos:
+                doc_dict = doc.to_dict() if hasattr(doc, 'to_dict') else doc.__dict__
+                doc_dict = enriquecer_documento_dict(doc_dict)
+                for k, v in doc_dict.items():
+                    if hasattr(doc, k):
+                        setattr(doc, k, v)
+                documentos_enriquecidos.append(doc)
             # Para normas, pegar todas as que foram relacionadas aos documentos do período ou todas as ativas
             normas_ids = set()
-            for doc in documentos:
+            for doc in documentos_enriquecidos:
                 for norma in doc.normas_relacionadas.all():
                     normas_ids.add(norma.id)
             normas = NormaVigente.objects.filter(id__in=list(normas_ids)).order_by('tipo', '-ano', 'numero')
-
-            if not documentos.exists():
+            if not documentos_enriquecidos:
                 logger.warning("Nenhum documento encontrado para o período. O relatório pode ficar vazio.")
-                # Mesmo assim, podemos gerar um relatório vazio com cabeçalhos
-            
-            # Gerar as abas
-            self._criar_resumo_executivo(documentos, normas)
-            self._criar_planilha_documentos_avancada(documentos) # Planilha de Documentos aprimorada
-            #self._criar_planilha_normas_avancada(normas)         # Planilha de Normas aprimorada
-            # self._criar_analise_compliance(normas) # Revise este método
-            # self._criar_tendencias_temporais(documentos) # Revise este método
-            # self._criar_analise_ia(documentos, normas) # Revise ou remova se a de Documentos for suficiente
-            self._criar_dashboard_visual(documentos, normas)
-
-
-            # Salvar o relatório
+            self._criar_resumo_executivo(documentos_enriquecidos, normas)
+            self._criar_planilha_documentos_avancada(documentos_enriquecidos)
+            self._criar_dashboard_visual(documentos_enriquecidos, normas)
             caminho_relativo_arquivo = self._salvar_relatorio()
-
             if caminho_relativo_arquivo:
-                # Registrar no modelo RelatorioGerado
                 RelatorioGerado.objects.create(
-                    tipo='CONTABIL', # Ou um tipo mais específico como 'COMPLIANCE_AVANCADO'
+                    tipo='CONTABIL',
                     formato='XLSX',
                     caminho_arquivo=caminho_relativo_arquivo,
-                    # parametros = { ... } # Se houver parâmetros
-                    # gerado_por = ... # Se tiver o usuário
                 )
                 logger.info("Relatório avançado gerado e registrado com sucesso.")
-                return caminho_relativo_arquivo # Retorna o caminho para a view
+                return caminho_relativo_arquivo
             else:
                 logger.error("Falha ao salvar o relatório gerado.")
                 return None
-
         except Exception as e:
             logger.error(f"Erro GERAL na geração do relatório completo: {e}", exc_info=True)
             return None

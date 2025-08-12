@@ -154,32 +154,27 @@ class SEFAZScraper:
             return False
 
     def get_norm_details(self, norm_type, norm_number):
-        """Busca detalhes da norma com base na estrutura HTML fornecida"""
+        """Busca detalhes da norma com base na estrutura HTML fornecida e enriquece para o modelo Documento"""
         try:
+            from monitor.utils.enriquecedor import enriquecer_documento_dict
             with self.browser_session():
                 # 1. Acessa a página principal
                 self.driver.get(self.base_url)
                 self._save_debug_info("01_pagina_inicial")
-                
                 # 2. Executa a pesquisa
                 if not self._pesquisar_norma(norm_type, norm_number):
                     return None
-                
                 # 3. Aguarda e muda para o iframe de resultados
                 try:
                     WebDriverWait(self.driver, 10).until(
                         EC.frame_to_be_available_and_switch_to_it((By.TAG_NAME, "iframe")))
-                    
                     # 4. Aguarda o corpo do documento carregar
                     WebDriverWait(self.driver, 10).until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, "div.document-body")))
-                    
                     # 5. Extrai as informações da norma
                     doc_body = self.driver.find_element(By.CSS_SELECTOR, "div.document-body")
-                    
                     # Extrai o texto principal
                     snippet = doc_body.find_element(By.CSS_SELECTOR, "div.field-snippet span.value").text
-                    
                     # Extrai os campos individuais
                     fields = {
                         'situacao': self._extract_field(doc_body, "field-situacao"),
@@ -193,24 +188,22 @@ class SEFAZScraper:
                         'ementa': self._extract_field(doc_body, "field-ementa"),
                         'altera': self._extract_links(doc_body, "field-alt")
                     }
-                    
-                    # Constrói o resultado
+                    # Constrói o resultado bruto
                     result = {
                         'norma': f"{norm_type} {norm_number}",
                         'texto_completo': snippet,
                         **fields
                     }
-                    
+                    # Enriquecimento para o modelo Documento
+                    enriched = enriquecer_documento_dict(result)
                     self._save_debug_info("04_norma_encontrada")
-                    return result
-                    
+                    return enriched
                 except TimeoutException:
                     self.logger.warning("Tempo excedido ao carregar resultados")
                     return None
                 except NoSuchElementException as e:
                     self.logger.warning(f"Elemento não encontrado: {str(e)}")
                     return None
-                    
         except Exception as e:
             self.logger.error(f"Erro geral: {str(e)}")
             self._save_debug_info("99_erro_geral")
