@@ -1,3 +1,4 @@
+
 import os
 from selenium.webdriver.common.keys import Keys
 import re
@@ -126,6 +127,24 @@ class SEFAZScraper:
 
         pass
 
+
+    def _contem_termos_prioritarios(self, texto: str) -> bool:
+        """Verifica se o texto contém termos monitorados ativos"""
+        try:
+            from monitor.models import TermoMonitorado
+        except ImportError:
+            return False
+        termos = TermoMonitorado.objects.filter(ativo=True).order_by('-prioridade')
+        texto_upper = texto.upper()
+        for termo_obj in termos:
+            termos_verificar = [termo_obj.termo]
+            if termo_obj.variacoes:
+                termos_verificar.extend([v.strip() for v in termo_obj.variacoes.split(',')])
+            for termo in termos_verificar:
+                if termo.upper() in texto_upper:
+                    return True
+        return False
+
     @contextmanager
     def browser_session(self):
         tentativas = 0
@@ -170,7 +189,46 @@ class SEFAZScraper:
         """Padroniza números para comparação"""
         return re.sub(r'[^\d/]', '', number).lower()
 
-    # Modifiquei o método _pesquisar_norma para aceitar pesquisa pelos termos prioritários
+    def coletar_documentos(self, data_inicio=None, data_fim=None):
+        from monitor.models import Documento
+        documentos_salvos = []
+        # Exemplo: supondo que já existe uma lista de URLs de PDFs para coletar
+        lista_urls = self._obter_lista_pdfs(data_inicio, data_fim)
+        for pdf_url in lista_urls:
+            try:
+                pdf_content = self._baixar_pdf(pdf_url)
+                if not pdf_content:
+                    continue
+                texto_extraido = self._extrair_texto_de_pdf(pdf_content)
+                if not texto_extraido:
+                    continue
+                if not self._contem_termos_prioritarios(texto_extraido):
+                    self.logger.info(f"PDF ignorado (sem relevância fiscal/contábil): {pdf_url}")
+                    continue
+                file_name = pdf_url.split('/')[-1]
+                documento, created = Documento.objects.update_or_create(
+                    url_original=pdf_url,
+                    defaults={
+                        'titulo': file_name,
+                        'data_publicacao': datetime.now().date(),
+                        'texto_completo': texto_extraido,
+                        'processado': False,
+                        'relevante_contabil': True,
+                        'assunto': 'Contábil/Fiscal',
+                        'metadata': {'data_coleta': datetime.now().isoformat()},
+                    }
+                )
+                documento.arquivo_pdf.save(file_name, pdf_content)
+                documentos_salvos.append(documento)
+                self.logger.info(f"Documento '{file_name}' salvo com sucesso (novo: {created}).")
+            except Exception as e:
+                self.logger.error(f"Erro ao salvar documento {pdf_url}: {e}", exc_info=True)
+        return documentos_salvos
+
+    def _obter_lista_pdfs(self, data_inicio=None, data_fim=None):
+        # Implemente a lógica para obter a lista de URLs de PDFs do SEFAZ
+        # Exemplo: retornar uma lista mock para teste
+        return []
     def _pesquisar_norma(self, norm_type=None, norm_number=None, term=None):
         """Executa a pesquisa no portal com norm_type/norm_number ou com termo prioritário"""
         try:
@@ -287,12 +345,12 @@ class SEFAZScraper:
         """Extrai o valor de um campo específico"""
         try:
             field = parent.find_element(By.CSS_SELECTOR, f"div.{field_class}")
-            # Remove o rótulo do campo (texto em strong)
+            field_text = field.text
             for strong in field.find_elements(By.TAG_NAME, "strong"):
-                field_text = field.text.replace(strong.text, "").strip()
-            return field_text
+                field_text = field_text.replace(strong.text, "").strip()
+            return field_text if field_text else ""
         except NoSuchElementException:
-            return None
+            return ""
         
     def _extract_link(self, parent, field_class):
         """Extrai um link de um campo específico"""
@@ -300,11 +358,11 @@ class SEFAZScraper:
             field = parent.find_element(By.CSS_SELECTOR, f"div.{field_class}")
             link = field.find_element(By.TAG_NAME, "a")
             return {
-                'texto': link.text,
-                'url': link.get_attribute("href")
+                'texto': link.text if link.text else "",
+                'url': link.get_attribute("href") if link.get_attribute("href") else ""
             }
         except NoSuchElementException:
-            return None
+            return {"texto": "", "url": ""}
 
     def _extract_links(self, parent, field_class):
         """Extrai múltiplos links de um campo (como 'Altera')"""
@@ -313,12 +371,12 @@ class SEFAZScraper:
             links = []
             for link in field.find_elements(By.TAG_NAME, "a"):
                 links.append({
-                    'texto': link.text,
-                    'url': link.get_attribute("href")
+                    'texto': link.text if link.text else "",
+                    'url': link.get_attribute("href") if link.get_attribute("href") else ""
                 })
             return links
         except NoSuchElementException:
-            return None
+            return []
 
     def _switch_to_results_frame(self):
         """Versão aprimorada para localizar iframe de resultados"""

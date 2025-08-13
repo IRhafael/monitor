@@ -559,8 +559,8 @@ class PDFProcessor:
             paginas = re.split(r'\f|\n{3,}', texto)
             texto_limitado = '\n'.join(paginas[:limite_paginas]) if len(paginas) > 1 else texto
             texto_limitado = texto_limitado[:limite_texto]
-            fonte = getattr(documento, 'fonte_documento', '').lower()
-            tipo = getattr(documento, 'tipo_documento', '').upper()
+            fonte = (getattr(documento, 'fonte_documento', '') or '').lower()
+            tipo = (getattr(documento, 'tipo_documento', '') or '').upper()
             if fonte == 'contabeis':
                 return self.processar_documento_contabeis(documento, texto_limitado)
             elif fonte == 'sefaz' or tipo == 'SEFAZ_ICMS':

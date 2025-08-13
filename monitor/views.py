@@ -234,15 +234,39 @@ def painel_tasks(request):
         elif tipo == 'processar_documentos':
             res = processar_documentos_pendentes_task.delay()
             return JsonResponse({'status': 'Task disparada', 'result': f'Task ID: {res.id}'})
+        elif tipo == 'processar_documentos_especificos':
+            from monitor.tasks import processar_documentos_especificos_task
+            # Exemplo: IDs fixos, pode adaptar para input dinâmico
+            res = processar_documentos_especificos_task.delay([1,2,3])
+            return JsonResponse({'status': 'Task disparada', 'result': f'Task ID: {res.id} (IDs: 1,2,3)'})
         elif tipo == 'verificar_normas':
             res = verificar_normas_sefaz_task.delay()
+            return JsonResponse({'status': 'Task disparada', 'result': f'Task ID: {res.id}'})
+        elif tipo == 'verificar_normas_especificas':
+            from monitor.tasks import verificar_normas_especificas_sefaz_task
+            # Exemplo: IDs fixos, pode adaptar para input dinâmico
+            res = verificar_normas_especificas_sefaz_task.delay([1,2,3])
+            return JsonResponse({'status': 'Task disparada', 'result': f'Task ID: {res.id} (IDs: 1,2,3)'})
+        elif tipo == 'coletar_dados_receita':
+            from monitor.tasks import coletar_dados_receita_task
+            res = coletar_dados_receita_task.delay()
+            return JsonResponse({'status': 'Task disparada', 'result': f'Task ID: {res.id}'})
+        elif tipo == 'coletar_todos_os_documentos':
+            from monitor.tasks import coletar_todos_os_documentos
+            res = coletar_todos_os_documentos.delay()
             return JsonResponse({'status': 'Task disparada', 'result': f'Task ID: {res.id}'})
         elif tipo == 'gerar_relatorio':
             from monitor.tasks import gerar_relatorio_task
             res = gerar_relatorio_task.delay()
             return JsonResponse({'status': 'Task disparada', 'result': f'Task ID: {res.id}'})
         elif tipo == 'pipeline_manual':
-            res = pipeline_manual_view.delay()
+            from monitor.tasks import pipeline_manual_completo
+            # Exemplo: datas fixas, pode adaptar para input dinâmico
+            res = pipeline_manual_completo.delay('2025-08-10', '2025-08-13')
+            return JsonResponse({'status': 'Task disparada', 'result': f'Task ID: {res.id} (Datas: 2025-08-10 a 2025-08-13)'})
+        elif tipo == 'pipeline_automatica':
+            from monitor.tasks import pipeline_coleta_e_processamento_automatica
+            res = pipeline_coleta_e_processamento_automatica.delay()
             return JsonResponse({'status': 'Task disparada', 'result': f'Task ID: {res.id}'})
         else:
             return JsonResponse({'status': 'Tipo inválido', 'result': ''})

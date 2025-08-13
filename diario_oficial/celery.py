@@ -17,7 +17,7 @@ app.conf.worker_disable_rate_limits = True
 app.conf.worker_enable_remote_control = False
 
 app.config_from_object('django.conf:settings', namespace='CELERY')
-app.autodiscover_tasks(lambda: settings.INSTALLED_APPS)
+app.autodiscover_tasks(['monitor', 'monitor.utils'])
 
 # Palavras-chave para busca de notícias relevantes
 CONTABEIS_KEYWORDS = [
@@ -31,43 +31,9 @@ CONTABEIS_KEYWORDS = [
 ]
 
 
-# Task agregadora para rodar todos os scrapers diariamente
 @app.task(name="coleta_diaria_completa")
 def coleta_diaria_completa():
 	resultados = []
-	# Contabeis
-	from monitor.utils.contabeis_scraper import ContabeisScraper
-	from monitor.models import Documento
-	from django.utils import timezone
-	scraper = ContabeisScraper()
-	for palavra in CONTABEIS_KEYWORDS:
-		noticias = scraper.buscar_noticias(palavra_chave=palavra)
-		for noticia in noticias:
-			if not noticia['url']:
-				continue
-			if Documento.objects.filter(url_original=noticia['url']).exists():
-				continue
-			detalhes = scraper.extrair_detalhes_noticia(noticia['url'])
-			data_pub = timezone.now().date()
-			if noticia['data']:
-				try:
-					import dateparser
-					data_pub_parsed = dateparser.parse(noticia['data'])
-					if data_pub_parsed:
-						data_pub = data_pub_parsed.date()
-				except Exception:
-					pass
-			doc = Documento(
-				titulo=noticia['titulo'] or detalhes.get('titulo') or noticia['resumo'][:100],
-				data_publicacao=data_pub,
-				url_original=noticia['url'],
-				resumo=noticia['resumo'],
-				texto_completo=detalhes.get('texto', ''),
-				fonte_documento="Contabeis",
-				tipo_documento="OUTRO"
-			)
-			doc.save()
-			resultados.append(doc)
 	# SEFAZ ICMS
 	try:
 		from monitor.utils.sefaz_icms_scraper import coletar_sefaz_icms

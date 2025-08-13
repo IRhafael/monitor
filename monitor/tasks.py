@@ -1,5 +1,3 @@
-# monitor/utils/tasks.py
-
 import time
 from celery import chain, shared_task, group # group não está sendo usado, pode remover se não planeja
 from datetime import datetime, timedelta, date
@@ -28,64 +26,59 @@ app.conf.beat_schedule = {
         'schedule': crontab(minute=0, hour='*/3'),  # A cada 3 horas
         'args': (3,), # Coleta dos últimos 3 dias
         'options': {'expires': 3600 * 2}
-    },
-    'verificacao-sefaz-semanal': {
-        'task': 'monitor.utils.tasks.verificar_normas_sefaz_task',
-        'schedule': crontab(day_of_week='sunday', hour=5, minute=0), # Todo domingo às 05:00 AM
-        'options': {'expires': 3600 * 4}
     }
 }
 
 
+
 # --- Tarefa de Coleta do Diário Oficial ---
-@shared_task(bind=True, max_retries=3, default_retry_delay=5 * 60) # Retry a cada 5 min #
-def coletar_diario_oficial_task(self, data_inicio_str: Optional[str] = None, data_fim_str: Optional[str] = None, dias_retroativos: Optional[int] = None): #
+@shared_task(bind=True, max_retries=3, default_retry_delay=5 * 60)
+def coletar_diario_oficial_task(self, data_inicio_str: Optional[str] = None, data_fim_str: Optional[str] = None, dias_retroativos: Optional[int] = None):
     from monitor.models import LogExecucao
-    task_id = self.request.id #
-    log_entry = LogExecucao.objects.create(tipo_execucao='COLETA', status='INICIADA', detalhes={'task_id': task_id}) #
-    logger.info(f"Tarefa Celery 'coletar_diario_oficial_task' [{task_id}] iniciada.") #
+    task_id = self.request.id
+    log_entry = LogExecucao.objects.create(tipo_execucao='COLETA', status='INICIADA', detalhes={'task_id': task_id})
+    logger.info(f"Tarefa Celery 'coletar_diario_oficial_task' [{task_id}] iniciada.")
 
-    documentos_salvos_count = 0 #
-    erros_coleta = [] #
+    documentos_salvos_count = 0
+    erros_coleta = []
 
-    try: #
-        if dias_retroativos is not None: #
-            data_fim = timezone.now().date() #
-            data_inicio = data_fim - timedelta(days=dias_retroativos) #
-            logger.info(f"[{task_id}] Coletando por {dias_retroativos} dias retroativos: de {data_inicio} a {data_fim}") #
-        elif data_inicio_str and data_fim_str: #
-            data_inicio = datetime.strptime(data_inicio_str, '%Y-%m-%d').date() #
-            data_fim = datetime.strptime(data_fim_str, '%Y-%m-%d').date() #
-        else: # Fallback para 3 dias se nada for especificado #
-            data_fim = timezone.now().date() #
-            data_inicio = data_fim - timedelta(days=3) #
-            logger.info(f"[{task_id}] Datas não fornecidas nem dias_retroativos. Usando os últimos 3 dias: de {data_inicio} a {data_fim}") #
+    try:
+        if dias_retroativos is not None:
+            data_fim = timezone.now().date()
+            data_inicio = data_fim - timedelta(days=dias_retroativos)
+            logger.info(f"[{task_id}] Coletando por {dias_retroativos} dias retroativos: de {data_inicio} a {data_fim}")
+        elif data_inicio_str and data_fim_str:
+            data_inicio = datetime.strptime(data_inicio_str, '%Y-%m-%d').date()
+            data_fim = datetime.strptime(data_fim_str, '%Y-%m-%d').date()
+        else:
+            data_fim = timezone.now().date()
+            data_inicio = data_fim - timedelta(days=3)
+            logger.info(f"[{task_id}] Datas não fornecidas nem dias_retroativos. Usando os últimos 3 dias: de {data_inicio} a {data_fim}")
 
-        scraper = DiarioOficialScraper() #
-        resultados_coleta = scraper.coletar_e_salvar_documentos(data_inicio, data_fim) #
-        documentos_salvos_count = len(resultados_coleta) #
+        scraper = DiarioOficialScraper()
+        resultados_coleta = scraper.coletar_e_salvar_documentos(data_inicio, data_fim)
+        documentos_salvos_count = len(resultados_coleta)
 
-        log_entry.status = 'SUCESSO' #
-        log_entry.detalhes.update({ #
-            'documentos_processados_pelo_scraper': documentos_salvos_count, #
-            'datas_coletadas': f"{data_inicio.strftime('%Y-%m-%d')} a {data_fim.strftime('%Y-%m-%d')}", #
-            'erros': erros_coleta #
-        }) #
+        log_entry.status = 'SUCESSO'
+        log_entry.detalhes.update({
+            'documentos_processados_pelo_scraper': documentos_salvos_count,
+            'datas_coletadas': f"{data_inicio.strftime('%Y-%m-%d')} a {data_fim.strftime('%Y-%m-%d')}",
+            'erros': erros_coleta
+        })
 
-    except Exception as e: #
-        logger.error(f"[{task_id}] Erro na tarefa de coleta do Diário Oficial: {e}", exc_info=True) #
-        log_entry.status = 'ERRO' #
-        log_entry.detalhes.update({'erro_principal': str(e), 'traceback': traceback.format_exc()}) #
-        raise #
-    finally: #
-        log_entry.data_fim = timezone.now() #
-        log_entry.duracao = log_entry.data_fim - log_entry.data_inicio #
-        log_entry.documentos_coletados = documentos_salvos_count #
-        log_entry.save() #
-        logger.info(f"[{task_id}] Tarefa Celery 'coletar_diario_oficial_task' concluída. Status: {log_entry.status}. Detalhes: {log_entry.detalhes}") #
+    except Exception as e:
+        logger.error(f"[{task_id}] Erro na tarefa de coleta do Diário Oficial: {e}", exc_info=True)
+        log_entry.status = 'ERRO'
+        log_entry.detalhes.update({'erro_principal': str(e), 'traceback': traceback.format_exc()})
+        raise
+    finally:
+        log_entry.data_fim = timezone.now()
+        log_entry.duracao = log_entry.data_fim - log_entry.data_inicio
+        log_entry.documentos_coletados = documentos_salvos_count
+        log_entry.save()
+        logger.info(f"[{task_id}] Tarefa Celery 'coletar_diario_oficial_task' concluída. Status: {log_entry.status}. Detalhes: {log_entry.detalhes}")
 
-    return {'status': log_entry.status, 'detalhes': log_entry.detalhes} #
-
+    return {'status': log_entry.status, 'detalhes': log_entry.detalhes}
 
 # --- Tarefa de Processamento de Documentos Pendentes ---
 @shared_task(bind=True, max_retries=2, default_retry_delay=10*60)
@@ -405,6 +398,7 @@ def verificar_normas_especificas_sefaz_task(self, norma_ids: List[int]): #
 def gerar_relatorio_task(self, parametros: Optional[dict] = None):
     from monitor.models import LogExecucao
     from .utils.relatorio import gerar_relatorio_contabil_avancado
+    from monitor.tasks import coletar_diario_oficial_task
     task_id = self.request.id
     log_entry = LogExecucao.objects.create(tipo_execucao='RELATORIO', status='INICIADA', detalhes={'task_id': task_id})
     logger.info(f"Tarefa Celery 'gerar_relatorio_task' [{task_id}] iniciada.")
@@ -429,3 +423,91 @@ def gerar_relatorio_task(self, parametros: Optional[dict] = None):
         logger.info(f"Tarefa Celery 'gerar_relatorio_task' [{task_id}] concluída. Status: {log_entry.status}. Detalhes: {log_entry.detalhes}")
     return {'status': log_entry.status, 'detalhes': log_entry.detalhes}
 
+from celery import shared_task
+# --- Tarefa para rodar todos os scrapers de coleta de documentos ---
+@shared_task(bind=True, name="monitor.utils.tasks.coletar_todos_os_documentos")
+def coletar_todos_os_documentos(self):
+    """
+    Executa todos os scrapers de coleta de documentos (Diário Oficial, SEFAZ, etc) em sequência.
+    Adapte para incluir outros scrapers conforme necessário.
+    """
+    from monitor.models import LogExecucao
+    task_id = self.request.id
+    log_entry = LogExecucao.objects.create(tipo_execucao='COLETA_TODOS', status='INICIADA', detalhes={'task_id': task_id})
+    logger.info(f"[{task_id}] Iniciando coleta de todos os scrapers.")
+    resultados = {}
+    erros = []
+    try:
+        # Coleta de todos os scrapers
+        documentos_coletados = []
+        # Diário Oficial
+        try:
+            scraper_diario = DiarioOficialScraper()
+            documentos_diario = scraper_diario.coletar_e_salvar_documentos()
+            resultados['diario_oficial'] = len(documentos_diario)
+            documentos_coletados.extend(documentos_diario)
+        except Exception as e:
+            logger.error(f"[{task_id}] Erro no scraper Diário Oficial: {e}", exc_info=True)
+            erros.append({'scraper': 'diario_oficial', 'erro': str(e)})
+
+        # SEFAZ
+        try:
+            from .utils.sefaz_scraper import SefazScraper
+            scraper_sefaz = SefazScraper()
+            documentos_sefaz = scraper_sefaz.coletar_e_salvar_documentos()
+            resultados['sefaz'] = len(documentos_sefaz)
+            documentos_coletados.extend(documentos_sefaz)
+        except Exception as e:
+            logger.error(f"[{task_id}] Erro no scraper SEFAZ: {e}", exc_info=True)
+            erros.append({'scraper': 'sefaz', 'erro': str(e)})
+
+        # Adicione outros scrapers aqui conforme necessário
+
+        # IDs de todos os documentos coletados
+        ids_documentos = [doc.id for doc in documentos_coletados if hasattr(doc, 'id')]
+
+        # Processa todos os documentos coletados
+        try:
+            logger.info(f"[{task_id}] Iniciando processamento dos documentos coletados de todos os scrapers.")
+            process_result = processar_documentos_pendentes_task.apply(kwargs={'document_ids': ids_documentos}).get()
+            resultados['processamento_documentos'] = process_result
+        except Exception as e:
+            logger.error(f"[{task_id}] Erro ao processar documentos coletados: {e}", exc_info=True)
+            erros.append({'etapa': 'processamento_documentos', 'erro': str(e)})
+
+        # Verifica normas SEFAZ de todos os documentos coletados
+        try:
+            logger.info(f"[{task_id}] Iniciando verificação de normas SEFAZ dos documentos coletados de todos os scrapers.")
+            from monitor.models import Documento
+            normas_ids = []
+            documentos = Documento.objects.filter(id__in=ids_documentos)
+            for doc in documentos:
+                if hasattr(doc, 'norma_id') and doc.norma_id:
+                    normas_ids.append(doc.norma_id)
+            normas_ids = list(set(normas_ids))
+            if normas_ids:
+                normas_result = verificar_normas_sefaz_task.apply(kwargs={'norma_ids': normas_ids}).get()
+                resultados['verificacao_normas_sefaz'] = normas_result
+            else:
+                resultados['verificacao_normas_sefaz'] = {'status': 'SUCESSO', 'message': 'Nenhuma norma vinculada aos documentos coletados.'}
+        except Exception as e:
+            logger.error(f"[{task_id}] Erro ao verificar normas SEFAZ: {e}", exc_info=True)
+            erros.append({'etapa': 'verificacao_normas_sefaz', 'erro': str(e)})
+
+        log_entry.status = 'SUCESSO' if not erros else 'PARCIAL'
+        log_entry.detalhes.update({
+            'resultados': resultados,
+            'erros': erros
+        })
+    except Exception as e:
+        logger.error(f"[{task_id}] Erro fatal na coleta de todos os scrapers: {e}", exc_info=True)
+        log_entry.status = 'ERRO'
+        log_entry.detalhes.update({'erro_principal': str(e), 'traceback': traceback.format_exc()})
+        raise
+    finally:
+        log_entry.data_fim = timezone.now()
+        log_entry.duracao = log_entry.data_fim - log_entry.data_inicio
+        log_entry.save()
+        logger.info(f"[{task_id}] Task 'coletar_todos_os_documentos' concluída. Status: {log_entry.status}. Detalhes: {log_entry.detalhes}")
+    return {'status': log_entry.status, 'resultados': resultados, 'erros': erros}
+# monitor/utils/tasks.py

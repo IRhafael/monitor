@@ -30,9 +30,8 @@ import traceback
 logger = logging.getLogger(__name__)
 
 class DiarioOficialScraper:
-    def __init__(self, max_docs=20):  # Aumentei o limite padrão
+    def __init__(self):
         self.BASE_URL = "https://www.diario.pi.gov.br/doe/"
-        self.max_docs = max_docs
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.122.52 Chrome/91.0.4472.124 Safari/537.36'
@@ -71,25 +70,43 @@ class DiarioOficialScraper:
             logger.info("WebDriver fechado.")
 
     def _extrair_links_pdf(self, url: str) -> List[str]:
-        """Extrai URLs de PDF de uma página web usando apenas requests+BeautifulSoup (mais leve)."""
+        """Extrai URLs de PDF de uma página web usando Selenium."""
+        driver = self._get_webdriver()
         try:
-            logger.info(f"Acessando URL (requests): {url}")
-            resp = self.session.get(url, timeout=20)
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            links_pdf = set()
+            logger.info(f"Acessando URL: {url}")
+            driver.get(url)
+
+            # Espera até que pelo menos um link .pdf esteja presente na página
+            WebDriverWait(driver, 30).until(
+                EC.presence_of_element_located((By.XPATH, "//a[contains(@href, '.pdf')]"))
+            )
+
+            logger.info("Página carregada, iniciando extração dos links PDF")
+            soup = BeautifulSoup(driver.page_source, 'html.parser')
+            
+            links_pdf = set()  # usar set direto evita duplicados
+
             for a in soup.find_all('a', href=True):
                 href = a['href'].strip()
                 if href.lower().endswith('.pdf'):
+                    # Normaliza a URL absoluta se for relativa
                     full_url = urljoin(self.BASE_URL, href)
                     links_pdf.add(full_url)
+
             links_pdf = list(links_pdf)
             logger.info(f"{len(links_pdf)} links PDF encontrados em {url}")
             logger.debug(f"Links encontrados: {links_pdf}")
             return links_pdf
-        except Exception as e:
-            logger.error(f"Erro ao extrair links PDF de {url} (requests): {str(e)}", exc_info=True)
+
+        except TimeoutException:
+            logger.error(f"Timeout ao carregar a página ou encontrar elementos em {url}")
             return []
+        except Exception as e:
+            logger.error(f"Erro ao extrair links PDF de {url}: {str(e)}", exc_info=True)
+            return []
+        finally:
+            # Não feche o driver aqui se for usar na mesma sessão
+            pass
 
 
     def _extrair_texto_de_pdf(self, pdf_content: bytes) -> Optional[str]:
@@ -345,71 +362,57 @@ class DiarioOficialScraper:
 
 
     # --- MÉTODO QUE ESTAVA FALTANDO E PRECISA SER ADICIONADO/CORRIGIDO ---
-
-    def coletar_e_salvar_documentos(self, data_inicio: date = None, data_fim: date = None, dias_retroativos: int = 3):
-        """
-        Coleta e salva documentos do Diário Oficial dos últimos N dias (default: 3).
-        Se datas forem fornecidas, usa o intervalo; senão, busca dos últimos N dias.
-        """
+    def coletar_e_salvar_documentos(self, data_inicio=None, data_fim=None):
         from monitor.models import Documento
+        """Coleta e salva PDFs do Diário Oficial para um intervalo de datas ou apenas o dia atual."""
         documentos_salvos = []
-        if not data_fim:
-            data_fim = timezone.now().date()
-        if not data_inicio:
-            data_inicio = data_fim - timedelta(days=dias_retroativos-1)
-
-        logger.info(f"Coletando Diário Oficial de {data_inicio.strftime('%Y-%m-%d')} até {data_fim.strftime('%Y-%m-%d')}")
-        current_date = data_inicio
-        try:
-            while current_date <= data_fim:
-                logger.info(f"Processando diário para a data: {current_date.strftime('%Y-%m-%d')}")
-                url_diario = f"{self.BASE_URL}?data={current_date.strftime('%d-%m-%Y')}"
-                links_pdf_para_data = self._extrair_links_pdf(url_diario)
-                if not links_pdf_para_data:
-                    logger.info(f"Nenhum PDF encontrado para a data {current_date.strftime('%Y-%m-%d')}.")
-                    current_date += timedelta(days=1)
-                    continue
-                for index, pdf_url in enumerate(links_pdf_para_data):
-                    logger.info(f"Baixando PDF {index + 1}/{len(links_pdf_para_data)}: {pdf_url}")
-                    pdf_content = self._baixar_pdf(pdf_url)
-                    if pdf_content:
-                        logger.info(f"Iniciando extração de texto de PDF: {pdf_url.split('/')[-1]}")
-                        texto_extraido = self._extrair_texto_de_pdf(pdf_content)
-                        if texto_extraido:
-                            if not self._contem_termos_prioritarios(texto_extraido):
-                                logger.info(f"PDF não contém termos prioritários. Ignorando.")
-                                continue
-                            assunto_geral = "Contábil/Fiscal"
-                            try:
-                                documento, created = Documento.objects.update_or_create(
-                                    url_original=pdf_url,
-                                    defaults={
-                                        'titulo': f"Diário Oficial - {current_date.strftime('%d/%m/%Y')} - Parte {index + 1}",
-                                        'data_publicacao': current_date,
-                                        'texto_completo': texto_extraido,
-                                        'processado': False,
-                                        'relevante_contabil': True,
-                                        'assunto': assunto_geral,
-                                        'metadata': {'data_coleta': timezone.now().isoformat()},
-                                    }
-                                )
-                                file_name = f"DOEPI_{current_date.strftime('%Y%m%d')}_{pdf_url.split('/')[-1]}"
-                                documento.arquivo_pdf.save(file_name, ContentFile(pdf_content), save=True)
-                                documentos_salvos.append(documento)
-                                logger.info(f"Documento '{file_name}' salvo com sucesso (novo: {created}).")
-                            except Exception as db_e:
-                                logger.error(f"Erro ao salvar documento {pdf_url}: {db_e}", exc_info=True)
-                        else:
-                            logger.warning(f"Não foi possível extrair texto de {pdf_url}.")
+        if data_inicio and data_fim:
+            datas = [data_inicio + timedelta(days=i) for i in range((data_fim - data_inicio).days + 1)]
+        else:
+            hoje = timezone.now().date()
+            datas = [hoje]
+        for data in datas:
+            logger.info(f"Processando diário para a data: {data.strftime('%Y-%m-%d')}")
+            url_diario = f"{self.BASE_URL}?data={data.strftime('%d-%m-%Y')}"
+            links_pdf_para_data = self._extrair_links_pdf(url_diario)
+            if not links_pdf_para_data:
+                logger.info(f"Nenhum PDF encontrado para a data {data.strftime('%Y-%m-%d')}")
+                continue
+            for index, pdf_url in enumerate(links_pdf_para_data):
+                logger.info(f"Baixando PDF {index + 1}/{len(links_pdf_para_data)}: {pdf_url}")
+                pdf_content = self._baixar_pdf(pdf_url)
+                if pdf_content:
+                    logger.info(f"Iniciando extração de texto de PDF: {pdf_url.split('/')[-1]}")
+                    texto_extraido = self._extrair_texto_de_pdf(pdf_content)
+                    if texto_extraido:
+                        if not self._contem_termos_prioritarios(texto_extraido):
+                            logger.info(f"PDF não contém termos monitorados. Ignorando.")
+                            continue
+                        assunto_geral = "Contábil/Fiscal"
+                        try:
+                            file_name = pdf_url.split('/')[-1]
+                            documento, created = Documento.objects.update_or_create(
+                                url_original=pdf_url,
+                                defaults={
+                                    'titulo': file_name,
+                                    'data_publicacao': data,
+                                    'texto_completo': texto_extraido,
+                                    'processado': False,
+                                    'relevante_contabil': True,
+                                    'assunto': assunto_geral,
+                                    'metadata': {'data_coleta': timezone.now().isoformat()},
+                                }
+                            )
+                            documento.arquivo_pdf.save(file_name, ContentFile(pdf_content), save=True)
+                            documentos_salvos.append(documento)
+                            logger.info(f"Documento '{file_name}' salvo com sucesso (novo: {created}).")
+                        except Exception as db_e:
+                            logger.error(f"Erro ao salvar documento {pdf_url}: {db_e}", exc_info=True)
                     else:
-                        logger.warning(f"Não foi possível baixar o PDF de {pdf_url}.")
-                current_date += timedelta(days=1)
-                time.sleep(2)
-        except Exception as e:
-            logger.error(f"Erro durante coleta: {e}", exc_info=True)
-            raise
-        finally:
-            self._fechar_webdriver()
+                        logger.warning(f"Não foi possível extrair texto de {pdf_url}.")
+                else:
+                    logger.warning(f"Não foi possível baixar o PDF de {pdf_url}.")
+        self._fechar_webdriver()
         return documentos_salvos
     
 

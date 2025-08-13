@@ -20,10 +20,15 @@
         <h2>Painel de Controle de Tasks Celery</h2>
         <div class="actions">
             <button onclick="dispararTask('coletar_diario')">Coletar Diário Oficial</button>
-            <button onclick="dispararTask('processar_documentos')">Processar Documentos</button>
+            <button onclick="dispararTask('processar_documentos')">Processar Documentos Pendentes</button>
+            <button onclick="dispararTask('processar_documentos_especificos')">Processar Documentos Específicos</button>
             <button onclick="dispararTask('verificar_normas')">Verificar Normas SEFAZ</button>
+            <button onclick="dispararTask('verificar_normas_especificas')">Verificar Normas Específicas SEFAZ</button>
+            <button onclick="dispararTask('coletar_dados_receita')">Coletar Dados Receita Federal</button>
+            <button onclick="dispararTask('coletar_todos_os_documentos')">Coletar Todos os Documentos (Diário)</button>
             <button onclick="dispararTask('gerar_relatorio')">Gerar Relatório</button>
             <button onclick="dispararTask('pipeline_manual')">Pipeline Manual</button>
+            <button onclick="dispararTask('pipeline_automatica')">Pipeline Automática</button>
         </div>
         <div id="status" class="status-box"></div>
         <a href="{% url 'home' %}" style="color:#3498db;">&larr; Voltar</a>
