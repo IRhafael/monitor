@@ -45,6 +45,8 @@ logger = logging.getLogger(__name__)
 def main():
     parser = argparse.ArgumentParser(description='Monitor CLI - Orquestração de rotinas')
     subparsers = parser.add_subparsers(dest='comando', required=True)
+    # Comando para iniciar todos os serviços principais
+    subparsers.add_parser('start_all', help='Inicia Celery Worker, Celery Beat e a API calculadora em novos terminais')
     # Coletar todos os PDFs do Diário Oficial (sem filtro de termos)
     sp_diario_all = subparsers.add_parser('coletar_diario_todos', help='Coletar TODOS os PDFs do Diário Oficial (sem filtro de termos)')
     sp_diario_all.add_argument('--dias', type=int, default=3, help='Dias retroativos para coleta (padrão: 3)')
@@ -85,6 +87,25 @@ def main():
 
     args = parser.parse_args()
 
+    if args.comando == 'start_all':
+        import subprocess
+        print("Iniciando Celery Worker em um novo terminal...")
+        subprocess.Popen([
+            'start', 'cmd', '/k',
+            f"cd /d {os.getcwd()} && venv311\\Scripts\\activate && celery -A diario_oficial worker -l info"
+        ], shell=True)
+        print("Iniciando Celery Beat em um novo terminal...")
+        subprocess.Popen([
+            'start', 'cmd', '/k',
+            f"cd /d {os.getcwd()} && venv311\\Scripts\\activate && celery -A diario_oficial beat -l info"
+        ], shell=True)
+        print("Iniciando a API (calculadora) via WSL em um novo terminal...")
+        subprocess.Popen([
+            'start', 'cmd', '/k',
+            "wsl -d calculadora --cd /calculadora --exec bash start.sh"
+        ], shell=True)
+        print("Todos os serviços foram iniciados!")
+        return
     if args.comando == 'coletar_diario':
         res = coletar_diario_oficial_task.apply_async(kwargs={'dias_retroativos': args.dias})
         print(f"Task coletar_diario_oficial_task disparada! Task ID: {res.id}")

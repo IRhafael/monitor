@@ -22,20 +22,19 @@ logger = logging.getLogger(__name__)
 
 # --- Configuração do Celery Beat (agendador) ---
 # ... (seu beat_schedule)
-app.conf.beat_schedule = { #
-    'pipeline-coleta-processamento-diario': { #
-        'task': 'monitor.utils.tasks.pipeline_coleta_e_processamento_automatica', #
-        'schedule': crontab(hour=3, minute=0),  # Ex: Todo dia às 03:00 AM #
-        # 'schedule': crontab(minute='*/30'), # Para testes: a cada 30 minutos
-        'args': (3,), # Coleta dos últimos 3 dias #
-        'options': {'expires': 3600 * 2} # Tarefa expira se não iniciar em 2h
-    }, #
-    'verificacao-sefaz-semanal': { #
-        'task': 'monitor.utils.tasks.verificar_normas_sefaz_task', #
-        'schedule': crontab(day_of_week='sunday', hour=5, minute=0), # Todo domingo às 05:00 AM #
-        'options': {'expires': 3600 * 4} #
-    } #
-} #
+app.conf.beat_schedule = {
+    'pipeline-coleta-processamento-diario': {
+        'task': 'monitor.utils.tasks.pipeline_coleta_e_processamento_automatica',
+        'schedule': crontab(minute=0, hour='*/3'),  # A cada 3 horas
+        'args': (3,), # Coleta dos últimos 3 dias
+        'options': {'expires': 3600 * 2}
+    },
+    'verificacao-sefaz-semanal': {
+        'task': 'monitor.utils.tasks.verificar_normas_sefaz_task',
+        'schedule': crontab(day_of_week='sunday', hour=5, minute=0), # Todo domingo às 05:00 AM
+        'options': {'expires': 3600 * 4}
+    }
+}
 
 
 # --- Tarefa de Coleta do Diário Oficial ---

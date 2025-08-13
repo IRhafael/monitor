@@ -10,10 +10,10 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-c+!j04o8ab6!*1ts^0t!-d&eondxnja+j9o14!2pdqt0rvob!f'
+SECRET_KEY = os.getenv('DJANGO_SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False
 
 ALLOWED_HOSTS = []
 
@@ -74,11 +74,11 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'monitor',
-        'USER': 'root',     # <--- Usando 'root'
-        'PASSWORD': '1234', # <--- Usando '1234'
-        'HOST': '127.0.0.1', # <--- Usando IP para forçar TCP/IP
-        'PORT': '3306',
+        'NAME': os.getenv('DB_NAME', 'monitor'),
+        'USER': os.getenv('DB_USER', 'root'),
+        'PASSWORD': os.getenv('DB_PASSWORD', '1234'),
+        'HOST': os.getenv('DB_HOST', '127.0.0.1'),
+        'PORT': os.getenv('DB_PORT', '3306'),
     }
 }
 
