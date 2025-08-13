@@ -228,6 +228,11 @@ class Documento(models.Model):
         default=False,
         verbose_name="Relevante para Contabilidade?"
     )
+    is_contabeis_news = models.BooleanField(
+        default=False,
+        verbose_name="Notícia do Contabeis?",
+        help_text="Indica se o documento foi coletado do site Contabeis."
+    )
     normas_relacionadas = models.ManyToManyField(
         'NormaVigente', # Coloquei entre aspas se NormaVigente for definida depois no arquivo
         blank=True,
@@ -269,6 +274,13 @@ class Documento(models.Model):
         blank=True,
         null=True,
         help_text="Metadados adicionais do documento"
+    )
+    docs_sefaz = models.FileField(
+        upload_to='pdfs_sefaz/',
+        verbose_name="PDF SEFAZ",
+        null=True,
+        blank=True,
+        max_length=500
     )
     arquivo_removido = models.BooleanField(
         default=False,

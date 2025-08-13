@@ -1,3 +1,67 @@
+class ContabeisNewsProcessor:
+    """
+    Processador dedicado para notícias do Contabeis.
+    Utiliza lógica específica para filtrar, resumir e enriquecer notícias desse site.
+    """
+    def __init__(self):
+        pass
+
+    @staticmethod
+    def filtrar_paragrafos_noticia(texto: str) -> list:
+        """
+        Remove parágrafos promocionais, convites para redes sociais e WhatsApp/Telegram/YouTube.
+        """
+        import re
+        paragrafos = [p.strip() for p in re.split(r'\n{2,}', texto) if p.strip()]
+        padroes_promocionais = [
+            r'siga o contábeis', r'acesse nosso canal', r'participe do nosso grupo', r'whatsapp', r'telegram',
+            r'youtube', r'instagram', r'facebook', r'clique aqui', r'compartilhe', r'inscreva-se', r'notificação',
+            r'newsletter', r'curta nossa página', r'baixe nosso app', r'baixe o aplicativo', r'grupo exclusivo',
+            r'para receber notícias', r'para não perder nenhuma notícia', r'para ficar por dentro', r'para saber mais',
+            r'confira também', r'veja também', r'leia também', r'acesse', r'clique',
+        ]
+        def eh_promocional(paragrafo):
+            texto = paragrafo.lower()
+            return any(re.search(pat, texto) for pat in padroes_promocionais)
+        return [p for p in paragrafos if not eh_promocional(p)]
+
+    @staticmethod
+    def gerar_resumo(texto: str) -> str:
+        """
+        Gera resumo coeso para notícia do Contabeis, priorizando clareza e contexto fiscal/contábil.
+        """
+        paragrafos_filtrados = ContabeisNewsProcessor.filtrar_paragrafos_noticia(texto)
+        principais = sorted(paragrafos_filtrados, key=len, reverse=True)[:5]
+        resumo = "\n\n".join(principais)
+        if len(resumo) > 1500:
+            corte = resumo.rfind('.', 0, 1500)
+            resumo = resumo[:corte+1] if corte > 0 else resumo[:1500]
+            resumo = resumo.rstrip() + '...'
+        if not resumo.strip():
+            principais = sorted(paragrafos_filtrados, key=len, reverse=True)[:3]
+            resumo = "\n\n".join(principais)
+        return resumo.strip()
+
+    @staticmethod
+    def processar_documento(documento):
+        """
+        Processa documento do Contabeis, atualizando campos relevantes.
+        """
+        texto = documento.texto_completo or ""
+        resumo = ContabeisNewsProcessor.gerar_resumo(texto)
+        documento.resumo_ia = resumo
+        documento.sentimento_ia = "NEUTRO"
+        documento.impacto_fiscal = "Nenhum impacto fiscal direto identificado neste documento."
+        documento.processado = True
+        documento.assunto = "Notícia Contábil"
+        documento.save()
+        return {
+            'status': 'SUCESSO_CONTABEIS',
+            'message': 'Documento do Contabeis processado com resumo especial.',
+            'resumo_ia': documento.resumo_ia,
+            'sentimento_ia': documento.sentimento_ia,
+            'impacto_fiscal': documento.impacto_fiscal,
+        }
 # monitor/utils/pdf_processor.py
 import os
 import re
@@ -153,6 +217,68 @@ def norma_matcher_component(doc):
     return doc
 
 class PDFProcessor:
+    def gerar_resumo_contabeis(self, texto: str) -> str:
+        """
+        Gera um resumo coeso para documentos do Contabeis, priorizando clareza e contexto fiscal/contábil.
+        Remove parágrafos promocionais, convites para redes sociais e WhatsApp/Telegram/YouTube.
+        """
+        paragrafos = [p.strip() for p in re.split(r'\n{2,}', texto) if p.strip()]
+        # Remove parágrafos repetidos
+        vistos = set()
+        paragrafos_unicos = []
+        for p in paragrafos:
+            p_norm = re.sub(r'\s+', ' ', p.lower())
+            if p_norm not in vistos:
+                paragrafos_unicos.append(p)
+                vistos.add(p_norm)
+
+        # Remove parágrafos promocionais e convites para redes sociais
+        padroes_promocionais = [
+            r'siga o contábeis',
+            r'acesse nosso canal',
+            r'participe do nosso grupo',
+            r'whatsapp',
+            r'telegram',
+            r'youtube',
+            r'instagram',
+            r'facebook',
+            r'clique aqui',
+            r'compartilhe',
+            r'inscreva-se',
+            r'notificação',
+            r'newsletter',
+            r'curta nossa página',
+            r'baixe nosso app',
+            r'baixe o aplicativo',
+            r'grupo exclusivo',
+            r'para receber notícias',
+            r'para não perder nenhuma notícia',
+            r'para ficar por dentro',
+            r'para saber mais',
+            r'confira também',
+            r'veja também',
+            r'leia também',
+            r'acesse',
+            r'clique',
+        ]
+        def eh_promocional(paragrafo):
+            texto = paragrafo.lower()
+            return any(re.search(pat, texto) for pat in padroes_promocionais)
+
+        paragrafos_filtrados = [p for p in paragrafos_unicos if not eh_promocional(p)]
+        # Seleciona os 3-5 maiores parágrafos informativos
+        principais = sorted(paragrafos_filtrados, key=len, reverse=True)[:5]
+        resumo = "\n\n".join(principais)
+        # Limita tamanho e adiciona contexto
+        if len(resumo) > 1500:
+            corte = resumo.rfind('.', 0, 1500)
+            resumo = resumo[:corte+1] if corte > 0 else resumo[:1500]
+            resumo = resumo.rstrip() + '...'
+        # Se o resumo ficou vazio, retorna os maiores parágrafos originais
+        if not resumo.strip():
+            principais = sorted(paragrafos_unicos, key=len, reverse=True)[:3]
+            resumo = "\n\n".join(principais)
+        return resumo.strip()
     """
     Classe principal para processamento de PDFs, extração de normas e análise IA.
     """
@@ -338,22 +464,7 @@ class PDFProcessor:
                 logger.debug(f"Documento relevante encontrado pelo termo monitorado: {termo}")
                 return True
 
-        # Fallback IA
-        if self.claude_processor and self.claude_processor.client:
-            logger.debug("Nenhum termo monitorado encontrado. Consultando IA (Claude)...")
-            system_prompt_relevancia = "Você é um classificador especialista em identificar a relevância de documentos para as áreas contábil e fiscal."
-            termos_str = ', '.join(termos_monitorados)
-            user_prompt_relevancia = (
-                f"Analise se o texto a seguir é relevante para as áreas de contabilidade ou fiscal de empresas no Brasil, especialmente no estado do Piauí. "
-                f"Considere os seguintes termos monitorados: {termos_str}. "
-                "Responda APENAS com 'SIM' ou 'NÃO'.\n\n"
-                f"Texto (primeiros 8000 caracteres para análise rápida):\n {texto[:8000]}"
-            )
-            resposta = self.claude_processor._call_claude(system_prompt_relevancia, user_prompt_relevancia, model="claude-3-haiku-20240307", temperature=0.1, max_tokens=5)
-            if resposta and "SIM" in resposta.upper():
-                logger.debug(f"IA (Claude) classificou como relevante. Resposta: {resposta}")
-                return True
-            logger.debug(f"IA (Claude) classificou como NÃO relevante ou houve erro. Resposta: {resposta}")
+    # Fallback IA removido: só usa verificação local por termos monitorados
         return False
 
     def _extrair_paragrafos_relevantes(self, texto: str) -> str:
@@ -409,6 +520,22 @@ class PDFProcessor:
             texto_limitado = '\n'.join(paginas[:limite_paginas]) if len(paginas) > 1 else texto
             # Limita o texto ao máximo de caracteres
             texto_limitado = texto_limitado[:limite_texto]
+            # Verificação especial para documentos do Contabeis
+            if getattr(documento, 'fonte_documento', '').lower() == 'contabeis':
+                documento.resumo_ia = self.gerar_resumo_contabeis(texto_limitado)
+                documento.sentimento_ia = self.claude_processor.analisar_sentimento_contabil(documento.resumo_ia)
+                documento.impacto_fiscal = self.claude_processor.identificar_impacto_fiscal(documento.resumo_ia)
+                documento.processado = True
+                documento.assunto = "Notícia Contábil"
+                documento.save()
+                logger.info(f"Resumo especial gerado para documento do Contabeis: {getattr(documento, 'id', 'N/A')}")
+                return {
+                    'status': 'SUCESSO_CONTABEIS',
+                    'message': 'Documento do Contabeis processado com resumo especial.',
+                    'resumo_ia': documento.resumo_ia,
+                    'sentimento_ia': documento.sentimento_ia,
+                    'impacto_fiscal': documento.impacto_fiscal,
+                }
             normas_extraidas_tuplas = self.extrair_normas(texto_limitado)
             normas_objs_para_relacionar = []
             normas_strings_para_resumo = []

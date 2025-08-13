@@ -49,9 +49,10 @@ class SEFAZScraper:
             if snippet_bloco:
                 blocos.append(snippet_bloco)
             # Regex ainda mais tolerante para número e tipo
+            # Gera regex flexível para número: aceita pontos, barras, espaços, etc
             numero_flex = re.sub(r'[^\d]', '', norm_number)
-            # Aceita "nº", "n.", "n°", "n ", etc, com ou sem espaço, e o número puro
-            padrao_numero = rf"(n[º°\.]?\s*)?{numero_flex}"
+            # Cria padrão que aceita separadores entre os dígitos
+            padrao_numero = r'(n[º°\.]?\s*)?' + r''.join([f'{d}[\.\-/\s]*' for d in numero_flex]) + r'(\d{{2,4}})?'
             padrao_tipo = re.escape(norm_type.lower())
             # Permite qualquer coisa (inclusive acentos, vírgulas, etc) entre tipo e número, e vice-versa
             padrao_geral = rf"{padrao_tipo}.{{0,40}}?{padrao_numero}|{padrao_numero}.{{0,40}}?{padrao_tipo}"
@@ -77,7 +78,7 @@ class SEFAZScraper:
                 else:
                     self.logger.info(f"[DEBUG] Não bateu tipo/numero: {texto_bloco_norm}")
             self.logger.info("[DEBUG] Nenhum bloco correspondeu ao tipo/número informado.")
-            return None
+            return False
         except Exception as e:
             self.logger.warning(f"verificar_vigencia_rapida falhou: {e}")
             return None
