@@ -12,4 +12,5 @@ urlpatterns = [
     path('pipeline-manual/', views.pipeline_manual_view, name='pipeline_manual_view'),
     path('monitoramento/', views.monitoramento_tasks, name='monitoramento_tasks'),
     path('painel-tasks/', views.painel_tasks, name='painel_tasks'),
+    path('disparar-etapa-task/', views.disparar_etapa_task, name='disparar_etapa_task'),
 ]

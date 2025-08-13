@@ -34,8 +34,42 @@ Este projeto realiza a coleta automatizada de dados importantes da Receita Feder
 5. Acesse o sistema em: http://localhost:8000
 
 ## Comandos úteis
-wsl -d calculadora --cd /calculadora --exec bash start.sh
-celery -A diario_oficial worker -l info
+### Orquestração via monitor_tool.py
+
+```sh
+# Coletar documentos do Diário Oficial (com filtro de termos)
+python monitor_tool.py coletar_diario --dias 3
+
+# Coletar TODOS os PDFs do Diário Oficial (sem filtro de termos)
+python monitor_tool.py coletar_diario_todos --dias 3
+
+# Processar documentos pendentes
+python monitor_tool.py processar_documentos
+
+# Verificar normas SEFAZ
+python monitor_tool.py verificar_normas
+
+# Coletar dados da Receita Federal
+python monitor_tool.py coletar_receita
+
+# Executar pipeline automático (coleta/processa/verifica tudo)
+python monitor_tool.py pipeline_auto --dias 3
+
+# Executar pipeline manual (datas customizadas)
+python monitor_tool.py pipeline_manual --inicio 2025-08-01 --fim 2025-08-13
+
+# Gerar relatório contábil avançado
+python monitor_tool.py gerar_relatorio
+
+# Iniciar o worker do Celery em um novo terminal
+python monitor_tool.py start_celery
+
+# Iniciar a API (calculadora) via WSL em um novo terminal
+python monitor_tool.py start_api
+
+# Consultar status/resultados de uma task Celery pelo Task ID
+python monitor_tool.py status_task --id <ID_DA_TASK>
+```
 
 ## Dependências principais
 - Python 3.11+

@@ -498,10 +498,51 @@ class PDFProcessor:
             texto_final = texto_final.rstrip() + '...'
         return texto_final.strip()
 
+
+    def processar_sefaz_icms(self, documento):
+        """
+        Processa documentos do SEFAZ ICMS, extraindo normas, resumo e impacto fiscal.
+        """
+        texto = documento.texto_completo or ""
+        resumo = self.claude_processor.gerar_resumo_contabil(texto)
+        impacto = self.claude_processor.identificar_impacto_fiscal(texto)
+        documento.resumo_ia = resumo
+        documento.sentimento_ia = self.claude_processor.analisar_sentimento_contabil(resumo)
+        documento.impacto_fiscal = impacto
+        documento.processado = True
+        documento.assunto = "SEFAZ ICMS"
+        documento.save()
+        return {
+            'status': 'SUCESSO_SEFAZ',
+            'message': 'Documento SEFAZ ICMS processado.',
+            'resumo_ia': documento.resumo_ia,
+            'sentimento_ia': documento.sentimento_ia,
+            'impacto_fiscal': documento.impacto_fiscal,
+        }
+
+    def processar_noticia_outro(self, documento):
+        """
+        Processa notícias genéricas (OUTRO), gerando resumo e análise simples.
+        """
+        texto = documento.texto_completo or ""
+        resumo = self.claude_processor.gerar_resumo_contabil(texto)
+        documento.resumo_ia = resumo
+        documento.sentimento_ia = self.claude_processor.analisar_sentimento_contabil(resumo)
+        documento.impacto_fiscal = self.claude_processor.identificar_impacto_fiscal(resumo)
+        documento.processado = True
+        documento.assunto = "Notícia Geral"
+        documento.save()
+        return {
+            'status': 'SUCESSO_OUTRO',
+            'message': 'Notícia genérica processada.',
+            'resumo_ia': documento.resumo_ia,
+            'sentimento_ia': documento.sentimento_ia,
+            'impacto_fiscal': documento.impacto_fiscal,
+        }
+
     def process_document(self, documento: Documento, limite_paginas: int = 3, limite_texto: int = 20000) -> Dict[str, any]:
         """
-        Processa um documento PDF, extraindo normas, analisando relevância, IA e enriquecendo os dados.
-        Agora processa apenas as primeiras páginas e limita o tamanho do texto para aliviar o processamento.
+        Processa um documento PDF ou notícia, escolhendo o processamento conforme o tipo/fonte do documento.
         """
         logger.info(f"Processando documento ID: {getattr(documento, 'id', 'N/A')}, Título: {getattr(documento, 'titulo', '')[:50]}...")
         if not getattr(documento, 'texto_completo', None):
@@ -515,27 +556,20 @@ class PDFProcessor:
             return {'status': 'FALHA', 'message': 'Texto completo ausente.'}
         try:
             texto = documento.texto_completo
-            # Limita o texto às primeiras N páginas se houver separador de página
             paginas = re.split(r'\f|\n{3,}', texto)
             texto_limitado = '\n'.join(paginas[:limite_paginas]) if len(paginas) > 1 else texto
-            # Limita o texto ao máximo de caracteres
             texto_limitado = texto_limitado[:limite_texto]
-            # Verificação especial para documentos do Contabeis
-            if getattr(documento, 'fonte_documento', '').lower() == 'contabeis':
-                documento.resumo_ia = self.gerar_resumo_contabeis(texto_limitado)
-                documento.sentimento_ia = self.claude_processor.analisar_sentimento_contabil(documento.resumo_ia)
-                documento.impacto_fiscal = self.claude_processor.identificar_impacto_fiscal(documento.resumo_ia)
-                documento.processado = True
-                documento.assunto = "Notícia Contábil"
-                documento.save()
-                logger.info(f"Resumo especial gerado para documento do Contabeis: {getattr(documento, 'id', 'N/A')}")
-                return {
-                    'status': 'SUCESSO_CONTABEIS',
-                    'message': 'Documento do Contabeis processado com resumo especial.',
-                    'resumo_ia': documento.resumo_ia,
-                    'sentimento_ia': documento.sentimento_ia,
-                    'impacto_fiscal': documento.impacto_fiscal,
-                }
+            fonte = getattr(documento, 'fonte_documento', '').lower()
+            tipo = getattr(documento, 'tipo_documento', '').upper()
+            if fonte == 'contabeis':
+                return self.processar_documento_contabeis(documento, texto_limitado)
+            elif fonte == 'sefaz' or tipo == 'SEFAZ_ICMS':
+                return self.processar_sefaz_icms(documento)
+            elif tipo == 'OUTRO' or fonte == 'noticia':
+                return self.processar_noticia_outro(documento)
+            # ...existing code for normas, boletins, etc. pode ser expandido aqui...
+            # Fallback: processamento padrão
+            # ...existing code...
             normas_extraidas_tuplas = self.extrair_normas(texto_limitado)
             normas_objs_para_relacionar = []
             normas_strings_para_resumo = []
@@ -603,7 +637,6 @@ class PDFProcessor:
                 documento.metadata = {'ia_relevancia_justificativa': "Analisado como não relevante após verificação inicial e/ou IA."}
             documento.processado = True
             documento.data_processamento = timezone.now()
-            # Enriquecimento pós-processamento para garantir campos completos
             doc_dict = documento.to_dict() if hasattr(documento, 'to_dict') else documento.__dict__
             doc_dict = enriquecer_documento_dict(doc_dict)
             for k, v in doc_dict.items():
@@ -631,3 +664,22 @@ class PDFProcessor:
             documento.impacto_fiscal = f"Erro: {str(e)}"
             documento.save(update_fields=['processado', 'relevante_contabil', 'resumo_ia', 'sentimento_ia', 'impacto_fiscal'])
             return {'status': 'ERRO', 'message': str(e), 'traceback': traceback.format_exc()}
+
+    def processar_documento_contabeis(self, documento, texto_limitado):
+        """
+        Processamento dedicado para documentos do Contabeis.
+        """
+        documento.resumo_ia = self.gerar_resumo_contabeis(texto_limitado)
+        documento.sentimento_ia = self.claude_processor.analisar_sentimento_contabil(documento.resumo_ia)
+        documento.impacto_fiscal = self.claude_processor.identificar_impacto_fiscal(documento.resumo_ia)
+        documento.processado = True
+        documento.assunto = "Notícia Contábil"
+        documento.save()
+        logger.info(f"Resumo especial gerado para documento do Contabeis: {getattr(documento, 'id', 'N/A')}")
+        return {
+            'status': 'SUCESSO_CONTABEIS',
+            'message': 'Documento do Contabeis processado com resumo especial.',
+            'resumo_ia': documento.resumo_ia,
+            'sentimento_ia': documento.sentimento_ia,
+            'impacto_fiscal': documento.impacto_fiscal,
+        }

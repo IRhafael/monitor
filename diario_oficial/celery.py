@@ -21,32 +21,36 @@ app.autodiscover_tasks(lambda: settings.INSTALLED_APPS)
 
 # Palavras-chave para busca de notícias relevantes
 CONTABEIS_KEYWORDS = [
-	"tributário", "fiscal", "trabalhista", "previdência", "contabilidade", "empresarial", "economia", "tecnologia", "carreira", "imposto", "reforma tributária", "INSS", "Simples Nacional", "NF-e", "IR", "Receita Federal"
+	"tributário", "fiscal", "trabalhista", "previdência", "contabilidade", "empresarial", "economia", "tecnologia", "carreira", "imposto", "reforma tributária", "INSS", "Simples Nacional", "NF-e", "IR", "Receita Federal",
+	"auditoria", "balanço patrimonial", "DRE", "SPED", "EFD", "ICMS", "ISS", "IPI", "PIS", "COFINS", "CSLL", "lucro real", "lucro presumido", "MEI", "microempresa", "empresa de pequeno porte", "sociedade limitada", "sociedade anônima",
+	"escrituração", "nota fiscal eletrônica", "substituição tributária", "regime tributário", "planejamento tributário", "compliance", "governança corporativa", "demonstrações financeiras", "conciliação contábil", "ativo", "passivo", "patrimônio líquido",
+	"provisão", "depreciação", "amortização", "receita", "despesa", "resultado", "tributos", "obrigações acessórias", "GFIP", "RAIS", "DIRF", "DCTF", "eSocial", "FGTS", "CAGED", "cadastro nacional de pessoa jurídica", "CNPJ", "cadastro de contribuintes",
+	"regulamentação contábil", "normas internacionais de contabilidade", "IFRS", "CPC", "CFC", "CRC", "contabilidade pública", "contabilidade gerencial", "contabilidade de custos", "contabilidade societária", "contabilidade tributária", "contabilidade ambiental",
+	"contabilidade digital", "contabilidade consultiva", "contabilidade estratégica", "contabilidade financeira", "contabilidade rural", "contabilidade para startups", "contabilidade para ONGs", "contabilidade para terceiro setor", "contabilidade internacional",
+	"recolhimento de impostos", "apuração de impostos", "declaração de impostos", "malha fiscal", "fiscalização tributária", "crédito tributário", "débito tributário", "parcelamento tributário", "refis", "cadastro fiscal", "cadastro tributário", "cadastro previdenciário"
 ]
 
-# Tarefa Celery para buscar notícias do Contábeis
-@app.task(name="buscar_noticias_contabeis")
-def buscar_noticias_contabeis():
+
+# Task agregadora para rodar todos os scrapers diariamente
+@app.task(name="coleta_diaria_completa")
+def coleta_diaria_completa():
+	resultados = []
+	# Contabeis
 	from monitor.utils.contabeis_scraper import ContabeisScraper
 	from monitor.models import Documento
 	from django.utils import timezone
 	scraper = ContabeisScraper()
-	resultados = []
-	salvos = 0
 	for palavra in CONTABEIS_KEYWORDS:
 		noticias = scraper.buscar_noticias(palavra_chave=palavra)
 		for noticia in noticias:
-			# Evita duplicidade pelo campo url_original
 			if not noticia['url']:
 				continue
 			if Documento.objects.filter(url_original=noticia['url']).exists():
 				continue
 			detalhes = scraper.extrair_detalhes_noticia(noticia['url'])
-			# Tenta extrair data de publicação (se possível)
 			data_pub = timezone.now().date()
 			if noticia['data']:
 				try:
-					# Tenta converter data tipo "11/08/2025 19:00" ou "Ontem 18:00"
 					import dateparser
 					data_pub_parsed = dateparser.parse(noticia['data'])
 					if data_pub_parsed:
@@ -64,6 +68,21 @@ def buscar_noticias_contabeis():
 			)
 			doc.save()
 			resultados.append(doc)
-			salvos += 1
-	print(f"Total de notícias capturadas: {len(resultados)} | Salvos: {salvos}")
-	return salvos
+	# SEFAZ ICMS
+	try:
+		from monitor.utils.sefaz_icms_scraper import coletar_sefaz_icms
+		resultados += coletar_sefaz_icms()
+	except Exception as e:
+		print(f"Erro SEFAZ ICMS: {e}")
+	print(f"Total de documentos capturados: {len(resultados)}")
+	# Aqui pode gerar boletim, enviar e-mail, etc.
+	return len(resultados)
+
+# Configuração do Celery Beat para rodar a coleta todo dia às 8h
+from celery.schedules import crontab
+app.conf.beat_schedule = {
+	'coleta-diaria-completa': {
+		'task': 'coleta_diaria_completa',
+		'schedule': crontab(hour=8, minute=0),
+	},
+}

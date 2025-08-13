@@ -3,16 +3,20 @@
 monitor_tool.py - CLI para orquestração das principais rotinas do sistema Monitor
 
 Comandos disponíveis:
-  - coletar_diario: Coleta documentos do Diário Oficial
-  - processar_documentos: Processa documentos pendentes
-  - verificar_normas: Verifica normas SEFAZ
-  - coletar_receita: Coleta dados da Receita Federal
-  - pipeline_auto: Executa pipeline automático (coleta/processa/verifica tudo)
-  - pipeline_manual: Executa pipeline manual (datas customizadas)
-  - gerar_relatorio: Gera relatório contábil avançado
+    - coletar_diario: Coleta documentos do Diário Oficial (com filtro de termos)
+    - coletar_diario_todos: Coleta TODOS os PDFs do Diário Oficial (sem filtro de termos)
+    - processar_documentos: Processa documentos pendentes
+    - verificar_normas: Verifica normas SEFAZ
+    - coletar_receita: Coleta dados da Receita Federal
+    - pipeline_auto: Executa pipeline automático (coleta/processa/verifica tudo)
+    - pipeline_manual: Executa pipeline manual (datas customizadas)
+    - gerar_relatorio: Gera relatório contábil avançado
+    - start_celery: Inicia o worker do Celery em um novo terminal
+    - start_api: Inicia a API (calculadora) via WSL em um novo terminal
+    - status_task: Consulta o status/resultados de uma task Celery pelo Task ID
 
 Uso:
-  python monitor_tool.py <comando> [opções]
+    python monitor_tool.py <comando> [opções]
 """
 import argparse
 import os
@@ -32,6 +36,7 @@ from monitor.tasks import (
     pipeline_coleta_e_processamento_automatica,
     pipeline_manual_completo,
     gerar_relatorio_task
+    # Os comandos start_celery, start_api e status_task não são tasks Celery, são utilitários implementados diretamente no CLI
 )
 
 logger = logging.getLogger(__name__)
@@ -40,6 +45,9 @@ logger = logging.getLogger(__name__)
 def main():
     parser = argparse.ArgumentParser(description='Monitor CLI - Orquestração de rotinas')
     subparsers = parser.add_subparsers(dest='comando', required=True)
+    # Coletar todos os PDFs do Diário Oficial (sem filtro de termos)
+    sp_diario_all = subparsers.add_parser('coletar_diario_todos', help='Coletar TODOS os PDFs do Diário Oficial (sem filtro de termos)')
+    sp_diario_all.add_argument('--dias', type=int, default=3, help='Dias retroativos para coleta (padrão: 3)')
 
     # Coletar Diário Oficial
     sp_diario = subparsers.add_parser('coletar_diario', help='Coletar documentos do Diário Oficial')
@@ -80,6 +88,22 @@ def main():
     if args.comando == 'coletar_diario':
         res = coletar_diario_oficial_task.apply_async(kwargs={'dias_retroativos': args.dias})
         print(f"Task coletar_diario_oficial_task disparada! Task ID: {res.id}")
+    elif args.comando == 'coletar_diario_todos':
+        # Chama o scraper diretamente, ignorando filtro de termos
+        from monitor.utils.diario_scraper import DiarioOficialScraper
+        from datetime import timedelta
+        dias = args.dias
+        data_fim = None
+        try:
+            data_fim = django.utils.timezone.now().date()
+        except Exception:
+            from datetime import date
+            data_fim = date.today()
+        data_inicio = data_fim - timedelta(days=dias-1)
+        print(f"Coletando TODOS os PDFs do Diário Oficial de {data_inicio} até {data_fim}...")
+        scraper = DiarioOficialScraper()
+        documentos = scraper.coletar_e_salvar_documentos(data_inicio=data_inicio, data_fim=data_fim, dias_retroativos=dias)
+        print(f"Total de documentos salvos: {len(documentos)}")
     elif args.comando == 'processar_documentos':
         res = processar_documentos_pendentes_task.apply_async()
         print(f"Task processar_documentos_pendentes_task disparada! Task ID: {res.id}")

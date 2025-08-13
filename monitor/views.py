@@ -12,10 +12,17 @@ from datetime import timedelta
 
 from django_celery_results.models import TaskResult
 
+
 from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse
 import json
-from monitor.tasks import coletar_diario_oficial_task, processar_documentos_pendentes_task, verificar_normas_sefaz_task
+from monitor.tasks import (
+    coletar_diario_oficial_task,
+    processar_documentos_pendentes_task,
+    verificar_normas_sefaz_task,
+    coletar_dados_receita_task,
+    pipeline_coleta_e_processamento_automatica
+)
 
 
 
@@ -186,6 +193,33 @@ from monitor.tasks import coletar_diario_oficial_task, processar_documentos_pend
 def monitoramento_tasks(request):
     tasks = TaskResult.objects.order_by('-date_done')[:20]
     return render(request, 'monitoramento_tasks.html', {'tasks': tasks})
+
+
+# --- NOVAS VIEWS PARA DISPARAR ETAPAS INDIVIDUAIS E REINICIAR PIPELINE ---
+@csrf_exempt
+@login_required
+def disparar_etapa_task(request):
+    if request.method == 'POST':
+        data = json.loads(request.body.decode('utf-8'))
+        etapa = data.get('etapa')
+        if etapa == 'coletar_diario':
+            res = coletar_diario_oficial_task.delay()
+            return JsonResponse({'status': 'Task disparada', 'result': f'Task ID: {res.id}'})
+        elif etapa == 'processar_documentos':
+            res = processar_documentos_pendentes_task.delay()
+            return JsonResponse({'status': 'Task disparada', 'result': f'Task ID: {res.id}'})
+        elif etapa == 'verificar_normas':
+            res = verificar_normas_sefaz_task.delay()
+            return JsonResponse({'status': 'Task disparada', 'result': f'Task ID: {res.id}'})
+        elif etapa == 'coletar_receita':
+            res = coletar_dados_receita_task.delay()
+            return JsonResponse({'status': 'Task disparada', 'result': f'Task ID: {res.id}'})
+        elif etapa == 'pipeline_restart':
+            res = pipeline_coleta_e_processamento_automatica.delay()
+            return JsonResponse({'status': 'Pipeline reiniciado', 'result': f'Task ID: {res.id}'})
+        else:
+            return JsonResponse({'status': 'Etapa inválida', 'result': ''})
+    return JsonResponse({'status': 'Método inválido', 'result': ''})
 
 
 @csrf_exempt

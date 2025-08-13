@@ -30,7 +30,7 @@ import traceback
 logger = logging.getLogger(__name__)
 
 class DiarioOficialScraper:
-    def __init__(self, max_docs=10):  # Aumentei o limite padrão
+    def __init__(self, max_docs=20):  # Aumentei o limite padrão
         self.BASE_URL = "https://www.diario.pi.gov.br/doe/"
         self.max_docs = max_docs
         self.session = requests.Session()
@@ -345,47 +345,41 @@ class DiarioOficialScraper:
 
 
     # --- MÉTODO QUE ESTAVA FALTANDO E PRECISA SER ADICIONADO/CORRIGIDO ---
-    def coletar_e_salvar_documentos(self, data_inicio: date, data_fim: date):
+
+    def coletar_e_salvar_documentos(self, data_inicio: date = None, data_fim: date = None, dias_retroativos: int = 3):
+        """
+        Coleta e salva documentos do Diário Oficial dos últimos N dias (default: 3).
+        Se datas forem fornecidas, usa o intervalo; senão, busca dos últimos N dias.
+        """
         from monitor.models import Documento
-        """Versão modificada para filtrar por termos prioritários"""
         documentos_salvos = []
+        if not data_fim:
+            data_fim = timezone.now().date()
+        if not data_inicio:
+            data_inicio = data_fim - timedelta(days=dias_retroativos-1)
+
+        logger.info(f"Coletando Diário Oficial de {data_inicio.strftime('%Y-%m-%d')} até {data_fim.strftime('%Y-%m-%d')}")
         current_date = data_inicio
-        
         try:
             while current_date <= data_fim:
-                # Verifica se a data é múltiplo de 3 dias (0, 3, 6, ... dias desde data_inicio)
-                dias_desde_inicio = (current_date - data_inicio).days
-                if dias_desde_inicio % 3 != 0:
-                    current_date += timedelta(days=1)
-                    continue
-                    
                 logger.info(f"Processando diário para a data: {current_date.strftime('%Y-%m-%d')}")
                 url_diario = f"{self.BASE_URL}?data={current_date.strftime('%d-%m-%Y')}"
-                
                 links_pdf_para_data = self._extrair_links_pdf(url_diario)
-                
                 if not links_pdf_para_data:
                     logger.info(f"Nenhum PDF encontrado para a data {current_date.strftime('%Y-%m-%d')}.")
                     current_date += timedelta(days=1)
                     continue
-
                 for index, pdf_url in enumerate(links_pdf_para_data):
                     logger.info(f"Baixando PDF {index + 1}/{len(links_pdf_para_data)}: {pdf_url}")
                     pdf_content = self._baixar_pdf(pdf_url)
-
                     if pdf_content:
                         logger.info(f"Iniciando extração de texto de PDF: {pdf_url.split('/')[-1]}")
                         texto_extraido = self._extrair_texto_de_pdf(pdf_content)
-
                         if texto_extraido:
-                            # Filtro principal - só salva se contiver termos prioritários
                             if not self._contem_termos_prioritarios(texto_extraido):
                                 logger.info(f"PDF não contém termos prioritários. Ignorando.")
                                 continue
-                                
-                            # Se passou pelo filtro, processa normalmente
-                            assunto_geral = "Contábil/Fiscal"  # Já que passou pelo filtro
-                            
+                            assunto_geral = "Contábil/Fiscal"
                             try:
                                 documento, created = Documento.objects.update_or_create(
                                     url_original=pdf_url,
@@ -394,35 +388,28 @@ class DiarioOficialScraper:
                                         'data_publicacao': current_date,
                                         'texto_completo': texto_extraido,
                                         'processado': False,
-                                        'relevante_contabil': True,  # Já que passou pelo filtro
+                                        'relevante_contabil': True,
                                         'assunto': assunto_geral,
                                         'metadata': {'data_coleta': timezone.now().isoformat()},
                                     }
                                 )
-                                
                                 file_name = f"DOEPI_{current_date.strftime('%Y%m%d')}_{pdf_url.split('/')[-1]}"
                                 documento.arquivo_pdf.save(file_name, ContentFile(pdf_content), save=True)
-                                
                                 documentos_salvos.append(documento)
                                 logger.info(f"Documento '{file_name}' salvo com sucesso (novo: {created}).")
-
                             except Exception as db_e:
                                 logger.error(f"Erro ao salvar documento {pdf_url}: {db_e}", exc_info=True)
                         else:
                             logger.warning(f"Não foi possível extrair texto de {pdf_url}.")
                     else:
                         logger.warning(f"Não foi possível baixar o PDF de {pdf_url}.")
-                
                 current_date += timedelta(days=1)
                 time.sleep(2)
-
         except Exception as e:
             logger.error(f"Erro durante coleta: {e}", exc_info=True)
             raise
-
         finally:
             self._fechar_webdriver()
-
         return documentos_salvos
     
 
