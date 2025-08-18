@@ -111,7 +111,7 @@ def main():
         print(f"Task coletar_diario_oficial_task disparada! Task ID: {res.id}")
     elif args.comando == 'coletar_diario_todos':
         # Chama o scraper diretamente, ignorando filtro de termos
-        from monitor.utils.diario_scraper import DiarioOficialScraper
+        from monitor.utils.scraper_geral import DiarioOficialScraper
         from datetime import timedelta
         dias = args.dias
         data_fim = None

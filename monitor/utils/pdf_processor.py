@@ -92,7 +92,6 @@ import time # Para retries
 
 logger = logging.getLogger(__name__)
 
-# Remova as constantes MISTRAL_API_KEY e MISTRAL_API_URL
 
 class ClaudeProcessor:
     def extrair_paragrafos_relevantes_local(self, texto: str) -> str:
@@ -217,99 +216,37 @@ def norma_matcher_component(doc):
     return doc
 
 class PDFProcessor:
-    def gerar_resumo_contabeis(self, texto: str) -> str:
+    def preparar_para_ia(self, documento, limite_paginas: int = 3, limite_texto: int = 20000) -> dict:
         """
-        Gera um resumo coeso para documentos do Contabeis, priorizando clareza e contexto fiscal/contábil.
-        Remove parágrafos promocionais, convites para redes sociais e WhatsApp/Telegram/YouTube.
+        Prepara o documento para consumo por IA, retornando um dicionário estruturado com os principais campos.
         """
-        paragrafos = [p.strip() for p in re.split(r'\n{2,}', texto) if p.strip()]
-        # Remove parágrafos repetidos
-        vistos = set()
-        paragrafos_unicos = []
-        for p in paragrafos:
-            p_norm = re.sub(r'\s+', ' ', p.lower())
-            if p_norm not in vistos:
-                paragrafos_unicos.append(p)
-                vistos.add(p_norm)
-
-        # Remove parágrafos promocionais e convites para redes sociais
-        padroes_promocionais = [
-            r'siga o contábeis',
-            r'acesse nosso canal',
-            r'participe do nosso grupo',
-            r'whatsapp',
-            r'telegram',
-            r'youtube',
-            r'instagram',
-            r'facebook',
-            r'clique aqui',
-            r'compartilhe',
-            r'inscreva-se',
-            r'notificação',
-            r'newsletter',
-            r'curta nossa página',
-            r'baixe nosso app',
-            r'baixe o aplicativo',
-            r'grupo exclusivo',
-            r'para receber notícias',
-            r'para não perder nenhuma notícia',
-            r'para ficar por dentro',
-            r'para saber mais',
-            r'confira também',
-            r'veja também',
-            r'leia também',
-            r'acesse',
-            r'clique',
-        ]
-        def eh_promocional(paragrafo):
-            texto = paragrafo.lower()
-            return any(re.search(pat, texto) for pat in padroes_promocionais)
-
-        paragrafos_filtrados = [p for p in paragrafos_unicos if not eh_promocional(p)]
-        # Seleciona os 3-5 maiores parágrafos informativos
-        principais = sorted(paragrafos_filtrados, key=len, reverse=True)[:5]
-        resumo = "\n\n".join(principais)
-        # Limita tamanho e adiciona contexto
-        if len(resumo) > 1500:
-            corte = resumo.rfind('.', 0, 1500)
-            resumo = resumo[:corte+1] if corte > 0 else resumo[:1500]
-            resumo = resumo.rstrip() + '...'
-        # Se o resumo ficou vazio, retorna os maiores parágrafos originais
-        if not resumo.strip():
-            principais = sorted(paragrafos_unicos, key=len, reverse=True)[:3]
-            resumo = "\n\n".join(principais)
-        return resumo.strip()
-    """
-    Classe principal para processamento de PDFs, extração de normas e análise IA.
-    """
-    def processar_apenas_dois_documentos(self):
-        """
-        Função de teste: processa apenas dois documentos e exibe as normas extraídas.
-        """
-        """
-        Função temporária para testes: processa apenas dois documentos e exibe as normas extraídas.
-        """
-        from monitor.models import Documento
-        docs = Documento.objects.all()[:1]
-        resultados = []
-        for doc in docs:
-            print(f"Processando documento ID: {doc.id}, Título: {doc.titulo}")
-            normas = self.extrair_normas(doc.texto_completo or "")
-            print(f"Normas extraídas: {normas}")
-            resultado = self.process_document(doc)
-            resultados.append(resultado)
-        print("Resultados do processamento:", resultados)
-        return resultados
-    def __init__(self):
-        self.nlp = None
-        self.matcher = None
-        self.claude_processor = ClaudeProcessor()
-        try:
-            self._setup_spacy()
-        except Exception as e:
-            logger.critical(f"Falha CRÍTICA na inicialização de PDFProcessor: {e}", exc_info=True)
-            self.nlp = None
-        self.norma_type_choices_map = self._get_norma_type_choices_map()
+        texto = getattr(documento, 'texto_completo', '') or ''
+        paginas = re.split(r'\f|\n{3,}', texto)
+        texto_limitado = '\n'.join(paginas[:limite_paginas]) if len(paginas) > 1 else texto
+        texto_limitado = texto_limitado[:limite_texto]
+        paragrafos_relevantes = self._extrair_paragrafos_relevantes(texto_limitado)
+        resumo = self.claude_processor.gerar_resumo_contabil(paragrafos_relevantes)
+        sentimento = self.claude_processor.analisar_sentimento_contabil(paragrafos_relevantes)
+        impacto_fiscal = self.claude_processor.identificar_impacto_fiscal(paragrafos_relevantes)
+        normas_extraidas = self.extrair_normas(texto_limitado)
+        relevante_contabil = self.is_relevante_contabil(texto_limitado)
+        metadados = {
+            'ia_modelo_usado': self.claude_processor.default_model,
+            'ia_relevancia_justificativa': "Analisado como relevante pela IA e/ou termos monitorados.",
+            'ia_pontos_criticos': ["Verificar detalhes no resumo e impacto fiscal gerados pela IA."]
+        }
+        return {
+            'id': getattr(documento, 'id', None),
+            'titulo': getattr(documento, 'titulo', ''),
+            'texto_limpo': texto_limitado,
+            'paragrafos_relevantes': paragrafos_relevantes,
+            'resumo_ia': resumo,
+            'sentimento_ia': sentimento,
+            'impacto_fiscal': impacto_fiscal,
+            'normas_extraidas': normas_extraidas,
+            'relevante_contabil': relevante_contabil,
+            'metadados': metadados
+        }
 
 
     def _setup_spacy(self): #
@@ -520,25 +457,6 @@ class PDFProcessor:
             'impacto_fiscal': documento.impacto_fiscal,
         }
 
-    def processar_noticia_outro(self, documento):
-        """
-        Processa notícias genéricas (OUTRO), gerando resumo e análise simples.
-        """
-        texto = documento.texto_completo or ""
-        resumo = self.claude_processor.gerar_resumo_contabil(texto)
-        documento.resumo_ia = resumo
-        documento.sentimento_ia = self.claude_processor.analisar_sentimento_contabil(resumo)
-        documento.impacto_fiscal = self.claude_processor.identificar_impacto_fiscal(resumo)
-        documento.processado = True
-        documento.assunto = "Notícia Geral"
-        documento.save()
-        return {
-            'status': 'SUCESSO_OUTRO',
-            'message': 'Notícia genérica processada.',
-            'resumo_ia': documento.resumo_ia,
-            'sentimento_ia': documento.sentimento_ia,
-            'impacto_fiscal': documento.impacto_fiscal,
-        }
 
     def process_document(self, documento: Documento, limite_paginas: int = 3, limite_texto: int = 20000) -> Dict[str, any]:
         """
@@ -664,22 +582,3 @@ class PDFProcessor:
             documento.impacto_fiscal = f"Erro: {str(e)}"
             documento.save(update_fields=['processado', 'relevante_contabil', 'resumo_ia', 'sentimento_ia', 'impacto_fiscal'])
             return {'status': 'ERRO', 'message': str(e), 'traceback': traceback.format_exc()}
-
-    def processar_documento_contabeis(self, documento, texto_limitado):
-        """
-        Processamento dedicado para documentos do Contabeis.
-        """
-        documento.resumo_ia = self.gerar_resumo_contabeis(texto_limitado)
-        documento.sentimento_ia = self.claude_processor.analisar_sentimento_contabil(documento.resumo_ia)
-        documento.impacto_fiscal = self.claude_processor.identificar_impacto_fiscal(documento.resumo_ia)
-        documento.processado = True
-        documento.assunto = "Notícia Contábil"
-        documento.save()
-        logger.info(f"Resumo especial gerado para documento do Contabeis: {getattr(documento, 'id', 'N/A')}")
-        return {
-            'status': 'SUCESSO_CONTABEIS',
-            'message': 'Documento do Contabeis processado com resumo especial.',
-            'resumo_ia': documento.resumo_ia,
-            'sentimento_ia': documento.sentimento_ia,
-            'impacto_fiscal': documento.impacto_fiscal,
-        }
