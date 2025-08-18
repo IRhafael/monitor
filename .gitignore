@@ -20,3 +20,6 @@ media/relatorios/~$relatorio_compliance_20250611_140313.xlsx
 *.dir
 celerybeat-schedule.dat
 *.dat
+*.json
+minha_base_vetorial/chroma.sqlite3
+/minha_base_vetorial

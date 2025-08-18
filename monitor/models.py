@@ -223,7 +223,9 @@ class Documento(models.Model):
     data_coleta = models.DateTimeField(default=timezone.now)
     processado = models.BooleanField(default=False, verbose_name="Processado?")
     resumo_ia = models.TextField(blank=True, null=True)
+    indexado = models.BooleanField(default=False, db_index=True)
     sentimento_ia = models.CharField(max_length=8000, blank=True, null=True)
+
     relevante_contabil = models.BooleanField(
         default=False,
         verbose_name="Relevante para Contabilidade?"
