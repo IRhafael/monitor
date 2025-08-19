@@ -23,3 +23,4 @@ celerybeat-schedule.dat
 *.json
 minha_base_vetorial/chroma.sqlite3
 /minha_base_vetorial
+monitor/pdfs_diario_oficial/

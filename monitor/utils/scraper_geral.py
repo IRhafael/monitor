@@ -15,8 +15,6 @@ from urllib.parse import urljoin
 import uuid
 from typing import List, Optional, Tuple
 from pdfminer.layout import LAParams
-from django.utils import timezone
-from django.core.files.base import ContentFile
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -259,34 +257,29 @@ class DiarioOficialScraper:
         return ''.join(resultado)
 
     def _contem_termos_prioritarios(self, texto: str) -> bool:
-        from monitor.models import TermoMonitorado
-        termos = TermoMonitorado.objects.filter(ativo=True).order_by('-prioridade')
-        texto = texto.upper()
-        for termo_obj in termos:
-            termos_verificar = [termo_obj.termo]
-            if termo_obj.variacoes:
-                termos_verificar.extend([v.strip() for v in termo_obj.variacoes.split(',')])
-            for termo in termos_verificar:
-                if termo.upper() in texto:
-                    logger.info(f"Documento contém termo prioritário: {termo_obj.termo}")
-                    return True
+        # Lista local de termos monitorados
+        termos_monitorados = [
+            "ICMS", "DECRETO 21.866", "UNATRI", "UNIFIS", "LEI 4.257",
+            "ATO NORMATIVO", "SECRETARIA DE FAZENDA DO ESTADO DO PIAUÍ", "SEFAZ", "SUBSTITUIÇÃO TRIBUTÁRIA"
+        ]
+        texto_upper = texto.upper()
+        for termo in termos_monitorados:
+            if termo.upper() in texto_upper:
+                logger.info(f"Documento contém termo prioritário: {termo}")
+                return True
         return False
 
-    def coletar_e_salvar_documentos(self, data_inicio=None, data_fim=None):
-        from monitor.models import Documento
+    def coletar_e_salvar_documentos(self):
+        # Coleta apenas documentos do dia da execução e filtra pela data de publicação no texto.
         documentos_salvos = []
-        if data_inicio and data_fim:
-            datas = [data_inicio + timedelta(days=i) for i in range((data_fim - data_inicio).days + 1)]
+        hoje = datetime.now().date()
+        hoje_str = hoje.strftime('%d de %B de %Y').lower()
+        logger.info(f"Processando diário para a data: {hoje.strftime('%Y-%m-%d')}")
+        url_diario = f"{self.BASE_URL}?data={hoje.strftime('%d-%m-%Y')}"
+        links_pdf_para_data = self._extrair_links_pdf(url_diario)
+        if not links_pdf_para_data:
+            logger.info(f"Nenhum PDF encontrado para a data {hoje.strftime('%Y-%m-%d')}")
         else:
-            hoje = timezone.now().date()
-            datas = [hoje]
-        for data in datas:
-            logger.info(f"Processando diário para a data: {data.strftime('%Y-%m-%d')}")
-            url_diario = f"{self.BASE_URL}?data={data.strftime('%d-%m-%Y')}"
-            links_pdf_para_data = self._extrair_links_pdf(url_diario)
-            if not links_pdf_para_data:
-                logger.info(f"Nenhum PDF encontrado para a data {data.strftime('%Y-%m-%d')}")
-                continue
             for index, pdf_url in enumerate(links_pdf_para_data):
                 logger.info(f"Baixando PDF {index + 1}/{len(links_pdf_para_data)}: {pdf_url}")
                 pdf_content = self._baixar_pdf(pdf_url)
@@ -294,27 +287,33 @@ class DiarioOficialScraper:
                     logger.info(f"Iniciando extração de texto de PDF: {pdf_url.split('/')[-1]}")
                     texto_extraido = self._extrair_texto_de_pdf(pdf_content)
                     if texto_extraido:
+                        texto_lower = texto_extraido.lower()
+                        if hoje_str not in texto_lower:
+                            logger.info(f"PDF ignorado (data de publicação diferente do dia atual): {pdf_url}")
+                            continue
                         if not self._contem_termos_prioritarios(texto_extraido):
                             logger.info(f"PDF não contém termos monitorados. Ignorando.")
                             continue
                         assunto_geral = "Contábil/Fiscal"
                         try:
                             file_name = pdf_url.split('/')[-1]
-                            documento, created = Documento.objects.update_or_create(
-                                url_original=pdf_url,
-                                defaults={
-                                    'titulo': file_name,
-                                    'data_publicacao': data,
-                                    'texto_completo': texto_extraido,
-                                    'processado': False,
-                                    'relevante_contabil': True,
-                                    'assunto': assunto_geral,
-                                    'metadata': {'data_coleta': timezone.now().isoformat()},
-                                }
-                            )
-                            documento.arquivo_pdf.save(file_name, ContentFile(pdf_content), save=True)
-                            documentos_salvos.append(documento)
-                            logger.info(f"Documento '{file_name}' salvo com sucesso (novo: {created}).")
+                            # Salva PDF e texto localmente
+                            pasta_destino = "pdfs_diario_oficial"
+                            os.makedirs(pasta_destino, exist_ok=True)
+                            caminho_pdf = os.path.join(pasta_destino, file_name)
+                            with open(caminho_pdf, "wb") as f:
+                                f.write(pdf_content)
+                            caminho_txt = os.path.join(pasta_destino, file_name.replace('.pdf', '.txt'))
+                            with open(caminho_txt, "w", encoding="utf-8") as f:
+                                f.write(texto_extraido)
+                            documentos_salvos.append({
+                                "arquivo_pdf": caminho_pdf,
+                                "arquivo_txt": caminho_txt,
+                                "url_original": pdf_url,
+                                "data_publicacao": str(hoje),
+                                "assunto": assunto_geral
+                            })
+                            logger.info(f"Documento '{file_name}' salvo localmente.")
                         except Exception as db_e:
                             logger.error(f"Erro ao salvar documento {pdf_url}: {db_e}", exc_info=True)
                     else:
@@ -380,7 +379,7 @@ class SEFAZScraper:
             snippet_bloco = soup.select_one('.field-snippet .value')
             if snippet_bloco:
                 blocos.append(snippet_bloco)
-            numero_flex = re.sub(r'[^ -\d]', '', norm_number)
+                numero_flex = re.sub(r'[^0-9/]', '', norm_number)
             padrao_numero = r'(n[º°\.]?\s*)?' + r''.join([f'{d}[\.\-/\s]*' for d in numero_flex]) + r'(\d{2,4})?'
             padrao_tipo = re.escape(norm_type.lower())
             padrao_geral = rf"{padrao_tipo}.{{0,40}}?{padrao_numero}|{padrao_numero}.{{0,40}}?{padrao_tipo}"
@@ -497,11 +496,13 @@ class SEFAZScraper:
             return None
 
     def _clean_number(self, number):
-        return re.sub(r'[^ -\d/]', '', number).lower()
+        return re.sub(r'[^0-9/]', '', number).lower()
 
     def coletar_documentos(self, data_inicio=None, data_fim=None):
-        from monitor.models import Documento
+        # Coleta apenas documentos cuja data de publicação seja igual ao dia de execução.
         documentos_salvos = []
+        hoje = datetime.now().date()
+        hoje_str = hoje.strftime('%d de %B de %Y').lower()
         lista_urls = self._obter_lista_pdfs(data_inicio, data_fim)
         for pdf_url in lista_urls:
             try:
@@ -511,25 +512,30 @@ class SEFAZScraper:
                 texto_extraido = self._extrair_texto_de_pdf(pdf_content)
                 if not texto_extraido:
                     continue
+                texto_lower = texto_extraido.lower()
+                if hoje_str not in texto_lower:
+                    self.logger.info(f"PDF ignorado (data de publicação diferente do dia atual): {pdf_url}")
+                    continue
                 if not self._contem_termos_prioritarios(texto_extraido):
                     self.logger.info(f"PDF ignorado (sem relevância fiscal/contábil): {pdf_url}")
                     continue
                 file_name = pdf_url.split('/')[-1]
-                documento, created = Documento.objects.update_or_create(
-                    url_original=pdf_url,
-                    defaults={
-                        'titulo': file_name,
-                        'data_publicacao': datetime.now().date(),
-                        'texto_completo': texto_extraido,
-                        'processado': False,
-                        'relevante_contabil': True,
-                        'assunto': 'Contábil/Fiscal',
-                        'metadata': {'data_coleta': datetime.now().isoformat()},
-                    }
-                )
-                documento.arquivo_pdf.save(file_name, pdf_content)
-                documentos_salvos.append(documento)
-                self.logger.info(f"Documento '{file_name}' salvo com sucesso (novo: {created}).")
+                pasta_destino = "pdfs_sefaz"
+                os.makedirs(pasta_destino, exist_ok=True)
+                caminho_pdf = os.path.join(pasta_destino, file_name)
+                with open(caminho_pdf, "wb") as f:
+                    f.write(pdf_content)
+                caminho_txt = os.path.join(pasta_destino, file_name.replace('.pdf', '.txt'))
+                with open(caminho_txt, "w", encoding="utf-8") as f:
+                    f.write(texto_extraido)
+                documentos_salvos.append({
+                    "arquivo_pdf": caminho_pdf,
+                    "arquivo_txt": caminho_txt,
+                    "url_original": pdf_url,
+                    "data_publicacao": str(hoje),
+                    "assunto": "Contábil/Fiscal"
+                })
+                self.logger.info(f"Documento '{file_name}' salvo localmente.")
             except Exception as e:
                 self.logger.error(f"Erro ao salvar documento {pdf_url}: {e}", exc_info=True)
         return documentos_salvos
@@ -682,7 +688,7 @@ class SEFAZScraper:
     def _is_matching_norm(self, text, norm_type, clean_number):
         try:
             norm_type = norm_type.lower()
-            norm_number_clean = re.sub(r'[^ -\d/]', '', clean_number).lower()
+            norm_number_clean = re.sub(r'[^0-9/]', '', clean_number).lower()
             patterns = [
                 rf"{norm_type}\s*{norm_number_clean}",
                 rf"{norm_type}\s*n[º°]?\s*{norm_number_clean}",
@@ -763,13 +769,15 @@ class SEFAZICMSScraper:
         import os
         import re
         from datetime import datetime
-        from monitor.models import Documento
+        # Removido dependência do Django. Salvando dados localmente.
 
         driver = webdriver.Chrome(options=self.chrome_options)
         driver.get("https://portaldalegislacao.sefaz.pi.gov.br/inicio")
         time.sleep(5)
 
         documentos_salvos = []
+        hoje = datetime.now().date()
+        hoje_str = hoje.strftime('%d de %B de %Y').lower()
         elementos = driver.find_elements(By.CSS_SELECTOR, "div.text-title-content.cursor-pointer")
         norma_icms = None
         for el in elementos:
@@ -787,23 +795,15 @@ class SEFAZICMSScraper:
                 ActionChains(driver).move_to_element(card).click(card).perform()
                 time.sleep(5)
                 try:
-                    vigencia = driver.find_element(By.XPATH, "//*[contains(text(),'Início da vigência')]").text
-                    try:
-                        strong_situacao = driver.find_element(By.XPATH, "//strong[contains(text(),'Situação:')]")
-                        situacao = strong_situacao.find_element(By.XPATH, "following-sibling::text()[1]").strip()
-                        if not situacao:
-                            situacao = strong_situacao.find_element(By.XPATH, "..") .text.replace('Situação:', '').strip()
-                    except Exception:
-                        situacao = ''
                     publicacao = driver.find_element(By.XPATH, "//*[contains(text(),'Publicação')]").text
-                    ementa = driver.find_element(By.XPATH, "//*[contains(text(),'Ementa')]").text
-                    match = re.search(r'em (\d{2}/\d{2}/\d{4})', publicacao)
+                    match = re.search(r'(\d{2} de [a-zç]+ de \d{4})', publicacao.lower())
                     data_publicacao = None
                     if match:
                         data_str = match.group(1)
-                        data_publicacao = datetime.strptime(data_str, '%d/%m/%Y').date()
-                    if not data_publicacao:
-                        data_publicacao = datetime.today().date()
+                        data_publicacao = data_str
+                    if not data_publicacao or hoje_str != data_publicacao:
+                        continue
+                    ementa = driver.find_element(By.XPATH, "//*[contains(text(),'Ementa')]").text
                     div_baixar = driver.find_element(By.XPATH, "//div[contains(@class, 'button-text') and text()='Baixar']")
                     link_baixar = div_baixar.find_element(By.XPATH, "..")
                     href_baixar = link_baixar.get_attribute("href")
@@ -821,21 +821,13 @@ class SEFAZICMSScraper:
                             os.makedirs('pdfs_sefaz', exist_ok=True)
                             with open(caminho_arquivo, 'wb') as f:
                                 f.write(response.content)
-                            doc = Documento(
-                                titulo=titulo,
-                                data_publicacao=data_publicacao,
-                                url_original=href_baixar,
-                                docs_sefaz=caminho_arquivo,
-                                resumo=ementa,
-                                texto_completo='',
-                                fonte_documento=publicacao,
-                                metadata={
-                                    'vigencia': vigencia,
-                                    'situacao': situacao
-                                }
-                            )
-                            doc.save()
-                            documentos_salvos.append(doc)
+                            documentos_salvos.append({
+                                "titulo": titulo,
+                                "data_publicacao": data_publicacao,
+                                "url_original": href_baixar,
+                                "arquivo_pdf": caminho_arquivo,
+                                "resumo": ementa
+                            })
                         else:
                             pass
                 except Exception as e:
