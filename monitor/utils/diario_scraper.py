@@ -69,34 +69,47 @@ class DiarioOficialScraper:
             self.driver = None
             logger.info("WebDriver fechado.")
 
-    def _extrair_links_pdf(self, url: str) -> List[str]:
-        """Extrai URLs de PDF de uma página web usando Selenium."""
+    def _extrair_links_pdf(self, url: str) -> List[Tuple[str, str, str]]:
+        """Extrai tuplas (url_pdf, numero_edicao, data_edicao) dos PDFs da edição do dia atual."""
         driver = self._get_webdriver()
         try:
             logger.info(f"Acessando URL: {url}")
             driver.get(url)
 
-            # Espera até que pelo menos um link .pdf esteja presente na página
             WebDriverWait(driver, 30).until(
-                EC.presence_of_element_located((By.XPATH, "//a[contains(@href, '.pdf')]"))
+                EC.presence_of_element_located((By.XPATH, "//table[@id='tbl-diario']"))
             )
 
-            logger.info("Página carregada, iniciando extração dos links PDF")
             soup = BeautifulSoup(driver.page_source, 'html.parser')
-            
-            links_pdf = set()  # usar set direto evita duplicados
+            tabela = soup.find('table', id='tbl-diario')
+            if not tabela:
+                logger.warning("Tabela de edições não encontrada na página.")
+                return []
 
-            for a in soup.find_all('a', href=True):
-                href = a['href'].strip()
-                if href.lower().endswith('.pdf'):
-                    # Normaliza a URL absoluta se for relativa
-                    full_url = urljoin(self.BASE_URL, href)
-                    links_pdf.add(full_url)
+            hoje = timezone.now().date()
+            hoje_str = hoje.strftime('%d/%m/%Y')
+            resultados = []
 
-            links_pdf = list(links_pdf)
-            logger.info(f"{len(links_pdf)} links PDF encontrados em {url}")
-            logger.debug(f"Links encontrados: {links_pdf}")
-            return links_pdf
+            for linha in tabela.find_all('tr'):
+                colunas = linha.find_all('td')
+                if len(colunas) < 3:
+                    continue
+                # Extrai link do PDF
+                a_tag = colunas[0].find('a', href=True)
+                if not a_tag:
+                    continue
+                href = a_tag['href'].strip()
+                if not href.lower().endswith('.pdf'):
+                    continue
+                full_url = urljoin(self.BASE_URL, href)
+                numero_edicao = colunas[1].get_text(strip=True)
+                data_edicao = colunas[2].get_text(strip=True)
+                if data_edicao == hoje_str:
+                    resultados.append((full_url, numero_edicao, data_edicao))
+
+            logger.info(f"{len(resultados)} PDFs encontrados para a data {hoje_str} em {url}")
+            logger.debug(f"PDFs encontrados: {resultados}")
+            return resultados
 
         except TimeoutException:
             logger.error(f"Timeout ao carregar a página ou encontrar elementos em {url}")
@@ -105,7 +118,6 @@ class DiarioOficialScraper:
             logger.error(f"Erro ao extrair links PDF de {url}: {str(e)}", exc_info=True)
             return []
         finally:
-            # Não feche o driver aqui se for usar na mesma sessão
             pass
 
 
@@ -362,24 +374,19 @@ class DiarioOficialScraper:
 
 
     # --- MÉTODO QUE ESTAVA FALTANDO E PRECISA SER ADICIONADO/CORRIGIDO ---
-    def coletar_e_salvar_documentos(self, data_inicio=None, data_fim=None):
+    def coletar_e_salvar_documentos(self, *args, **kwargs):
         from monitor.models import Documento
-        """Coleta e salva PDFs do Diário Oficial para um intervalo de datas ou apenas o dia atual."""
+        """Coleta e salva apenas os PDFs do Diário Oficial publicados na data de hoje."""
         documentos_salvos = []
-        if data_inicio and data_fim:
-            datas = [data_inicio + timedelta(days=i) for i in range((data_fim - data_inicio).days + 1)]
+        hoje = timezone.now().date()
+        logger.info(f"Processando diário para a data: {hoje.strftime('%Y-%m-%d')}")
+        url_diario = self.BASE_URL
+        pdfs_do_dia = self._extrair_links_pdf(url_diario)
+        if not pdfs_do_dia:
+            logger.info(f"Nenhum PDF encontrado para a data {hoje.strftime('%Y-%m-%d')}")
         else:
-            hoje = timezone.now().date()
-            datas = [hoje]
-        for data in datas:
-            logger.info(f"Processando diário para a data: {data.strftime('%Y-%m-%d')}")
-            url_diario = f"{self.BASE_URL}?data={data.strftime('%d-%m-%Y')}"
-            links_pdf_para_data = self._extrair_links_pdf(url_diario)
-            if not links_pdf_para_data:
-                logger.info(f"Nenhum PDF encontrado para a data {data.strftime('%Y-%m-%d')}")
-                continue
-            for index, pdf_url in enumerate(links_pdf_para_data):
-                logger.info(f"Baixando PDF {index + 1}/{len(links_pdf_para_data)}: {pdf_url}")
+            for index, (pdf_url, numero_edicao, data_edicao) in enumerate(pdfs_do_dia):
+                logger.info(f"Baixando PDF {index + 1}/{len(pdfs_do_dia)}: {pdf_url} (Edição: {numero_edicao}, Data: {data_edicao})")
                 pdf_content = self._baixar_pdf(pdf_url)
                 if pdf_content:
                     logger.info(f"Iniciando extração de texto de PDF: {pdf_url.split('/')[-1]}")
@@ -395,11 +402,13 @@ class DiarioOficialScraper:
                                 url_original=pdf_url,
                                 defaults={
                                     'titulo': file_name,
-                                    'data_publicacao': data,
+                                    'data_publicacao': hoje,
                                     'texto_completo': texto_extraido,
                                     'processado': False,
                                     'relevante_contabil': True,
                                     'assunto': assunto_geral,
+                                    'numero_edicao': numero_edicao,
+                                    'data_edicao': data_edicao,
                                     'metadata': {'data_coleta': timezone.now().isoformat()},
                                 }
                             )

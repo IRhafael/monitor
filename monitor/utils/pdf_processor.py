@@ -1,67 +1,3 @@
-class ContabeisNewsProcessor:
-    """
-    Processador dedicado para notícias do Contabeis.
-    Utiliza lógica específica para filtrar, resumir e enriquecer notícias desse site.
-    """
-    def __init__(self):
-        pass
-
-    @staticmethod
-    def filtrar_paragrafos_noticia(texto: str) -> list:
-        """
-        Remove parágrafos promocionais, convites para redes sociais e WhatsApp/Telegram/YouTube.
-        """
-        import re
-        paragrafos = [p.strip() for p in re.split(r'\n{2,}', texto) if p.strip()]
-        padroes_promocionais = [
-            r'siga o contábeis', r'acesse nosso canal', r'participe do nosso grupo', r'whatsapp', r'telegram',
-            r'youtube', r'instagram', r'facebook', r'clique aqui', r'compartilhe', r'inscreva-se', r'notificação',
-            r'newsletter', r'curta nossa página', r'baixe nosso app', r'baixe o aplicativo', r'grupo exclusivo',
-            r'para receber notícias', r'para não perder nenhuma notícia', r'para ficar por dentro', r'para saber mais',
-            r'confira também', r'veja também', r'leia também', r'acesse', r'clique',
-        ]
-        def eh_promocional(paragrafo):
-            texto = paragrafo.lower()
-            return any(re.search(pat, texto) for pat in padroes_promocionais)
-        return [p for p in paragrafos if not eh_promocional(p)]
-
-    @staticmethod
-    def gerar_resumo(texto: str) -> str:
-        """
-        Gera resumo coeso para notícia do Contabeis, priorizando clareza e contexto fiscal/contábil.
-        """
-        paragrafos_filtrados = ContabeisNewsProcessor.filtrar_paragrafos_noticia(texto)
-        principais = sorted(paragrafos_filtrados, key=len, reverse=True)[:5]
-        resumo = "\n\n".join(principais)
-        if len(resumo) > 1500:
-            corte = resumo.rfind('.', 0, 1500)
-            resumo = resumo[:corte+1] if corte > 0 else resumo[:1500]
-            resumo = resumo.rstrip() + '...'
-        if not resumo.strip():
-            principais = sorted(paragrafos_filtrados, key=len, reverse=True)[:3]
-            resumo = "\n\n".join(principais)
-        return resumo.strip()
-
-    @staticmethod
-    def processar_documento(documento):
-        """
-        Processa documento do Contabeis, atualizando campos relevantes.
-        """
-        texto = documento.texto_completo or ""
-        resumo = ContabeisNewsProcessor.gerar_resumo(texto)
-        documento.resumo_ia = resumo
-        documento.sentimento_ia = "NEUTRO"
-        documento.impacto_fiscal = "Nenhum impacto fiscal direto identificado neste documento."
-        documento.processado = True
-        documento.assunto = "Notícia Contábil"
-        documento.save()
-        return {
-            'status': 'SUCESSO_CONTABEIS',
-            'message': 'Documento do Contabeis processado com resumo especial.',
-            'resumo_ia': documento.resumo_ia,
-            'sentimento_ia': documento.sentimento_ia,
-            'impacto_fiscal': documento.impacto_fiscal,
-        }
 # monitor/utils/pdf_processor.py
 import os
 import re
@@ -94,11 +30,47 @@ logger = logging.getLogger(__name__)
 
 # Remova as constantes MISTRAL_API_KEY e MISTRAL_API_URL
 
-class ClaudeProcessor:
+class PDFProcessor:
+    def extrair_dados_para_relatorio(self, documento, limite_paginas: int = 3, limite_texto: int = 20000) -> Dict[str, any]:
+        """
+        Extrai todos os dados relevantes do documento para uso no relatório/jornal contábil.
+        Retorna dict com resumo, parágrafos, normas, impacto fiscal, sentimento e metadados.
+        """
+        texto = getattr(documento, 'texto_completo', '') or ''
+        paginas = re.split(r'\f|\n{3,}', texto)
+        texto_limitado = '\n'.join(paginas[:limite_paginas]) if len(paginas) > 1 else texto
+        texto_limitado = texto_limitado[:limite_texto]
+        paragrafos_relevantes = self.extrair_paragrafos_relevantes_local(texto_limitado)
+        resumo_ia = self.gerar_resumo_contabil(paragrafos_relevantes)
+        impacto_fiscal = self.identificar_impacto_fiscal(paragrafos_relevantes)
+        sentimento_ia = self.analisar_sentimento_contabil(paragrafos_relevantes)
+        normas_extraidas = []
+        try:
+            normas_extraidas = documento.normas_relacionadas.all() if hasattr(documento, 'normas_relacionadas') else []
+            if not normas_extraidas:
+                # Tenta extrair do texto se não houver relacionadas
+                normas_extraidas = []
+                if hasattr(documento, 'extrair_normas'):
+                    normas_extraidas = documento.extrair_normas(texto_limitado)
+        except Exception:
+            normas_extraidas = []
+        metadados = {
+            'ia_modelo_usado': self.default_model,
+            'ia_relevancia_justificativa': "Analisado como relevante pela IA e/ou termos monitorados.",
+            'ia_pontos_criticos': ["Verificar detalhes no resumo e impacto fiscal gerados pela IA."]
+        }
+        return {
+            'resumo_ia': resumo_ia,
+            'paragrafos_relevantes': paragrafos_relevantes,
+            'normas_extraidas': normas_extraidas,
+            'impacto_fiscal': impacto_fiscal,
+            'sentimento_ia': sentimento_ia,
+            'metadados': metadados,
+            'texto_limitado': texto_limitado
+        }
     def extrair_paragrafos_relevantes_local(self, texto: str) -> str:
         """
-        Fallback usando modelo local HuggingFace Transformers para seleção de parágrafos relevantes.
-        Seleciona os parágrafos mais prováveis de conter termos contábeis/fiscais monitorados.
+        Usa modelo Hugging Face Transformers (zero-shot-classification) para selecionar parágrafos relevantes.
         """
         try:
             from transformers import pipeline
@@ -110,30 +82,37 @@ class ClaudeProcessor:
         termos_busca = set(termo.termo.lower() for termo in termos)
         paragrafos_texto = [p.strip() for p in re.split(r'\n{2,}', texto) if p.strip()]
 
-        # Cria um prompt para cada parágrafo
-        perguntas = [
-            f"Este parágrafo é relevante para contabilidade/fiscal? Termos: {', '.join(termos_busca)}\nParágrafo: {p}" for p in paragrafos_texto
-        ]
-
-        # Usa zero-shot-classification
+        candidate_labels = ["relevante", "irrelevante"]
         try:
-            classifier = pipeline("zero-shot-classification", model="pierreguillou/bert-base-cased-pt-br")
+            classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
         except Exception as e:
             logger.warning(f"Erro ao carregar modelo local transformers: {e}. Usando fallback por termos.")
             return self.extrair_paragrafos_relevantes_termos(texto)
 
-        candidate_labels = ["relevante", "irrelevante"]
         resultados = []
-        for pergunta, paragrafo in zip(perguntas, paragrafos_texto):
+        for paragrafo in paragrafos_texto:
             try:
-                output = classifier(pergunta, candidate_labels)
+                output = classifier(
+                    paragrafo,
+                    candidate_labels,
+                    hypothesis_template=f"Este parágrafo é relevante para contabilidade/fiscal? Termos: {', '.join(termos_busca)}."
+                )
                 score_relevante = output['scores'][output['labels'].index("relevante")]
                 resultados.append((score_relevante, paragrafo))
             except Exception as e:
+                logger.warning(f"Erro ao classificar parágrafo: {e}")
                 resultados.append((0, paragrafo))
 
-        # Seleciona os 5 parágrafos mais relevantes
-        relevantes = [p for _, p in sorted(resultados, key=lambda x: x[0], reverse=True)[:5]]
+        # Seleciona os 5 parágrafos mais relevantes e não duplicados
+        vistos = set()
+        relevantes = []
+        for score, p in sorted(resultados, key=lambda x: x[0], reverse=True):
+            p_norm = re.sub(r'\s+', ' ', p.lower())
+            if p_norm not in vistos:
+                relevantes.append(p)
+                vistos.add(p_norm)
+            if len(relevantes) >= 5:
+                break
         return "\n\n".join(relevantes)[:10000]
 
     def extrair_paragrafos_relevantes_termos(self, texto: str) -> str:
@@ -156,41 +135,51 @@ class ClaudeProcessor:
 
     def gerar_resumo_contabil(self, texto_relevante: str, termos_monitorados: Optional[List[str]] = None) -> str:
         """
-        Gera um resumo contábil/fiscal usando apenas IA local (transformers) e termos monitorados.
+        Gera um resumo contábil/fiscal usando IA Hugging Face e heurísticas locais.
         """
-        relevantes_termos = self.extrair_paragrafos_relevantes_termos(texto_relevante)
-        if relevantes_termos and len(relevantes_termos.strip()) > 0:
-            texto_para_analise = relevantes_termos[:15000]
-        else:
-            texto_para_analise = texto_relevante[:15000]
-        # IA local: seleciona os 5 parágrafos mais longos e relevantes
-        paragrafos = [p.strip() for p in re.split(r'\n{2,}', texto_para_analise) if p.strip()]
-        paragrafos_ordenados = sorted(paragrafos, key=len, reverse=True)[:5]
-        resumo = "\n\n".join(paragrafos_ordenados)
-        if not resumo:
-            resumo = texto_para_analise[:700] + "..."
-        return resumo[:1500]
+        # Se já for um texto resumido, apenas limita tamanho
+        texto_base = texto_relevante.strip()
+        if not texto_base:
+            return "Resumo não disponível."
+        try:
+            from transformers import pipeline
+            summarizer = pipeline('summarization', model='google/pegasus-xsum')
+            resultado = summarizer(texto_base[:1024], max_length=120, min_length=30, do_sample=False)
+            resumo = resultado[0]['summary_text'] if resultado and 'summary_text' in resultado[0] else texto_base[:700]
+        except Exception as e:
+            logger.warning(f"Erro ao gerar resumo IA local: {e}. Usando fallback heurístico.")
+            paragrafos = [p.strip() for p in re.split(r'\n{2,}', texto_base) if p.strip()]
+            paragrafos_ordenados = sorted(paragrafos, key=len, reverse=True)[:5]
+            resumo = "\n\n".join(paragrafos_ordenados)
+            if not resumo:
+                resumo = texto_base[:700] + "..."
+        if len(resumo) > 1500:
+            corte = resumo.rfind('.', 0, 1500)
+            resumo = resumo[:corte+1] if corte > 0 else resumo[:1500]
+            resumo = resumo.rstrip() + '...'
+        return resumo.strip()
 
     def analisar_sentimento_contabil(self, texto_relevante: str) -> str:
         """
-        Analisa o sentimento do texto de forma local, sem IA externa.
+        Analisa o sentimento do texto usando heurísticas locais e Hugging Face (se desejado).
         """
         texto = texto_relevante.lower()
+        # Heurística simples
         if any(palavra in texto for palavra in ["benefício", "redução", "simplifica", "incentivo", "isenção", "facilita"]):
             return "POSITIVO"
         if any(palavra in texto for palavra in ["obriga", "penalidade", "multa", "aumenta", "restrição", "oneroso", "complexo", "revoga", "exclui"]):
             return "NEGATIVO"
         if any(palavra in texto for palavra in ["ambíguo", "incerto", "cautela", "duvidoso", "interpretação"]):
             return "CAUTELA"
+        # Se quiser usar Hugging Face para classificação de sentimento, pode adicionar aqui
         return "NEUTRO"
 
     def identificar_impacto_fiscal(self, texto_relevante: str, termos_monitorados: Optional[List[str]] = None) -> str:
         """
-        Identifica o impacto fiscal usando apenas IA local (transformers) e regras heurísticas.
+        Identifica o impacto fiscal usando heurísticas locais e Hugging Face (se desejado).
         """
-        relevantes_termos = self.extrair_paragrafos_relevantes_termos(texto_relevante)
-        texto_para_analise = relevantes_termos[:8000] if relevantes_termos and len(relevantes_termos.strip()) > 0 else texto_relevante[:8000]
-        paragrafos = [p.strip() for p in re.split(r'\n{2,}', texto_para_analise) if p.strip()]
+        relevantes_termos = self.extrair_paragrafos_relevantes_local(texto_relevante)
+        paragrafos = [p.strip() for p in re.split(r'\n{2,}', relevantes_termos) if p.strip()]
         topicos = []
         for p in paragrafos:
             if any(palavra in p.lower() for palavra in ["alíquota", "base de cálculo", "tributo", "obrigação acessória", "sped", "efd", "prazo", "recolhimento", "benefício fiscal", "isenção", "penalidade", "multa", "regime especial", "substituição tributária"]):
@@ -216,69 +205,7 @@ class ClaudeProcessor:
 def norma_matcher_component(doc):
     return doc
 
-class PDFProcessor:
-    def gerar_resumo_contabeis(self, texto: str) -> str:
-        """
-        Gera um resumo coeso para documentos do Contabeis, priorizando clareza e contexto fiscal/contábil.
-        Remove parágrafos promocionais, convites para redes sociais e WhatsApp/Telegram/YouTube.
-        """
-        paragrafos = [p.strip() for p in re.split(r'\n{2,}', texto) if p.strip()]
-        # Remove parágrafos repetidos
-        vistos = set()
-        paragrafos_unicos = []
-        for p in paragrafos:
-            p_norm = re.sub(r'\s+', ' ', p.lower())
-            if p_norm not in vistos:
-                paragrafos_unicos.append(p)
-                vistos.add(p_norm)
 
-        # Remove parágrafos promocionais e convites para redes sociais
-        padroes_promocionais = [
-            r'siga o contábeis',
-            r'acesse nosso canal',
-            r'participe do nosso grupo',
-            r'whatsapp',
-            r'telegram',
-            r'youtube',
-            r'instagram',
-            r'facebook',
-            r'clique aqui',
-            r'compartilhe',
-            r'inscreva-se',
-            r'notificação',
-            r'newsletter',
-            r'curta nossa página',
-            r'baixe nosso app',
-            r'baixe o aplicativo',
-            r'grupo exclusivo',
-            r'para receber notícias',
-            r'para não perder nenhuma notícia',
-            r'para ficar por dentro',
-            r'para saber mais',
-            r'confira também',
-            r'veja também',
-            r'leia também',
-            r'acesse',
-            r'clique',
-        ]
-        def eh_promocional(paragrafo):
-            texto = paragrafo.lower()
-            return any(re.search(pat, texto) for pat in padroes_promocionais)
-
-        paragrafos_filtrados = [p for p in paragrafos_unicos if not eh_promocional(p)]
-        # Seleciona os 3-5 maiores parágrafos informativos
-        principais = sorted(paragrafos_filtrados, key=len, reverse=True)[:5]
-        resumo = "\n\n".join(principais)
-        # Limita tamanho e adiciona contexto
-        if len(resumo) > 1500:
-            corte = resumo.rfind('.', 0, 1500)
-            resumo = resumo[:corte+1] if corte > 0 else resumo[:1500]
-            resumo = resumo.rstrip() + '...'
-        # Se o resumo ficou vazio, retorna os maiores parágrafos originais
-        if not resumo.strip():
-            principais = sorted(paragrafos_unicos, key=len, reverse=True)[:3]
-            resumo = "\n\n".join(principais)
-        return resumo.strip()
     """
     Classe principal para processamento de PDFs, extração de normas e análise IA.
     """
@@ -664,22 +591,3 @@ class PDFProcessor:
             documento.impacto_fiscal = f"Erro: {str(e)}"
             documento.save(update_fields=['processado', 'relevante_contabil', 'resumo_ia', 'sentimento_ia', 'impacto_fiscal'])
             return {'status': 'ERRO', 'message': str(e), 'traceback': traceback.format_exc()}
-
-    def processar_documento_contabeis(self, documento, texto_limitado):
-        """
-        Processamento dedicado para documentos do Contabeis.
-        """
-        documento.resumo_ia = self.gerar_resumo_contabeis(texto_limitado)
-        documento.sentimento_ia = self.claude_processor.analisar_sentimento_contabil(documento.resumo_ia)
-        documento.impacto_fiscal = self.claude_processor.identificar_impacto_fiscal(documento.resumo_ia)
-        documento.processado = True
-        documento.assunto = "Notícia Contábil"
-        documento.save()
-        logger.info(f"Resumo especial gerado para documento do Contabeis: {getattr(documento, 'id', 'N/A')}")
-        return {
-            'status': 'SUCESSO_CONTABEIS',
-            'message': 'Documento do Contabeis processado com resumo especial.',
-            'resumo_ia': documento.resumo_ia,
-            'sentimento_ia': documento.sentimento_ia,
-            'impacto_fiscal': documento.impacto_fiscal,
-        }

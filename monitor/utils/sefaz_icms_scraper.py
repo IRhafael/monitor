@@ -33,6 +33,8 @@ class SEFAZICMSScraper:
                 norma_icms = el
                 break
 
+        hoje = datetime.today().date()
+
         if norma_icms:
             ActionChains(driver).move_to_element(norma_icms).click(norma_icms).perform()
             time.sleep(3)
@@ -51,15 +53,24 @@ class SEFAZICMSScraper:
                             situacao = strong_situacao.find_element(By.XPATH, "..") .text.replace('Situação:', '').strip()
                     except Exception:
                         situacao = ''
-                    publicacao = driver.find_element(By.XPATH, "//*[contains(text(),'Publicação')]").text
+                    # Captura o elemento <p> que contém a data real de publicação
+                    publicacao_elem = driver.find_element(By.XPATH, "//p[strong[contains(text(),'Publicação:')]]")
+                    publicacao = publicacao_elem.text
                     ementa = driver.find_element(By.XPATH, "//*[contains(text(),'Ementa')]").text
                     match = re.search(r'em (\d{2}/\d{2}/\d{4})', publicacao)
                     data_publicacao = None
                     if match:
                         data_str = match.group(1)
                         data_publicacao = datetime.strptime(data_str, '%d/%m/%Y').date()
-                    if not data_publicacao:
-                        data_publicacao = datetime.today().date()
+                    # Só salva se a data de publicação real for igual à data de hoje
+                    if not data_publicacao or data_publicacao != hoje:
+                        try:
+                            btn_fechar = driver.find_element(By.CSS_SELECTOR, "button.p-dialog-header-close")
+                            btn_fechar.click()
+                            time.sleep(1)
+                        except Exception:
+                            pass
+                        continue
                     div_baixar = driver.find_element(By.XPATH, "//div[contains(@class, 'button-text') and text()='Baixar']")
                     link_baixar = div_baixar.find_element(By.XPATH, "..")
                     href_baixar = link_baixar.get_attribute("href")

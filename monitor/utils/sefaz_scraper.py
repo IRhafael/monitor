@@ -270,47 +270,55 @@ class SEFAZScraper:
             return False
 
     def get_norm_details(self, norm_type, norm_number):
-        """Busca detalhes da norma com base na estrutura HTML fornecida e enriquece para o modelo Documento"""
+        """Busca detalhes da norma, extraindo tipo, número, DOE, página, data de publicação e ementa do bloco principal."""
         try:
             from monitor.utils.enriquecedor import enriquecer_documento_dict
             with self.browser_session():
-                # 1. Acessa a página principal
                 self.driver.get(self.base_url)
                 self._save_debug_info("01_pagina_inicial")
-                # 2. Executa a pesquisa
                 if not self._pesquisar_norma(norm_type, norm_number):
                     return None
-                # 3. Aguarda e muda para o iframe de resultados
                 try:
                     WebDriverWait(self.driver, 10).until(
                         EC.frame_to_be_available_and_switch_to_it((By.TAG_NAME, "iframe")))
-                    # 4. Aguarda o corpo do documento carregar
                     WebDriverWait(self.driver, 10).until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, "div.document-body")))
-                    # 5. Extrai as informações da norma
                     doc_body = self.driver.find_element(By.CSS_SELECTOR, "div.document-body")
-                    # Extrai o texto principal
                     snippet = doc_body.find_element(By.CSS_SELECTOR, "div.field-snippet span.value").text
-                    # Extrai os campos individuais
+                    # Regex para extrair dados do bloco principal
+                    tipo_numero_match = re.search(r'(Lei|Decreto|Portaria|Ato Normativo|Resolução|Instrução Normativa)[^\d]*(n[º°\.\s]*)?(\d+[\.\d\-/]*)', snippet, re.IGNORECASE)
+                    tipo_norma = tipo_numero_match.group(1) if tipo_numero_match else ''
+                    numero_norma = tipo_numero_match.group(3) if tipo_numero_match else ''
+                    doe_match = re.search(r'DOE/PI.*?N[º°\.\s]*(\d+)', snippet)
+                    numero_doe = doe_match.group(1) if doe_match else ''
+                    pagina_match = re.search(r'p\.\s*(\d+)', snippet)
+                    pagina_doe = pagina_match.group(1) if pagina_match else ''
+                    data_pub_match = re.search(r'em (\d{2}/\d{2}/\d{4})', snippet)
+                    data_publicacao = data_pub_match.group(1) if data_pub_match else ''
+                    # Ementa: pega a primeira linha após a data de publicação
+                    ementa_match = re.search(r'em \d{2}/\d{2}/\d{4}\s*\n*([^\n]+)', snippet)
+                    ementa = ementa_match.group(1).strip() if ementa_match else ''
                     fields = {
+                        'tipo_norma': tipo_norma,
+                        'numero_norma': numero_norma,
+                        'numero_doe': numero_doe,
+                        'pagina_doe': pagina_doe,
+                        'data_publicacao': data_publicacao,
+                        'ementa': ementa,
                         'situacao': self._extract_field(doc_body, "field-situacao"),
                         'inicio_vigencia': self._extract_field(doc_body, "field-data_assinatura"),
-                        'data_publicacao': self._extract_field(doc_body, "field-data_publicacao"),
                         'link_publicacao': self._extract_link(doc_body, "field-link_fonte"),
                         'instituicao': self._extract_field(doc_body, "field-instituicao"),
                         'processo_sei': self._extract_field(doc_body, "field-processo"),
                         'documento_sei': self._extract_field(doc_body, "field-secao"),
                         'apelido': self._extract_field(doc_body, "field-apelido"),
-                        'ementa': self._extract_field(doc_body, "field-ementa"),
                         'altera': self._extract_links(doc_body, "field-alt")
                     }
-                    # Constrói o resultado bruto
                     result = {
                         'norma': f"{norm_type} {norm_number}",
                         'texto_completo': snippet,
                         **fields
                     }
-                    # Enriquecimento para o modelo Documento
                     enriched = enriquecer_documento_dict(result)
                     self._save_debug_info("04_norma_encontrada")
                     return enriched
