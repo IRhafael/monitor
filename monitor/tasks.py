@@ -394,34 +394,6 @@ def verificar_normas_especificas_sefaz_task(self, norma_ids: List[int]): #
     async_res = verificar_normas_sefaz_task.s(norma_ids=norma_ids).apply_async() #
     return {'status': 'DISPARADA', 'task_id': async_res.id} #
 
-@shared_task(bind=True, max_retries=1, default_retry_delay=5*60)
-def gerar_relatorio_task(self, parametros: Optional[dict] = None):
-    from monitor.models import LogExecucao
-    from .utils.relatorio import gerar_relatorio_contabil_avancado
-    from monitor.tasks import coletar_diario_oficial_task
-    task_id = self.request.id
-    log_entry = LogExecucao.objects.create(tipo_execucao='RELATORIO', status='INICIADA', detalhes={'task_id': task_id})
-    logger.info(f"Tarefa Celery 'gerar_relatorio_task' [{task_id}] iniciada.")
-    try:
-        caminho_arquivo = gerar_relatorio_contabil_avancado()
-        if caminho_arquivo:
-            log_entry.status = 'SUCESSO'
-            log_entry.detalhes['caminho_arquivo'] = caminho_arquivo
-            log_entry.detalhes['message'] = 'Relatório gerado com sucesso.'
-        else:
-            log_entry.status = 'ERRO'
-            log_entry.detalhes['message'] = 'Falha ao gerar o relatório.'
-    except Exception as e:
-        logger.error(f"Erro ao gerar relatório: {e}", exc_info=True)
-        log_entry.status = 'ERRO'
-        log_entry.detalhes['erro_principal'] = str(e)
-        log_entry.detalhes['traceback'] = traceback.format_exc()
-    finally:
-        log_entry.data_fim = timezone.now()
-        log_entry.duracao = log_entry.data_fim - log_entry.data_inicio
-        log_entry.save()
-        logger.info(f"Tarefa Celery 'gerar_relatorio_task' [{task_id}] concluída. Status: {log_entry.status}. Detalhes: {log_entry.detalhes}")
-    return {'status': log_entry.status, 'detalhes': log_entry.detalhes}
 
 from celery import shared_task
 # --- Tarefa para rodar todos os scrapers de coleta de documentos ---

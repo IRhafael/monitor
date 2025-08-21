@@ -1,593 +1,138 @@
-# monitor/utils/pdf_processor.py
-import os
 import re
-import logging
-import traceback
-# Remova requests se não for mais usado diretamente aqui
-from io import StringIO # Se ainda for usada em algum lugar
-from typing import Tuple, List, Dict, Optional
-from datetime import datetime
-import spacy
-from spacy.matcher import Matcher
-from spacy.language import Language
-# Remova PyPDF2 se não for usado aqui e sim no scraper
-from pdfminer.high_level import extract_text as extract_text_to_fp # Verifique se é este ou o extract_text do scraper
-from pdfminer.layout import LAParams
-from django.conf import settings
-from django.core.exceptions import SuspiciousFileOperation, ValidationError # Adicionado ValidationError
-from django.db import transaction
-from django.db.models import Q
-from monitor.models import Documento, NormaVigente, TermoMonitorado
-from .enriquecedor import enriquecer_documento_dict
-from django.utils import timezone
-from collections import defaultdict
-
-# Importe a biblioteca da Anthropic
-import anthropic # Importe a biblioteca da Anthropic
-import time # Para retries
-
-logger = logging.getLogger(__name__)
-
-# Remova as constantes MISTRAL_API_KEY e MISTRAL_API_URL
-
 class PDFProcessor:
-    def extrair_dados_para_relatorio(self, documento, limite_paginas: int = 3, limite_texto: int = 20000) -> Dict[str, any]:
-        """
-        Extrai todos os dados relevantes do documento para uso no relatório/jornal contábil.
-        Retorna dict com resumo, parágrafos, normas, impacto fiscal, sentimento e metadados.
-        """
-        texto = getattr(documento, 'texto_completo', '') or ''
-        paginas = re.split(r'\f|\n{3,}', texto)
-        texto_limitado = '\n'.join(paginas[:limite_paginas]) if len(paginas) > 1 else texto
-        texto_limitado = texto_limitado[:limite_texto]
-        paragrafos_relevantes = self.extrair_paragrafos_relevantes_local(texto_limitado)
-        resumo_ia = self.gerar_resumo_contabil(paragrafos_relevantes)
-        impacto_fiscal = self.identificar_impacto_fiscal(paragrafos_relevantes)
-        sentimento_ia = self.analisar_sentimento_contabil(paragrafos_relevantes)
-        normas_extraidas = []
-        try:
-            normas_extraidas = documento.normas_relacionadas.all() if hasattr(documento, 'normas_relacionadas') else []
-            if not normas_extraidas:
-                # Tenta extrair do texto se não houver relacionadas
-                normas_extraidas = []
-                if hasattr(documento, 'extrair_normas'):
-                    normas_extraidas = documento.extrair_normas(texto_limitado)
-        except Exception:
-            normas_extraidas = []
-        metadados = {
-            'ia_modelo_usado': self.default_model,
-            'ia_relevancia_justificativa': "Analisado como relevante pela IA e/ou termos monitorados.",
-            'ia_pontos_criticos': ["Verificar detalhes no resumo e impacto fiscal gerados pela IA."]
-        }
-        return {
-            'resumo_ia': resumo_ia,
-            'paragrafos_relevantes': paragrafos_relevantes,
-            'normas_extraidas': normas_extraidas,
-            'impacto_fiscal': impacto_fiscal,
-            'sentimento_ia': sentimento_ia,
-            'metadados': metadados,
-            'texto_limitado': texto_limitado
-        }
-    def extrair_paragrafos_relevantes_local(self, texto: str) -> str:
-        """
-        Usa modelo Hugging Face Transformers (zero-shot-classification) para selecionar parágrafos relevantes.
-        """
-        try:
-            from transformers import pipeline
-        except ImportError:
-            logger.warning("Pacote transformers não instalado. Usando fallback por termos monitorados.")
-            return self.extrair_paragrafos_relevantes_termos(texto)
+	"""
+	Stub mínimo para evitar erro de importação em outros módulos Django.
+	"""
+	pass
+import os
+import requests
+from dotenv import load_dotenv
+from pdfminer.high_level import extract_text
 
-        termos = TermoMonitorado.objects.filter(ativo=True)
-        termos_busca = set(termo.termo.lower() for termo in termos)
-        paragrafos_texto = [p.strip() for p in re.split(r'\n{2,}', texto) if p.strip()]
+# Carrega variáveis do .env
+dotenv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env')
+load_dotenv(dotenv_path)
 
-        candidate_labels = ["relevante", "irrelevante"]
-        try:
-            classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
-        except Exception as e:
-            logger.warning(f"Erro ao carregar modelo local transformers: {e}. Usando fallback por termos.")
-            return self.extrair_paragrafos_relevantes_termos(texto)
-
-        resultados = []
-        for paragrafo in paragrafos_texto:
-            try:
-                output = classifier(
-                    paragrafo,
-                    candidate_labels,
-                    hypothesis_template=f"Este parágrafo é relevante para contabilidade/fiscal? Termos: {', '.join(termos_busca)}."
-                )
-                score_relevante = output['scores'][output['labels'].index("relevante")]
-                resultados.append((score_relevante, paragrafo))
-            except Exception as e:
-                logger.warning(f"Erro ao classificar parágrafo: {e}")
-                resultados.append((0, paragrafo))
-
-        # Seleciona os 5 parágrafos mais relevantes e não duplicados
-        vistos = set()
-        relevantes = []
-        for score, p in sorted(resultados, key=lambda x: x[0], reverse=True):
-            p_norm = re.sub(r'\s+', ' ', p.lower())
-            if p_norm not in vistos:
-                relevantes.append(p)
-                vistos.add(p_norm)
-            if len(relevantes) >= 5:
-                break
-        return "\n\n".join(relevantes)[:10000]
-
-    def extrair_paragrafos_relevantes_termos(self, texto: str) -> str:
-        """
-        Fallback simples por termos monitorados.
-        """
-        termos = TermoMonitorado.objects.filter(ativo=True)
-        termos_busca = set(termo.termo.lower() for termo in termos)
-        paragrafos_texto = [p.strip() for p in re.split(r'\n{2,}', texto) if p.strip()]
-        relevantes = [p for p in paragrafos_texto if any(termo in p.lower() for termo in termos_busca)]
-        if not relevantes:
-            relevantes = sorted(paragrafos_texto, key=len, reverse=True)[:5]
-        return "\n\n".join(relevantes)[:10000]
-
-    def __init__(self):
-        # Não inicializa mais cliente Anthropic
-        self.default_model = "local-transformers"
-        self.default_temperature = 0.2
-        self.default_max_tokens = 2048
-
-    def gerar_resumo_contabil(self, texto_relevante: str, termos_monitorados: Optional[List[str]] = None) -> str:
-        """
-        Gera um resumo contábil/fiscal usando IA Hugging Face e heurísticas locais.
-        """
-        # Se já for um texto resumido, apenas limita tamanho
-        texto_base = texto_relevante.strip()
-        if not texto_base:
-            return "Resumo não disponível."
-        try:
-            from transformers import pipeline
-            summarizer = pipeline('summarization', model='google/pegasus-xsum')
-            resultado = summarizer(texto_base[:1024], max_length=120, min_length=30, do_sample=False)
-            resumo = resultado[0]['summary_text'] if resultado and 'summary_text' in resultado[0] else texto_base[:700]
-        except Exception as e:
-            logger.warning(f"Erro ao gerar resumo IA local: {e}. Usando fallback heurístico.")
-            paragrafos = [p.strip() for p in re.split(r'\n{2,}', texto_base) if p.strip()]
-            paragrafos_ordenados = sorted(paragrafos, key=len, reverse=True)[:5]
-            resumo = "\n\n".join(paragrafos_ordenados)
-            if not resumo:
-                resumo = texto_base[:700] + "..."
-        if len(resumo) > 1500:
-            corte = resumo.rfind('.', 0, 1500)
-            resumo = resumo[:corte+1] if corte > 0 else resumo[:1500]
-            resumo = resumo.rstrip() + '...'
-        return resumo.strip()
-
-    def analisar_sentimento_contabil(self, texto_relevante: str) -> str:
-        """
-        Analisa o sentimento do texto usando heurísticas locais e Hugging Face (se desejado).
-        """
-        texto = texto_relevante.lower()
-        # Heurística simples
-        if any(palavra in texto for palavra in ["benefício", "redução", "simplifica", "incentivo", "isenção", "facilita"]):
-            return "POSITIVO"
-        if any(palavra in texto for palavra in ["obriga", "penalidade", "multa", "aumenta", "restrição", "oneroso", "complexo", "revoga", "exclui"]):
-            return "NEGATIVO"
-        if any(palavra in texto for palavra in ["ambíguo", "incerto", "cautela", "duvidoso", "interpretação"]):
-            return "CAUTELA"
-        # Se quiser usar Hugging Face para classificação de sentimento, pode adicionar aqui
-        return "NEUTRO"
-
-    def identificar_impacto_fiscal(self, texto_relevante: str, termos_monitorados: Optional[List[str]] = None) -> str:
-        """
-        Identifica o impacto fiscal usando heurísticas locais e Hugging Face (se desejado).
-        """
-        relevantes_termos = self.extrair_paragrafos_relevantes_local(texto_relevante)
-        paragrafos = [p.strip() for p in re.split(r'\n{2,}', relevantes_termos) if p.strip()]
-        topicos = []
-        for p in paragrafos:
-            if any(palavra in p.lower() for palavra in ["alíquota", "base de cálculo", "tributo", "obrigação acessória", "sped", "efd", "prazo", "recolhimento", "benefício fiscal", "isenção", "penalidade", "multa", "regime especial", "substituição tributária"]):
-                topicos.append("- " + p[:200])
-        if not topicos:
-            return "Nenhum impacto fiscal direto identificado neste documento."
-        return "\n".join(topicos[:7])
-
-
-    def _extrair_paragrafos_relevantes(self, texto: str) -> str:
-        """
-        Extrai parágrafos relevantes usando apenas termos monitorados e heurísticas locais.
-        """
-        relevantes_termos = self.extrair_paragrafos_relevantes_termos(texto)
-        if relevantes_termos and len(relevantes_termos.strip()) > 0:
-            logger.info("Parágrafos relevantes encontrados por termos monitorados.")
-            return relevantes_termos
-        logger.info("Nenhum parágrafo relevante encontrado por termos. Usando IA local heurística.")
-        return self.extrair_paragrafos_relevantes_local(texto)
-
-
-@Language.component("norma_matcher")
-def norma_matcher_component(doc):
-    return doc
-
-
-    """
-    Classe principal para processamento de PDFs, extração de normas e análise IA.
-    """
-    def processar_apenas_dois_documentos(self):
-        """
-        Função de teste: processa apenas dois documentos e exibe as normas extraídas.
-        """
-        """
-        Função temporária para testes: processa apenas dois documentos e exibe as normas extraídas.
-        """
-        from monitor.models import Documento
-        docs = Documento.objects.all()[:1]
-        resultados = []
-        for doc in docs:
-            print(f"Processando documento ID: {doc.id}, Título: {doc.titulo}")
-            normas = self.extrair_normas(doc.texto_completo or "")
-            print(f"Normas extraídas: {normas}")
-            resultado = self.process_document(doc)
-            resultados.append(resultado)
-        print("Resultados do processamento:", resultados)
-        return resultados
-    def __init__(self):
-        self.nlp = None
-        self.matcher = None
-        self.claude_processor = ClaudeProcessor()
-        try:
-            self._setup_spacy()
-        except Exception as e:
-            logger.critical(f"Falha CRÍTICA na inicialização de PDFProcessor: {e}", exc_info=True)
-            self.nlp = None
-        self.norma_type_choices_map = self._get_norma_type_choices_map()
-
-
-    def _setup_spacy(self): #
-        try: #
-            self.nlp = spacy.load("pt_core_news_sm") #
-            self._configure_matchers() #
-            logger.info("Modelo spaCy 'pt_core_news_sm' carregado com sucesso para uso.") #
-        except OSError: #
-            logger.warning("Modelo spaCy 'pt_core_news_sm' não encontrado. Baixando...") #
-            spacy.cli.download("pt_core_news_sm") #
-            self.nlp = spacy.load("pt_core_news_sm") #
-            self._configure_matchers() #
-            logger.info("Modelo spaCy 'pt_core_news_sm' baixado e carregado com sucesso para uso.") #
-        except Exception as e: #
-            logger.error(f"Erro ao carregar ou configurar spaCy: {e}", exc_info=True) #
-            self.nlp = None #
-
-    def _get_norma_type_choices_map(self): #
-        mapping = defaultdict(lambda: 'OUTROS') #
-        map_data = { #
-            'lei': 'LEI', 'leis': 'LEI', 'lei complementar': 'LEI', #
-            'leis complementares': 'LEI', 'lc': 'LEI', #
-            'decreto': 'DECRETO', 'decretos': 'DECRETO', 'decreto-lei': 'DECRETO', #
-            'portaria': 'PORTARIA', 'portarias': 'PORTARIA', #
-            'resolucao': 'RESOLUCAO', 'resolucoes': 'RESOLUCAO', 'resolução': 'RESOLUCAO', #
-            'instrucao normativa': 'INSTRUCAO', 'instrução normativa': 'INSTRUCAO', #
-            'instrucao': 'INSTRUCAO', 'in': 'INSTRUCAO', #
-            'ato normativo': 'ATO_NORMATIVO' #
-        } #
-        for key, value in map_data.items(): #
-            mapping[key] = value #
-
-        for choice_key, _ in NormaVigente.TIPO_CHOICES: #
-            mapping[choice_key.lower()] = choice_key #
-        return mapping #
-    
-    def _get_norma_type_for_model(self, extracted_type_string: str) -> str: # Não usado no código atual, mas mantido.
-        return self.norma_type_choices_map.get(extracted_type_string.lower().strip(), 'OUTROS') #
-
-    def _configure_matchers(self): #
-        if not self.nlp: #
-            logger.warning("spaCy (nlp) não está carregado. Matchers não serão configurados.") #
-            self.matcher = None #
-            return #
-            
-        self.matcher = Matcher(self.nlp.vocab) #
-        logger.info("Matchers spaCy configurados (ou tentativa de configurar, se padrões fossem adicionados).") #
-
-    def _padronizar_numero_norma(self, numero: str) -> str: #
-        numero_input = str(numero) #
-        numero_limpo = re.sub(r'[^\d./-]', '', numero_input) #
-
-        if not numero_limpo or not re.search(r'\d', numero_limpo): #
-            return "" #
-
-        parts = re.split(r'([./-])', numero_limpo) #
-        final_parts = [] #
-        for part in parts: #
-            if part.isdigit(): #
-                stripped_part = part.lstrip('0') #
-                final_parts.append(stripped_part if stripped_part else '0') #
-            elif part in ('/', '.', '-'): #
-                final_parts.append(part) #
-        
-        numero_processado = "".join(final_parts) #
-        numero_final = numero_processado.strip('./-') #
-        return numero_final #
-    
-    def _extrair_ano_norma(self, numero_norma: str) -> Optional[int]: #
-        match_ano_4_digitos = re.search(r'/(\d{4})\b', numero_norma) #
-        if match_ano_4_digitos: #
-            return int(match_ano_4_digitos.group(1)) #
-        
-        match_ano_2_digitos = re.search(r'/(\d{2})\b', numero_norma) #
-        if match_ano_2_digitos: #
-            ano_curto = int(match_ano_2_digitos.group(1)) #
-            return 2000 + ano_curto if ano_curto < 50 else 1900 + ano_curto #
-        return None #
+def processar_pdf_com_openai(pdf_path, modelo="gpt-3.5-turbo"):
+	"""
+	Extrai texto de um PDF e processa com OpenAI, retornando o resumo.
+	"""
+	chave_api = os.environ.get("OPENAI_API_KEY")
+	if not chave_api:
+		raise Exception("OPENAI_API_KEY não encontrada no .env")
+	texto = extract_text(pdf_path)
+	# Limita o texto para evitar erro de contexto
+	max_chars = 12000
+	texto_truncado = texto[:max_chars]
+	if len(texto) > max_chars:
+		texto_truncado += "\n\n[TEXTO TRUNCADO - ENVIE O PDF EM PARTES PARA ANÁLISE COMPLETA]"
+	prompt = (
+		"Você é um assistente para análise de documentos fiscais e contábeis. "
+		"Resuma o texto abaixo, destaque atos normativos, leis, decretos, portarias e informações relevantes. "
+		"Texto:\n" + texto_truncado
+	)
+	url = "https://api.openai.com/v1/chat/completions"
+	headers = {
+		"Authorization": f"Bearer {chave_api}",
+		"Content-Type": "application/json"
+	}
+	data = {
+		"model": modelo,
+		"messages": [
+			{"role": "system", "content": "Você é um especialista em documentos fiscais/contábeis."},
+			{"role": "user", "content": prompt}
+		],
+		"max_tokens": 512,
+		"temperature": 0.2
+	}
+	response = requests.post(url, headers=headers, json=data, timeout=60)
+	if response.status_code == 200:
+		resposta = response.json()
+		conteudo = resposta["choices"][0]["message"]["content"]
+		return conteudo
+	else:
+		raise Exception(f"OpenAI status {response.status_code}: {response.text}")
+	
 
 
 
-    def extrair_normas(self, texto: str) -> List[Tuple[str, str]]:
-        normas_encontradas_set = set()
-        
-        # Regex ajustado para melhor separação de tipo e número
-        # group(1) = tipo da norma
-        # group(2) = número completo da norma, incluindo ano se junto
-        padrao_norma = re.compile(
-            r'(?i)\b(lei\scomplementar|lei\sordin[áa]ria|lei|decreto-lei|decreto|portaria|resolu[cç][ãa]o|instru[cç][ãa]o\snormativa|ato\snormativo|IN\b|LC\b|EC\b|MP\b|ADE\b)\s+'
-            r'(?:n[º°\.\s]*|n[º°]?\s*)?' # Permite "nº ", "n. ", "n ", ou só o número
-            r'([\d]+(?:[\.,\/\-]\d+)*[\w]*)', # Número: dígitos, pontos, barras, hífens, opcionalmente terminando com letra
-            re.IGNORECASE
-        )
-        for match in padrao_norma.finditer(texto):
-            tipo_bruto = match.group(1).strip()
-            numero_bruto = match.group(2).strip()
-            tipo_normalizado = self.norma_type_choices_map.get(tipo_bruto.lower(), 'OUTROS')
-            numero_padronizado = self._padronizar_numero_norma(numero_bruto)
-            ano_norma = self._extrair_ano_norma(numero_padronizado)
-            valid_tipos = [choice[0] for choice in NormaVigente.TIPO_CHOICES]
-            if tipo_normalizado not in valid_tipos:
-                logger.warning(f"Tipo de norma '{tipo_bruto}' normalizado para '{tipo_normalizado}' não é um TIPO_CHOICES válido. Marcando como OUTROS ou ignorando. Número: {numero_padronizado}")
-            # Só considera normas com número e ano (ano com 4 dígitos)
-            if numero_padronizado and ano_norma and len(str(ano_norma)) == 4:
-                # Remove todos os anos de 4 dígitos do final para evitar duplicidade
-                numero_sem_ano = re.sub(r'(\/\d{4})+$', '', numero_padronizado)
-                # Só adiciona o ano se o número não terminar com /ano
-                if not re.search(rf'/({ano_norma})$', numero_padronizado):
-                    normas_encontradas_set.add((tipo_normalizado, f"{numero_sem_ano}/{ano_norma}"))
-                else:
-                    normas_encontradas_set.add((tipo_normalizado, numero_padronizado))
-            else:
-                # Ignora normas sem ano ou com número muito curto
-                logger.warning(f"Norma ignorada por não conter ano válido ou número muito curto: tipo={tipo_normalizado}, numero='{numero_padronizado}', ano={ano_norma}")
+def limpar_texto_documento(texto):
+	"""
+	Remove sumário, rodapés, cabeçalhos e ruídos comuns do DOEPI.
+	"""
+	# Remove sumário até o primeiro título principal
+	texto = re.sub(r"SUMÁRIO[\s\S]*?(DECRETOS|PORTARIAS|EXTRATOS|AVISOS|EDITAIS|ATOS|ERRATAS|DECISÕES|NOMEAÇÕES E/OU EXONERAÇÕES)", r"\1", texto, flags=re.IGNORECASE)
+	# Remove padrões de rodapé/cabeçalho
+	noise_patterns = [
+		r"^\s*Disponibilizado:.*$",
+		r"^\s*Publicado:.*$",
+		r"^\s*Diário Oficial\s*$",
+		r"^\s*Estado do Piaui\s*$",
+		r"^\s*Diário nº \d+/\d+, \d+ de \w+ de \d{4}\.",
+		r"^\s*\*\*\* Iniciado: .* \*\*\*\s*$",
+		r"^\s*Página \d+/\d+\s*$",
+		r"^\s*ESTADO DO PIAUI\s*$",
+		r"^\s*GOVERNO DO\s*$",
+		r"^\s*PIAUÍ\s*$",
+		r"^\s*AQUI TEM TRABALHO\.\s*$",
+		r"^\s*AQUI TEM FUTURO\.\s*$",
+		r"^\s*IMPAVIDUM FERIENT RUINAE\s*$",
+		r"^\s*\(Transcrição da nota .* de Nº .*, datada de .* de \w+ de \d{4}\.\?\)\s*$"
+	]
+	for pattern in noise_patterns:
+		texto = re.sub(pattern, "", texto, flags=re.MULTILINE)
+	# Remove múltiplas quebras de linha
+	texto = re.sub(r'\n{3,}', '\n\n', texto)
+	# Remove espaços em branco excessivos
+	texto = re.sub(r' {2,}', ' ', texto)
+	return texto.strip()
 
-        # ... (resto da lógica com TermoMonitorado permanece igual)
-        termos_normas_db = TermoMonitorado.objects.filter(ativo=True, tipo='NORMA') #
-        for termo_db in termos_normas_db: #
-            if termo_db.variacoes: #
-                numeros_especificos = [self._padronizar_numero_norma(n.strip()) for n in termo_db.variacoes.split(',')] #
-                for num_esp in numeros_especificos: #
-                    if not num_esp: continue #
-                    padrao_especifico = rf'(?i)\b{re.escape(num_esp)}\b' #
-                    if re.search(padrao_especifico, texto): #
-                        # Garante que o tipo do TermoMonitorado seja um tipo válido do modelo
-                        tipo_termo_normalizado = self.norma_type_choices_map.get(termo_db.termo.lower(), 'OUTROS')
-                        normas_encontradas_set.add((tipo_termo_normalizado, num_esp))
-        
-        logger.info(f"Extração por regex encontrou {len(normas_encontradas_set)} normas únicas.") #
-        return list(normas_encontradas_set) #
-
-
-
-    def is_relevante_contabil(self, texto: str, termos_monitorados: Optional[List[str]] = None) -> bool:
-        """
-        Verifica se o texto é relevante usando explicitamente os termos monitorados como parâmetro.
-        Se não fornecido, busca os termos monitorados ativos do banco.
-        """
-        texto_lower = texto.lower()
-        if termos_monitorados is None:
-            termos_objs = TermoMonitorado.objects.filter(ativo=True, tipo='TEXTO')
-            termos_monitorados = [termo.termo for termo in termos_objs]
-            variacoes = []
-            for termo in termos_objs:
-                if termo.variacoes:
-                    variacoes.extend([v.strip() for v in termo.variacoes.split(",") if v.strip()])
-            termos_monitorados.extend(variacoes)
-
-        # Busca direta por termos monitorados e variações
-        for termo in termos_monitorados:
-            if termo.lower() in texto_lower:
-                logger.debug(f"Documento relevante encontrado pelo termo monitorado: {termo}")
-                return True
-
-    # Fallback IA removido: só usa verificação local por termos monitorados
-        return False
-
-    def _extrair_paragrafos_relevantes(self, texto: str) -> str:
-        """
-        Chama o método de extração de parágrafos relevantes da instância ClaudeProcessor.
-        """
-        return self.claude_processor._extrair_paragrafos_relevantes(texto)
-
-
-    def _limpar_e_cortar_impacto(self, texto, limite=500):
-        """
-        Limpa e corta o texto do impacto fiscal para garantir qualidade e tamanho adequado.
-        """
-        texto = re.sub(r'(?i)\b(DECRETOS?|PORTARIAS?|_DECRETOS_|_PORTARIAS_|LEIS|_LEIS_)\b\s*', '', texto)
-        texto = re.sub(r'\(Transcrição da nota.*?\)', '', texto, flags=re.IGNORECASE)
-        texto = re.sub(r'(Policial Penal|Agente de Polícia Civil|SD PM|Sargento QPPM|Professor Adjunto|Comunicadora Social|Assistente Social|Secretária Municipal|Secretaria da Justiça|Secretaria da Segurança Pública|Secretaria de Estado da Educação|Fundação Universidade Estadual|Hospital Getúlio Vargas|Secretaria do Desenvolvimento e Assistência Social|Secretaria de Comunicação Social|Secretaria de Estado da Saúde|Assembleia Legislativa do Estado do Piauí|Gabinete da Deputada Ana Paula|CB PM|RGPM|CPF|Matrícula|Quadro de pessoal)[^\.\n]*[\.\n]', '', texto, flags=re.IGNORECASE)
-        texto = re.sub(r'^[A-Z\s]{8,}$', '', texto, flags=re.MULTILINE)
-        texto = re.sub(r'\n{2,}', '\n', texto)
-        termos_fiscais = r'(ICMS|CFOP|benefício fiscal|crédito fiscal|apuração|tributação|imposto|EFD|NF-e|Decreto|Portaria|Lei Complementar|Convênio ICMS|alíquota|base de cálculo|penalidade|incentivo fiscal|regulamentar|homologação|prazo|operações|apuração|tributos)'
-        paragrafos = [p.strip() for p in re.split(r'\n{1,}', texto) if p.strip()]
-        relevantes = [p for p in paragrafos if re.search(termos_fiscais, p, re.IGNORECASE)]
-        if not relevantes:
-            relevantes = sorted(paragrafos, key=len, reverse=True)[:3]
-        texto_final = '\n'.join(relevantes)
-        if len(texto_final) > limite:
-            corte = max(texto_final.rfind('.', 0, limite), texto_final.rfind('\n', 0, limite))
-            if corte > 0:
-                texto_final = texto_final[:corte+1]
-            else:
-                texto_final = texto_final[:limite]
-            texto_final = texto_final.rstrip() + '...'
-        return texto_final.strip()
-
-
-    def processar_sefaz_icms(self, documento):
-        """
-        Processa documentos do SEFAZ ICMS, extraindo normas, resumo e impacto fiscal.
-        """
-        texto = documento.texto_completo or ""
-        resumo = self.claude_processor.gerar_resumo_contabil(texto)
-        impacto = self.claude_processor.identificar_impacto_fiscal(texto)
-        documento.resumo_ia = resumo
-        documento.sentimento_ia = self.claude_processor.analisar_sentimento_contabil(resumo)
-        documento.impacto_fiscal = impacto
-        documento.processado = True
-        documento.assunto = "SEFAZ ICMS"
-        documento.save()
-        return {
-            'status': 'SUCESSO_SEFAZ',
-            'message': 'Documento SEFAZ ICMS processado.',
-            'resumo_ia': documento.resumo_ia,
-            'sentimento_ia': documento.sentimento_ia,
-            'impacto_fiscal': documento.impacto_fiscal,
-        }
-
-    def processar_noticia_outro(self, documento):
-        """
-        Processa notícias genéricas (OUTRO), gerando resumo e análise simples.
-        """
-        texto = documento.texto_completo or ""
-        resumo = self.claude_processor.gerar_resumo_contabil(texto)
-        documento.resumo_ia = resumo
-        documento.sentimento_ia = self.claude_processor.analisar_sentimento_contabil(resumo)
-        documento.impacto_fiscal = self.claude_processor.identificar_impacto_fiscal(resumo)
-        documento.processado = True
-        documento.assunto = "Notícia Geral"
-        documento.save()
-        return {
-            'status': 'SUCESSO_OUTRO',
-            'message': 'Notícia genérica processada.',
-            'resumo_ia': documento.resumo_ia,
-            'sentimento_ia': documento.sentimento_ia,
-            'impacto_fiscal': documento.impacto_fiscal,
-        }
-
-    def process_document(self, documento: Documento, limite_paginas: int = 3, limite_texto: int = 20000) -> Dict[str, any]:
-        """
-        Processa um documento PDF ou notícia, escolhendo o processamento conforme o tipo/fonte do documento.
-        """
-        logger.info(f"Processando documento ID: {getattr(documento, 'id', 'N/A')}, Título: {getattr(documento, 'titulo', '')[:50]}...")
-        if not getattr(documento, 'texto_completo', None):
-            logger.warning(f"Documento ID {getattr(documento, 'id', 'N/A')} não possui texto completo. Pulando processamento.")
-            documento.processado = True
-            documento.relevante_contabil = False
-            documento.resumo_ia = "Texto completo ausente, não foi possível processar."
-            documento.sentimento_ia = "NEUTRO"
-            documento.impacto_fiscal = "Não aplicável."
-            documento.save(update_fields=['processado', 'relevante_contabil', 'resumo_ia', 'sentimento_ia', 'impacto_fiscal'])
-            return {'status': 'FALHA', 'message': 'Texto completo ausente.'}
-        try:
-            texto = documento.texto_completo
-            paginas = re.split(r'\f|\n{3,}', texto)
-            texto_limitado = '\n'.join(paginas[:limite_paginas]) if len(paginas) > 1 else texto
-            texto_limitado = texto_limitado[:limite_texto]
-            fonte = (getattr(documento, 'fonte_documento', '') or '').lower()
-            tipo = (getattr(documento, 'tipo_documento', '') or '').upper()
-            if fonte == 'contabeis':
-                return self.processar_documento_contabeis(documento, texto_limitado)
-            elif fonte == 'sefaz' or tipo == 'SEFAZ_ICMS':
-                return self.processar_sefaz_icms(documento)
-            elif tipo == 'OUTRO' or fonte == 'noticia':
-                return self.processar_noticia_outro(documento)
-            # ...existing code for normas, boletins, etc. pode ser expandido aqui...
-            # Fallback: processamento padrão
-            # ...existing code...
-            normas_extraidas_tuplas = self.extrair_normas(texto_limitado)
-            normas_objs_para_relacionar = []
-            normas_strings_para_resumo = []
-            for tipo_norma_ext, numero_norma_processado in normas_extraidas_tuplas:
-                if not numero_norma_processado or len(numero_norma_processado) < 1:
-                    logger.warning(f"Norma ignorada (em process_document) por número inválido ou muito curto: tipo={tipo_norma_ext}, numero='{numero_norma_processado}'")
-                    continue
-                ano_norma = self._extrair_ano_norma(numero_norma_processado)
-                valid_tipos = [choice[0] for choice in NormaVigente.TIPO_CHOICES]
-                tipo_final = tipo_norma_ext if tipo_norma_ext in valid_tipos else 'OUTROS'
-                ementa_modelo_default_field = NormaVigente._meta.get_field('ementa')
-                ementa_para_defaults = ementa_modelo_default_field.default
-                if callable(ementa_para_defaults):
-                    ementa_para_defaults = ementa_para_defaults()
-                try:
-                    norma_obj = NormaVigente.objects.filter(
-                        tipo=tipo_final,
-                        numero=numero_norma_processado,
-                        ano=ano_norma
-                    ).first()
-                    if not norma_obj:
-                        norma_obj = NormaVigente.objects.create(
-                            tipo=tipo_final,
-                            numero=numero_norma_processado,
-                            ano=ano_norma,
-                            data_ultima_mencao=getattr(documento, 'data_publicacao', None),
-                            ementa=ementa_para_defaults,
-                            situacao='A_VERIFICAR'
-                        )
-                        norma_obj.ementa = f"Extraída do documento '{getattr(documento, 'titulo', '')}'"
-                        norma_obj.save(update_fields=['ementa'])
-                    elif getattr(documento, 'data_publicacao', None):
-                        if not norma_obj.data_ultima_mencao or getattr(documento, 'data_publicacao', None) > norma_obj.data_ultima_mencao:
-                            norma_obj.data_ultima_mencao = getattr(documento, 'data_publicacao', None)
-                            norma_obj.save(update_fields=['data_ultima_mencao'])
-                    normas_objs_para_relacionar.append(norma_obj)
-                    normas_strings_para_resumo.append(f"{norma_obj.get_tipo_display()} {norma_obj.numero}" + (f"/{norma_obj.ano}" if norma_obj.ano else ""))
-                except ValidationError as e_val:
-                    logger.error(f"Erro de VALIDAÇÃO ao criar/obter NormaVigente para tipo={tipo_final}, numero={numero_norma_processado}, ano={ano_norma}: {e_val.message_dict if hasattr(e_val, 'message_dict') else e_val}", exc_info=False)
-                    continue
-                except Exception as e_norma:
-                    logger.error(f"Erro GENÉRICO ao criar/obter NormaVigente para tipo={tipo_final}, numero={numero_norma_processado}, ano={ano_norma}: {e_norma}", exc_info=True)
-                    continue
-            termos_monitorados_ativos = list(TermoMonitorado.objects.filter(ativo=True, tipo='TEXTO').values_list('termo', flat=True))
-            relevante_contabil = self.is_relevante_contabil(texto_limitado, termos_monitorados_ativos)
-            documento.relevante_contabil = relevante_contabil
-            documento.assunto = "Contábil/Fiscal" if relevante_contabil else "Geral"
-            if relevante_contabil:
-                logger.info(f"Documento ID {getattr(documento, 'id', 'N/A')} é relevante. Prosseguindo com análise IA detalhada.")
-                paragrafos_relevantes = self._extrair_paragrafos_relevantes(texto_limitado)
-                documento.resumo_ia = self.claude_processor.gerar_resumo_contabil(paragrafos_relevantes, termos_monitorados_ativos)
-                documento.sentimento_ia = self.claude_processor.analisar_sentimento_contabil(paragrafos_relevantes)
-                impacto_fiscal_texto = self.claude_processor.identificar_impacto_fiscal(paragrafos_relevantes, termos_monitorados_ativos)
-                documento.impacto_fiscal = self._limpar_e_cortar_impacto(impacto_fiscal_texto) if impacto_fiscal_texto else None
-                documento.metadata = {
-                    'ia_modelo_usado': self.claude_processor.default_model,
-                    'ia_relevancia_justificativa': "Analisado como relevante pela IA e/ou termos monitorados.",
-                    'ia_pontos_criticos': ["Verificar detalhes no resumo e impacto fiscal gerados pela IA."]
-                }
-            else:
-                logger.info(f"Documento ID {getattr(documento, 'id', 'N/A')} NÃO é relevante. Análise IA detalhada pulada.")
-                documento.resumo_ia = "Documento não classificado como relevante para análise contábil/fiscal detalhada."
-                documento.sentimento_ia = "NEUTRO"
-                documento.impacto_fiscal = "Não aplicável."
-                documento.metadata = {'ia_relevancia_justificativa': "Analisado como não relevante após verificação inicial e/ou IA."}
-            documento.processado = True
-            documento.data_processamento = timezone.now()
-            doc_dict = documento.to_dict() if hasattr(documento, 'to_dict') else documento.__dict__
-            doc_dict = enriquecer_documento_dict(doc_dict)
-            for k, v in doc_dict.items():
-                if hasattr(documento, k):
-                    setattr(documento, k, v)
-            documento.save()
-            if normas_objs_para_relacionar:
-                documento.normas_relacionadas.set(normas_objs_para_relacionar)
-            logger.info(f"Documento ID {getattr(documento, 'id', 'N/A')} processado. Relevante: {relevante_contabil}. Normas relacionadas: {len(normas_objs_para_relacionar)}")
-            return {
-                'status': 'SUCESSO' if relevante_contabil else 'IGNORADO_IRRELEVANTE',
-                'message': 'Documento processado.',
-                'relevante_contabil': relevante_contabil,
-                'normas_extraidas': normas_strings_para_resumo,
-                'resumo_ia': documento.resumo_ia,
-                'sentimento_ia': documento.sentimento_ia,
-                'impacto_fiscal': documento.impacto_fiscal,
-            }
-        except Exception as e:
-            logger.error(f"Erro crítico ao processar documento ID {getattr(documento, 'id', 'N/A')}: {e}", exc_info=True)
-            documento.processado = True
-            documento.relevante_contabil = False
-            documento.resumo_ia = f"Erro durante o processamento: {str(e)}"
-            documento.sentimento_ia = "ERRO_PROCESSAMENTO"
-            documento.impacto_fiscal = f"Erro: {str(e)}"
-            documento.save(update_fields=['processado', 'relevante_contabil', 'resumo_ia', 'sentimento_ia', 'impacto_fiscal'])
-            return {'status': 'ERRO', 'message': str(e), 'traceback': traceback.format_exc()}
+def gerar_relatorio_completo_openai(pdf_path, modelo="gpt-3.5-turbo"):
+	"""
+	Pipeline: extrai texto, limpa, processa com OpenAI e gera relatório consolidado.
+	"""
+	chave_api = os.environ.get("OPENAI_API_KEY")
+	if not chave_api:
+		raise Exception("OPENAI_API_KEY não encontrada no .env")
+	texto = extract_text(pdf_path)
+	texto_limpo = limpar_texto_documento(texto)
+	max_chars = 12000
+	texto_truncado = texto_limpo[:max_chars]
+	if len(texto_limpo) > max_chars:
+		texto_truncado += "\n\n[TEXTO TRUNCADO - ENVIE O PDF EM PARTES PARA ANÁLISE COMPLETA]"
+	# Prompt detalhado inspirado no relatorio.py
+	prompt = (
+		"Você é um Consultor Tributário Estratégico e Analista Regulatório Sênior, especialista em legislação fiscal e contábil do Piauí. "
+		"Analise o texto abaixo e elabore um RELATÓRIO CONSOLIDADO com as seguintes seções:\n"
+		"1. PRINCIPAIS TEMAS E ALTERAÇÕES LEGISLATIVAS IDENTIFICADAS\n"
+		"2. TENDÊNCIAS REGULATÓRIAS EMERGENTES PARA O PIAUÍ\n"
+		"3. POTENCIAIS RISCOS E PONTOS DE ATENÇÃO CRÍTICOS\n"
+		"4. RECOMENDAÇÕES ESTRATÉGICAS E AÇÕES IMEDIATAS PARA CONTADORES\n"
+		"5. SÍNTESE DO SENTIMENTO GERAL (IMPACTO PREDOMINANTE)\n"
+		"Texto para análise:\n" + texto_truncado
+	)
+	url = "https://api.openai.com/v1/chat/completions"
+	headers = {
+		"Authorization": f"Bearer {chave_api}",
+		"Content-Type": "application/json"
+	}
+	data = {
+		"model": modelo,
+		"messages": [
+			{"role": "system", "content": "Você é um especialista em documentos fiscais/contábeis."},
+			{"role": "user", "content": prompt}
+		],
+		"max_tokens": 1024,
+		"temperature": 0.2
+	}
+	response = requests.post(url, headers=headers, json=data, timeout=60)
+	if response.status_code == 200:
+		resposta = response.json()
+		conteudo = resposta["choices"][0]["message"]["content"]
+		tokens_total = resposta.get("usage", {}).get("total_tokens")
+		print("\n===== RELATÓRIO CONSOLIDADO =====\n")
+		print(conteudo)
+		print(f"\nTotal de tokens usados: {tokens_total}")
+		return conteudo
+	else:
+		raise Exception(f"OpenAI status {response.status_code}: {response.text}")

@@ -66,6 +66,9 @@ WSGI_APPLICATION = 'diario_oficial.wsgi.application'
 
 
 
+
+# Chave da OpenAI para IA Paga
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 # Database
