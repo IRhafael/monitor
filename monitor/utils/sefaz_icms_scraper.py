@@ -18,7 +18,7 @@ class SEFAZICMSScraper:
         import requests
         import os
         import re
-        from datetime import datetime
+        from datetime import datetime, timedelta
         from monitor.models import Documento
 
         driver = webdriver.Chrome(options=self.chrome_options)
@@ -34,6 +34,7 @@ class SEFAZICMSScraper:
                 break
 
         hoje = datetime.today().date()
+        ontem = hoje - timedelta(days=1)
 
         if norma_icms:
             ActionChains(driver).move_to_element(norma_icms).click(norma_icms).perform()
@@ -62,8 +63,8 @@ class SEFAZICMSScraper:
                     if match:
                         data_str = match.group(1)
                         data_publicacao = datetime.strptime(data_str, '%d/%m/%Y').date()
-                    # Só salva se a data de publicação real for igual à data de hoje
-                    if not data_publicacao or data_publicacao != hoje:
+                    # Salva se a data de publicação for hoje ou ontem
+                    if not data_publicacao or (data_publicacao != hoje and data_publicacao != ontem):
                         try:
                             btn_fechar = driver.find_element(By.CSS_SELECTOR, "button.p-dialog-header-close")
                             btn_fechar.click()

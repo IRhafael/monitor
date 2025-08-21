@@ -1,4 +1,5 @@
 
+
 import os
 from selenium.webdriver.common.keys import Keys
 import re
@@ -435,27 +436,56 @@ class SEFAZScraper:
             self.logger.error(f"Erro na verificação: {str(e)}")
             return False
 
-    def check_norm_status(self, norm_type, norm_number):
+    def check_norm_status(self, norm_type, norm_number, timeout_por_norma=10):
+        import time
+        inicio = time.time()
         # Verificação inicial rigorosa
         if not norm_type or not norm_number or len(norm_number.strip()) < 3:
+            self.logger.warning(f"Norma inválida: tipo={norm_type}, numero={norm_number}")
             return {
                 "status": "DADOS_INVALIDOS",
                 "erro": "Tipo ou número da norma inválidos",
                 "vigente": False
             }
-
-        details = self.get_norm_details(norm_type, norm_number)
-
+        try:
+            # Timeout por norma
+            def _get_details():
+                return self.get_norm_details(norm_type, norm_number)
+            import threading
+            result = [None]
+            def run():
+                result[0] = _get_details()
+            t = threading.Thread(target=run)
+            t.start()
+            t.join(timeout=timeout_por_norma)
+            if t.is_alive():
+                self.logger.error(f"Timeout ({timeout_por_norma}s) na verificação da norma: {norm_type} {norm_number}")
+                return {
+                    "status": "TIMEOUT",
+                    "vigente": False,
+                    "erro": f"Timeout de {timeout_por_norma}s excedido",
+                    "fonte": None
+                }
+            details = result[0]
+        except Exception as e:
+            self.logger.error(f"Erro na verificação da norma {norm_type} {norm_number}: {e}")
+            return {
+                "status": "ERRO",
+                "vigente": False,
+                "erro": str(e),
+                "fonte": None
+            }
+        tempo_gasto = round(time.time() - inicio, 2)
         if not details:
+            self.logger.info(f"Norma não encontrada: {norm_type} {norm_number} (tempo: {tempo_gasto}s)")
             return {
                 "status": "NAO_ENCONTRADA",
                 "vigente": False,
-                "fonte": self.driver.current_url if self.driver else None
+                "fonte": self.driver.current_url if self.driver else None,
+                "tempo": tempo_gasto
             }
-
         situacao = details.get('situacao', '')
         situacao_lower = situacao.lower() if situacao else ''
-        
         # Apenas considera vigente se:
         # 1. O campo situação existir
         # 2. Contiver explicitamente "vigente"
@@ -466,14 +496,40 @@ class SEFAZScraper:
             status = "VIGENTE"
         else:
             status = "NAO_VIGENTE"
-
+        self.logger.info(f"Norma {norm_type} {norm_number}: status={status}, tempo={tempo_gasto}s")
         return {
             "status": status,
             "vigente": status == "VIGENTE",  # Campo booleano explícito
             "fonte": self.driver.current_url if self.driver else None,
-            "dados": details
+            "dados": details,
+            "tempo": tempo_gasto
         }
 
+    def verificar_vigencia_normas_do_diario(self, texto_diario, diario_scraper=None, timeout_por_norma=10):
+        """
+        Extrai normas do texto do Diário Oficial usando DiarioOficialScraper e verifica vigência de cada uma na SEFAZ.
+        Retorna lista de dicts: [{'tipo': ..., 'numero': ..., 'vigente': ..., 'status': ..., 'dados': ..., 'tempo': ..., 'erro': ...}]
+        Timeout menor por norma e logs detalhados.
+        """
+        # Importa DiarioOficialScraper se não fornecido
+        if diario_scraper is None:
+            from monitor.utils.diario_scraper import DiarioOficialScraper
+            diario_scraper = DiarioOficialScraper()
+
+        normas = diario_scraper.extrair_norma(texto_diario)
+        resultados = []
+        for tipo, numero in normas:
+            status = self.check_norm_status(tipo, numero, timeout_por_norma=timeout_por_norma)
+            resultados.append({
+                'tipo': tipo,
+                'numero': numero,
+                'vigente': status.get('vigente', False),
+                'status': status.get('status', ''),
+                'dados': status.get('dados', {}),
+                'tempo': status.get('tempo', None),
+                'erro': status.get('erro', None)
+            })
+        return resultados
 
 
 
@@ -500,3 +556,26 @@ class SEFAZScraper:
         if self.driver:
             self.driver.quit()
             self.driver = None
+
+    def verificar_vigencia_normas_do_diario(self, texto_diario, diario_scraper=None):
+        """
+        Extrai normas do texto do Diário Oficial usando DiarioOficialScraper e verifica vigência de cada uma na SEFAZ.
+        Retorna lista de dicts: [{'tipo': ..., 'numero': ..., 'vigente': ..., 'status': ..., 'dados': ...}]
+        """
+        # Importa DiarioOficialScraper se não fornecido
+        if diario_scraper is None:
+            from monitor.utils.diario_scraper import DiarioOficialScraper
+            diario_scraper = DiarioOficialScraper()
+
+        normas = diario_scraper.extrair_norma(texto_diario)
+        resultados = []
+        for tipo, numero in normas:
+            status = self.check_norm_status(tipo, numero)
+            resultados.append({
+                'tipo': tipo,
+                'numero': numero,
+                'vigente': status.get('vigente', False),
+                'status': status.get('status', ''),
+                'dados': status.get('dados', {})
+            })
+        return resultados

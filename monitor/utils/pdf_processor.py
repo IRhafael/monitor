@@ -13,15 +13,14 @@ from pdfminer.high_level import extract_text
 dotenv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env')
 load_dotenv(dotenv_path)
 
-def processar_pdf_com_openai(pdf_path, modelo="gpt-3.5-turbo"):
+def processar_pdf_com_openai(pdf_path, modelo="gpt-3.5-turbo", normas_info=None):
 	"""
-	Extrai texto de um PDF e processa com OpenAI, retornando o resumo.
+	Extrai texto de um PDF e processa com OpenAI, retornando o resumo. Pode receber normas_info para enriquecer o prompt.
 	"""
 	chave_api = os.environ.get("OPENAI_API_KEY")
 	if not chave_api:
 		raise Exception("OPENAI_API_KEY não encontrada no .env")
 	texto = extract_text(pdf_path)
-	# Limita o texto para evitar erro de contexto
 	max_chars = 12000
 	texto_truncado = texto[:max_chars]
 	if len(texto) > max_chars:
@@ -31,6 +30,11 @@ def processar_pdf_com_openai(pdf_path, modelo="gpt-3.5-turbo"):
 		"Resuma o texto abaixo, destaque atos normativos, leis, decretos, portarias e informações relevantes. "
 		"Texto:\n" + texto_truncado
 	)
+	if normas_info:
+		normas_txt = "\n\nNormas identificadas e status de vigência (consultadas na SEFAZ):\n"
+		for n in normas_info:
+			normas_txt += f"- {n['tipo']} {n['numero']}: Vigente={n['vigente']} | Status={n['status']}\n"
+		prompt += normas_txt
 	url = "https://api.openai.com/v1/chat/completions"
 	headers = {
 		"Authorization": f"Bearer {chave_api}",
@@ -87,9 +91,9 @@ def limpar_texto_documento(texto):
 	texto = re.sub(r' {2,}', ' ', texto)
 	return texto.strip()
 
-def gerar_relatorio_completo_openai(pdf_path, modelo="gpt-3.5-turbo"):
+def gerar_relatorio_completo_openai(pdf_path, modelo="gpt-3.5-turbo", normas_info=None):
 	"""
-	Pipeline: extrai texto, limpa, processa com OpenAI e gera relatório consolidado.
+	Pipeline: extrai texto, limpa, processa com OpenAI e gera relatório consolidado. Pode receber normas_info para enriquecer o prompt.
 	"""
 	chave_api = os.environ.get("OPENAI_API_KEY")
 	if not chave_api:
@@ -100,7 +104,6 @@ def gerar_relatorio_completo_openai(pdf_path, modelo="gpt-3.5-turbo"):
 	texto_truncado = texto_limpo[:max_chars]
 	if len(texto_limpo) > max_chars:
 		texto_truncado += "\n\n[TEXTO TRUNCADO - ENVIE O PDF EM PARTES PARA ANÁLISE COMPLETA]"
-	# Prompt detalhado inspirado no relatorio.py
 	prompt = (
 		"Você é um Consultor Tributário Estratégico e Analista Regulatório Sênior, especialista em legislação fiscal e contábil do Piauí. "
 		"Analise o texto abaixo e elabore um RELATÓRIO CONSOLIDADO com as seguintes seções:\n"
@@ -111,6 +114,11 @@ def gerar_relatorio_completo_openai(pdf_path, modelo="gpt-3.5-turbo"):
 		"5. SÍNTESE DO SENTIMENTO GERAL (IMPACTO PREDOMINANTE)\n"
 		"Texto para análise:\n" + texto_truncado
 	)
+	if normas_info:
+		normas_txt = "\n\nNormas identificadas e status de vigência (consultadas na SEFAZ):\n"
+		for n in normas_info:
+			normas_txt += f"- {n['tipo']} {n['numero']}: Vigente={n['vigente']} | Status={n['status']}\n"
+		prompt += normas_txt
 	url = "https://api.openai.com/v1/chat/completions"
 	headers = {
 		"Authorization": f"Bearer {chave_api}",

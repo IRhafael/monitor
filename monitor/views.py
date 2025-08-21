@@ -5,7 +5,6 @@ from django.http import JsonResponse
 from django.contrib.auth.decorators import login_required
 from .forms import DocumentoUploadForm
 from .models import Documento, NormaVigente
-from monitor.utils.resumo_util import gerar_resumo_documentos
 from monitor.utils.api import coletar_dados_receita
 from django.utils import timezone
 from datetime import timedelta
@@ -63,13 +62,10 @@ def home(request):
             endpoints_status[ep] = log_status[ep]
         else:
             endpoints_status[ep] = 'Nenhum dado'
-    resumo_documentos = gerar_resumo_documentos(list(documentos))
-    resumo_docs_diario = gerar_resumo_documentos(list(docs_diario))
+
     return render(request, 'home.html', {
         'documentos': documentos,
         'docs_diario': docs_diario,
-        'resumo_documentos': resumo_documentos,
-        'resumo_docs_diario': resumo_docs_diario,
         'endpoints_status': endpoints_status,
         'log_api_receita': log_api_receita
     })
