@@ -8,14 +8,14 @@ def inicializar_servicos():
 	import sys
 	import os
 
-	# Inicia API da Receita Federal via WSL (envia '1' automaticamente)
-	try:
-		print("Iniciando API da Receita Federal via WSL (com entrada automática)...")
-		subprocess.Popen([
-			"wsl", "-d", "calculadora", "--cd", "/calculadora", "--exec", "bash", "-c", "echo 1 | bash start.sh"
-		])
-	except Exception as e:
-		print(f"[ERRO] Falha ao iniciar API da Receita Federal: {e}")
+	# # Inicia API da Receita Federal via WSL (envia '1' automaticamente)
+	# try:
+	#     print("Iniciando API da Receita Federal via WSL (com entrada automática)...")
+	#     subprocess.Popen([
+	#         "wsl", "-d", "calculadora", "--cd", "/calculadora", "--exec", "bash", "-c", "echo 1 | bash start.sh"
+	#     ])
+	# except Exception as e:
+	#     print(f"[ERRO] Falha ao iniciar API da Receita Federal: {e}")
 
 	# Inicia Celery worker
 	try:
