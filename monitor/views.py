@@ -1,3 +1,4 @@
+
 # monitor/views.py
 import logging
 from django.shortcuts import render, redirect
@@ -267,3 +268,50 @@ def painel_tasks(request):
         else:
             return JsonResponse({'status': 'Tipo inválido', 'result': ''})
     return render(request, 'painel_tasks.html')
+
+
+
+
+# --- NOVAS VIEWS PARA SCRAPERS UNIFICADOS ---
+from monitor.utils import scraper_geral
+from django.views.decorators.csrf import csrf_exempt
+
+@login_required
+@csrf_exempt
+def extrair_diario_oficial_view(request):
+    if request.method == 'POST':
+        resultado = scraper_geral.extrair_diario_oficial()
+        return JsonResponse({'status': 'ok', 'documentos': [str(d) for d in resultado]})
+    return render(request, 'extrair_diario.html')
+
+@login_required
+@csrf_exempt
+def extrair_sefaz_icms_view(request):
+    if request.method == 'POST':
+        resultado = scraper_geral.extrair_sefaz_icms()
+        return JsonResponse({'status': 'ok', 'documentos': [str(d) for d in resultado]})
+    return render(request, 'extrair_sefaz_icms.html')
+
+@login_required
+@csrf_exempt
+def extrair_sefaz_geral_view(request):
+    if request.method == 'POST':
+        resultado = scraper_geral.extrair_sefaz_geral()
+        return JsonResponse({'status': 'ok', 'documentos': [str(d) for d in resultado]})
+    return render(request, 'extrair_sefaz_geral.html')
+
+@login_required
+@csrf_exempt
+def extrair_dados_api_view(request):
+    if request.method == 'POST':
+        resultado = scraper_geral.extrair_dados_api()
+        return JsonResponse({'status': 'ok', 'dados': resultado})
+    return render(request, 'extrair_dados_api.html')
+
+@login_required
+@csrf_exempt
+def extrair_todos_os_dados_view(request):
+    if request.method == 'POST':
+        resultado = scraper_geral.extrair_todos_os_dados()
+        return JsonResponse({'status': 'ok', 'dados': resultado})
+    return render(request, 'extrair_todos_os_dados.html')
